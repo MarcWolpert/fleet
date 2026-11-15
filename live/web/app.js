@@ -317,7 +317,7 @@ function renderTree(){
   }).join('');
   $('tree-title').textContent = S.space === 'fleet' ? 'All machines' : (nodes[S.space] ? nodes[S.space].name : 'Machines');
   $('tree-col').textContent = '% of host · ' + mlabel(S.metric);
-  $('side-note').innerHTML = `<div class="side-note">Pin anything with ${icon('pin')} to add it to the space bar. <b>Cron jobs</b> (Scheduled tasks on Windows) sit under what runs them; their usage is part of that owner’s.</div>`;
+  $('side-note').innerHTML = '';
 }
 function updateTree(){
   if (S.tree === 'network') return renderNetTree();
@@ -375,7 +375,7 @@ function renderNetTree(){
   }).join('') : '<div class="side-note">Loading the network…</div>';
   $('tree-title').textContent = 'Network';
   $('tree-col').textContent = '↓ in · ↑ out';
-  $('side-note').innerHTML = `<div class="side-note">Tailnet → machines → interfaces. Bridges hold their members: VM taps (vnet) and the containers on each Docker network.</div>`;
+  $('side-note').innerHTML = '';
 }
 
 /* ---------- cards ---------- */
