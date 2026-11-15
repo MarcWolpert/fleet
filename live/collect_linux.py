@@ -256,6 +256,9 @@ except NameError:
 while True:
     began = time.time()
     data = json.dumps(snapshot(), separators=(",", ":")).encode()
-    sys.stdout.write(base64.b64encode(zlib.compress(data, 3)).decode() + "\n")
-    sys.stdout.flush()
+    try:
+        sys.stdout.write(base64.b64encode(zlib.compress(data, 3)).decode() + "\n")
+        sys.stdout.flush()
+    except (BrokenPipeError, OSError):
+        os._exit(0)  # Fleet Live went away: stop
     time.sleep(max(0.2, INTERVAL - (time.time() - began)))

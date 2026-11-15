@@ -127,7 +127,8 @@ public static class FleetTopo {
 '@
   $o.topo = [FleetTopo]::Read()
 }
-[Console]::Out.WriteLine(($o | ConvertTo-Json -Depth 6 -Compress)); [Console]::Out.Flush()
+# If Fleet Live went away, the pipe is gone: stop instead of looping on silently.
+try { [Console]::Out.WriteLine(($o | ConvertTo-Json -Depth 6 -Compress)); [Console]::Out.Flush() } catch { exit 0 }
 $loop++
 $left = $FleetInterval - ((Get-Date) - $started).TotalSeconds
 if ($left -gt 0) { Start-Sleep -Milliseconds ([int]($left * 1000)) }

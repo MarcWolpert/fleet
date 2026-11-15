@@ -19,6 +19,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 H = 60
 METRICS = ("cpu", "mem", "gpu", "disk", "net")
 CONFIG_PATH = os.path.expanduser("~/.config/fleet/machines.toml")
+LAST_CLIENT = [0.0]   # when a Fleet window last asked for data
 PINS_PATH = os.path.expanduser("~/.config/fleet/pins.json")
 PINS_LOCK = threading.Lock()
 
@@ -124,6 +125,37 @@ def size_bytes(s):
 
 GB = 2**30
 MB = 1e6
+# Every collector SSH session starts with exactly these options, so leftovers from an
+# earlier Fleet Live run can be found (and only those) by their command line.
+SSH_MARK = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=15",
+            "-o", "ServerAliveCountMax=2", "-o", "LogLevel=ERROR"]
+
+
+def reap_leftover_collectors():
+    """Stop collector SSH sessions left by an earlier run (orphaned, or children of this pid from before an exec)."""
+    if platform.system() == "Windows":
+        return 0
+    mark = "ssh " + " ".join(SSH_MARK) + " "
+    killed = 0
+    for line in run(["ps", "-axo", "pid=,ppid=,command="]).splitlines():
+        f = line.strip().split(None, 2)
+        if len(f) == 3 and f[2].startswith(mark) and int(f[1]) in (1, os.getpid()):
+            try:
+                os.kill(int(f[0]), 15)
+                killed += 1
+            except OSError:
+                pass
+    return killed
+
+
+def stop_collectors(fleet):
+    for m in fleet.machines.values():
+        p = m.proc
+        if p and p.poll() is None:
+            try:
+                p.terminate()
+            except Exception:
+                pass
 
 
 # ---------------------------------------------------------------- machine
@@ -140,6 +172,7 @@ class Machine:
         self.cum = {}             # cumulative counters from the previous reading
         self.disk_peak = 500 * MB
         self.lock = threading.Lock()
+        self.proc = None
         self.thread = threading.Thread(target=self.loop, daemon=True, name="fleet-" + self.id)
 
     # One thread per machine; reconnect with backoff.
@@ -162,8 +195,7 @@ class Machine:
             self.status, self.error = status, error
 
     def ssh_cmd(self):
-        base = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=15",
-                "-o", "ServerAliveCountMax=2", "-o", "LogLevel=ERROR", self.cfg["ssh"]]
+        base = ["ssh"] + SSH_MARK + [self.cfg["ssh"]]
         if self.cfg.get("os") == "windows":
             script = "$FleetInterval=%s\n" % self.interval + open(os.path.join(HERE, "collect_windows.ps1"), encoding="utf-8").read()
             enc = base64.b64encode(script.encode("utf-16-le")).decode()
@@ -175,6 +207,7 @@ class Machine:
         cmd, stdin = self.ssh_cmd()
         self.set_status("connecting")
         p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.proc = p
         if stdin:
             p.stdin.write(stdin)
         p.stdin.close()
@@ -1085,6 +1118,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         u = urllib.parse.urlparse(self.path)
         q = urllib.parse.parse_qs(u.query)
         if u.path == "/api/fleet":
+            LAST_CLIENT[0] = time.time()
             return self.send_json(self.fleet.api_fleet())
         if u.path == "/api/procs":
             return self.send_json(self.fleet.api_procs(q.get("machine", [""])[0]))
@@ -1115,6 +1149,8 @@ def main():
     ap.add_argument("--port", type=int, default=4518)
     ap.add_argument("--config", default=CONFIG_PATH)
     ap.add_argument("--open", action="store_true", help="open the UI in an app window")
+    ap.add_argument("--open-if-unseen", action="store_true", help="open the app window only if no Fleet window connects within a few seconds")
+    ap.add_argument("--no-watch", action="store_true", help="don't restart or reopen the window when Fleet's own files change")
     a = ap.parse_args()
     if not os.path.exists(a.config):
         os.makedirs(os.path.dirname(a.config), exist_ok=True)
@@ -1122,13 +1158,67 @@ def main():
         print("wrote a starter config to %s; edit it to list your machines" % a.config)
     with open(a.config, "rb") as f:
         cfg = tomllib.load(f)
+    n = reap_leftover_collectors()
+    if n:
+        print("stopped %d leftover collector session(s) from an earlier run" % n, flush=True)
     Handler.fleet = Fleet(cfg)
+    import signal
+    def bye(*_):
+        stop_collectors(Handler.fleet)
+        os._exit(0)
+    signal.signal(signal.SIGTERM, bye)
+    signal.signal(signal.SIGINT, bye)
     srv = http.server.ThreadingHTTPServer(("127.0.0.1", a.port), Handler)
     url = "http://127.0.0.1:%d/" % a.port
     print("Fleet Live on %s" % url, flush=True)
     if a.open:
         open_app_window(url)
+    elif a.open_if_unseen:
+        threading.Thread(target=reopen_if_unseen, args=(url, time.time()), daemon=True).start()
+    if not a.no_watch:
+        threading.Thread(target=watch_own_files, args=(url,), daemon=True, name="fleet-watch").start()
     srv.serve_forever()
+
+
+def reopen_if_unseen(url, since, wait=8.0):
+    """Open the app window unless a Fleet window has polled since `since` (the page polls every 2 s)."""
+    time.sleep(wait)
+    if LAST_CLIENT[0] < since:
+        open_app_window(url)
+
+
+def watch_own_files(url):
+    """Fleet updates itself: server or collector changes restart the server (the page reconnects);
+    UI changes reload the open page on their own. Either way, a closed window is reopened."""
+    server_files = [os.path.join(HERE, f) for f in ("fleet_live.py", "collect_linux.py", "collect_windows.ps1")]
+    ui_files = [os.path.join(HERE, "web", f) for f in ("index.html", "app.js")]
+    def stamp(files):
+        out = []
+        for f in files:
+            try:
+                out.append(os.stat(f).st_mtime_ns)
+            except OSError:
+                out.append(0)
+        return out
+    srv, ui = stamp(server_files), stamp(ui_files)
+    while True:
+        time.sleep(1.0)
+        s2, u2 = stamp(server_files), stamp(ui_files)
+        if s2 != srv:
+            time.sleep(0.5)  # let an editor finish writing
+            try:
+                compile(open(server_files[0], encoding="utf-8").read(), server_files[0], "exec")
+            except SyntaxError as e:
+                print("not restarting: %s" % e, flush=True)
+                srv = s2
+                continue
+            print("Fleet changed; restarting", flush=True)
+            stop_collectors(Handler.fleet)
+            args = [x for x in sys.argv[1:] if x not in ("--open", "--open-if-unseen")] + ["--open-if-unseen"]
+            os.execv(sys.executable, [sys.executable, os.path.abspath(__file__)] + args)
+        if u2 != ui:
+            ui = u2
+            threading.Thread(target=reopen_if_unseen, args=(url, time.time()), daemon=True).start()
 
 
 def open_app_window(url):
