@@ -218,7 +218,8 @@ class Machine:
         self.proc = p
         if stdin:
             p.stdin.write(stdin)
-        p.stdin.close()
+            p.stdin.close()  # Linux: the script itself; python3 - runs it at EOF
+        # Windows: stdin stays open and unused; the collector exits when it closes (its lifeline)
         err_tail = collections.deque(maxlen=5)
         threading.Thread(target=lambda: [err_tail.append(l.decode("utf-8", "replace").strip()) for l in p.stderr], daemon=True).start()
         for line in p.stdout:
@@ -505,7 +506,9 @@ class Machine:
                 gpu_by_pid.setdefault(pid, {})[luid_idx[luid]] = gpu_by_pid.get(pid, {}).get(luid_idx[luid], 0) + pct
         procs, vm_u = [], [0.0] * 5
         for p in r.get("procs", []):
-            pid, ppid, name, c, ws, threads, io, cmd = p
+            pid, ppid, name, c_secs, ws, threads, io, cmd = p
+            c = self.rate("wp.%d" % pid, c_secs, t)  # cumulative CPU seconds -> cores
+            io = max(0.0, io)
             g = sum(gpu_by_pid.get(pid, {}).values())
             row = [pid, ppid, name, "", "", c, ws / GB, io / MB, g, threads, cmd, "base", -1]
             if name.lower() in ("vmmem", "vmmemwsl"):
