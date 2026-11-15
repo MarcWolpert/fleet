@@ -174,6 +174,127 @@ def gpu_clients(cards):
     return out
 
 
+# ---- Disks: each physical disk, and which processes and containers do I/O on it ----
+PHYS = re.compile(r"^(sd[a-z]+|vd[a-z]+|xvd[a-z]+|hd[a-z]+|nvme\d+n\d+|mmcblk\d+)$")
+PREV_IO, RESOLVE = {}, {}
+UNRAID = {"t": 0.0, "map": {}, "role": {}}
+
+
+def unraid_map():
+    """Unraid's array driver hides which physical disk is behind /dev/mdNp1; mdcmd status (read-only) says."""
+    if time.time() - UNRAID["t"] < 60 or not os.path.exists("/usr/local/sbin/mdcmd"):
+        return
+    UNRAID["t"] = time.time()
+    st = run(["/usr/local/sbin/mdcmd", "status"], timeout=5)
+    names = dict(re.findall(r"^diskName\.(\d+)=(\S*)$", st, re.M))
+    for n, dev in re.findall(r"^rdevName\.(\d+)=(\S*)$", st, re.M):
+        if not dev:
+            continue
+        md = names.get(n, "")
+        if md:
+            UNRAID["map"][md] = dev
+            UNRAID["role"][dev] = "array disk %s" % n
+        else:
+            UNRAID["role"][dev] = "parity" if n == "0" else "parity 2" if n == "29" else "slot %s" % n
+    RESOLVE.clear()
+
+
+def disks_of(majmin):
+    """major:minor of a block device (partition, md/dm array, disk) -> the physical disks under it."""
+    if majmin in RESOLVE:
+        return RESOLVE[majmin]
+    out = set()
+    path = os.path.realpath("/sys/dev/block/" + majmin)
+    if os.path.exists(path):
+        name = os.path.basename(path)
+        if name in UNRAID["map"]:
+            RESOLVE[majmin] = {UNRAID["map"][name]}
+            return RESOLVE[majmin]
+        base = os.path.dirname(path) if os.path.exists(path + "/partition") else path
+        slaves = os.path.join(base, "slaves")
+        if os.path.isdir(slaves) and os.listdir(slaves):
+            for sl in os.listdir(slaves):
+                out |= disks_of(rd("/sys/class/block/%s/dev" % sl).strip())
+        elif PHYS.match(os.path.basename(base)):
+            out.add(os.path.basename(base))
+        elif PHYS.match(name):
+            out.add(name)
+    RESOLVE[majmin] = out
+    return out
+
+
+def disk_info(procs, containers):
+    unraid_map()
+    disks = []
+    for line in rd("/proc/diskstats").splitlines():
+        f = line.split()
+        if len(f) < 14 or not PHYS.match(f[2]):
+            continue
+        n = f[2]
+        b = "/sys/block/%s/" % n
+        size = rd(b + "size").strip()
+        disks.append({"name": n, "r": int(f[5]) * 512, "w": int(f[9]) * 512, "ms": int(f[12]),
+                      "model": (rd(b + "device/model").strip() or rd(b + "device/name").strip()), "size": int(size) * 512 if size.isdigit() else 0,
+                      "rot": rd(b + "queue/rotational").strip() == "1", "mounts": [], "role": UNRAID["role"].get(n, "")})
+    by = {d["name"]: d for d in disks}
+    for line in rd("/proc/self/mountinfo").splitlines():
+        f = line.split()
+        if len(f) > 4 and f[2] and not f[2].startswith("0:"):
+            for dn in disks_of(f[2]):
+                if dn in by and len(by[dn]["mounts"]) < 4 and f[4] not in by[dn]["mounts"]:
+                    by[dn]["mounts"].append(f[4])
+    # Processes that did I/O since the last reading: which disks hold the files they have open.
+    pdisks = {}
+    busy = []
+    for p in procs:
+        if p[8] >= 0:
+            prev = PREV_IO.get(p[0])
+            PREV_IO[p[0]] = p[8]
+            if prev is not None and p[8] > prev and not p[9]:
+                busy.append(p[0])
+    for pid in busy[:300]:
+        found = set()
+        try:
+            fds = os.listdir("/proc/%d/fd" % pid)[:2000]
+        except Exception:
+            continue
+        for fd in fds:
+            try:
+                st = os.stat("/proc/%d/fd/%s" % (pid, fd))
+            except Exception:
+                continue
+            if st.st_dev and os.major(st.st_dev):
+                found |= disks_of("%d:%d" % (os.major(st.st_dev), os.minor(st.st_dev)))
+        if found:
+            pdisks[pid] = sorted(found)
+    if len(PREV_IO) > 20000:
+        live = {p[0] for p in procs}
+        for k in [k for k in PREV_IO if k not in live]:
+            del PREV_IO[k]
+    # Containers: their cgroup counts I/O per device.
+    cdisks = {}
+    first = {}
+    for p in procs:
+        if p[9] and p[9] not in first:
+            first[p[9]] = p[0]
+    for cid, pid in first.items():
+        m = re.search(r"0::(\S+)", rd("/proc/%d/cgroup" % pid))
+        if not m:
+            continue
+        acc = {}
+        for line in rd("/sys/fs/cgroup%s/io.stat" % m.group(1)).splitlines():
+            f = line.split()
+            if not f:
+                continue
+            kv = dict(x.split("=", 1) for x in f[1:] if "=" in x)
+            tot = int(kv.get("rbytes", 0)) + int(kv.get("wbytes", 0))
+            for dn in disks_of(f[0]):
+                acc[dn] = acc.get(dn, 0) + tot
+        if acc:
+            cdisks[cid] = acc
+    return disks, pdisks, cdisks
+
+
 def snapshot():
     global out
     out = {"t": time.time(), "hz": HZ, "ncpu": os.cpu_count(), "host": os.uname()[1], "kernel": os.uname()[2]}
@@ -316,6 +437,10 @@ def snapshot():
                            "file": labels.get("com.docker.compose.project.config_files", ""),
                            "networks": c.get("Networks", ""), "rx": rx, "tx": tx})
     out["containers"] = containers
+    try:
+        out["disks"], out["pdisks"], out["cdisks"] = disk_info(procs, containers)
+    except Exception:
+        out["disks"], out["pdisks"], out["cdisks"] = [], {}, {}
     nets = []
     for line in run(["docker", "network", "ls", "--format", "{{json .}}"]).splitlines():
         try:
