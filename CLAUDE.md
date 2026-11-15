@@ -8,9 +8,10 @@ itself is run. The product decisions are in `FLEET.md`.
 
 ## Decisions (Marc, 2026-11-15)
 
-- **Platforms:** the GTK UI runs on macOS (Homebrew GTK4/libadwaita) and Linux.
-  Windows machines are monitored, not hosts for the UI: they only need the
-  agent.
+- **Platforms:** the app runs on macOS, Linux and Windows (Marc, 2026-11-15:
+  "build it for mac, linux, and windows"). Until the native GTK app is
+  ported, **Fleet Live** (`live/`, Python 3.11+ and a browser) is the version
+  in daily use; it runs on all three.
 - **Repo:** a full-history fork. `upstream` is GitLab, `origin` is
   `github.com/MarcWolpert/fleet`. Upstream comes in by **merging**
   `upstream/main`, never by rebasing (see "Upstream ownership").
@@ -52,7 +53,8 @@ The point is to keep profiting from upstream work without merge collisions.
 - A file is **upstream-owned** if it exists in upstream's tree:
   `git ls-tree -r --name-only upstream/main | grep -qx <path>`.
 - Fleet code lives in **fleet-owned** files: `src/fleet/`, `crates/fleet-*`
-  (model, agent, collectors), `docs/fleet/`, `docs/design/`.
+  (model, agent, collectors), `live/` (Fleet Live), `docs/fleet/`,
+  `docs/design/`, `docs/mission-center/`.
 - Upstream files change only through **approved hook lines**, each listed in
   `docs/fleet/HOOKS.md` with its reason (for example one `mod fleet;` line, or
   a sidebar slot in the window's Blueprint file). A new hook needs Marc's OK.
