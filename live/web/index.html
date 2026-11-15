@@ -362,6 +362,10 @@ main{flex:1;min-width:0;overflow:auto;background:var(--win)}
 .tres.bad{color:#ffa66b}
 .inline{font-size:13px;color:var(--ink-2);display:flex;align-items:center;gap:8px}
 .inline input{width:64px;background:var(--side);border:1px solid var(--line-2);border-radius:8px;padding:6px 8px;color:var(--ink);font:13px var(--mono)}
+.scopeseg{display:inline-flex;gap:2px;background:var(--chrome-2);border:1px solid var(--line);border-radius:8px;padding:2px;vertical-align:middle;max-width:100%}
+.scopeseg button{padding:4px 9px;border-radius:6px;font:500 12px/1.2 var(--sans);color:var(--ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:150px}
+.scopeseg button:hover{color:var(--ink)}
+.scopeseg button[aria-pressed="true"]{background:#3a3a41;color:var(--ink);font-weight:600}
 .empty-pins{display:flex;flex-direction:column;align-items:center;text-align:center;gap:8px;padding:28px 18px;color:var(--ink-3);font-size:12.5px;line-height:1.5}
 .empty-pins svg{width:22px;height:22px;color:var(--ink-3)}
 .empty-pins b{color:var(--ink-2);font-size:13px}
@@ -408,7 +412,7 @@ main{flex:1;min-width:0;overflow:auto;background:var(--win)}
   </div>
   <div class="body">
     <aside class="side" aria-label="Trees">
-      <div class="side-tabs" role="group" aria-label="Tree"><button type="button" data-tree="machines">Machine tree</button><button type="button" data-tree="network">Network tree</button><button type="button" data-tree="pins">Pins only</button></div>
+      <div class="side-tabs" role="group" aria-label="Tree"><button type="button" data-tree="machines">Machine tree</button><button type="button" data-tree="network">Network tree</button></div>
       <div class="side-h"><b id="tree-title">Machines</b><span id="tree-col"></span></div>
       <div class="tree" id="tree" role="tree"></div>
       <div id="side-note"></div>

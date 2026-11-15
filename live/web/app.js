@@ -60,6 +60,7 @@ function ago(s){ return s >= 120 ? Math.round(s / 60) + ' min ago' : Math.round(
 const S = {space:'fleet', sel:'fleet', metric:'cpu', view:'overview', mode:'cap', open:{}, tree:'machines', netSel:'net:tailnet',
            cpuView:'type', sort:{k:'cpu', dir:-1}, group:'none', filter:'', hover:null, mx:0, my:0};
 try { Object.assign(S, JSON.parse(localStorage.getItem('fleet-live-ui') || '{}'), {hover:null}); } catch (e) {}
+if (S.tree === 'pins'){ S.tree = 'machines'; S.pinsOnly = true; }  // pins-only used to be a tab
 function save(){ try { const {hover, mx, my, ...keep} = S; localStorage.setItem('fleet-live-ui', JSON.stringify(keep)); } catch (e) {} }
 
 /* ---------- model ---------- */
@@ -320,7 +321,7 @@ function cmpNodes(a, b){ const pa = PINS.includes(a.id), pb = PINS.includes(b.id
 function orderedKids(n){ return n.kind === 'machine' ? n.children : n.children.slice().sort(cmpNodes); }
 function sortedRoots(){ return roots.slice().sort(cmpNodes); }
 function treeRoots(){
-  if (S.tree === 'pins') return PINS.map(id => nodes[id]).filter(Boolean).sort((a, b) => COLL.compare(a.name, b.name));
+  if (S.pinsOnly) return PINS.map(id => nodes[id]).filter(Boolean).sort((a, b) => COLL.compare(a.name, b.name));
   return S.space === 'fleet' ? sortedRoots() : (nodes[S.space] ? [nodes[S.space]] : sortedRoots());
 }
 function renderTree(){
@@ -342,8 +343,9 @@ function renderTree(){
       + `<svg class="spark" data-spark="${esc(n.id)}" viewBox="0 0 60 16" preserveAspectRatio="none" aria-hidden="true"><polyline points="${sparkPts(n.series[S.metric], 60, 16)}" fill="none" stroke="${n.kind==='machine'&&!n.parent?'var(--accent)':colOf(n)}" stroke-width="1.5" vector-effect="non-scaling-stroke" stroke-linejoin="round"/></svg>`
       + `<span class="val${n.kind === 'machine' && !isLive(n) ? ' dim' : ''}" data-val="${esc(n.id)}" title="share of host ${mlabel(S.metric)}">${rowVal(n)}</span></div>`;
   }).join('');
-  if (S.tree === 'pins' && !rows.length) $('tree').innerHTML = `<div class="empty-pins">${icon('pin')}<b>Nothing pinned yet</b><span>Pin a machine, VM, project or container with the pin on its row, or with <b>+</b> in the top bar.</span></div>`;
-  $('tree-title').textContent = S.tree === 'pins' ? 'Pinned' : S.space === 'fleet' ? 'All machines' : (nodes[S.space] ? nodes[S.space].name : 'Machines');
+  if (S.pinsOnly && !rows.length) $('tree').innerHTML = `<div class="empty-pins">${icon('pin')}<b>Nothing pinned yet</b><span>Pin a machine, VM, project or container with the pin on its row, or with <b>+</b> in the top bar.</span></div>`;
+  const scope = S.space === 'fleet' ? 'All machines' : (nodes[S.space] ? nodes[S.space].name : 'All machines');
+  $('tree-title').innerHTML = `<span class="scopeseg" role="group" aria-label="Show"><button type="button" data-pinsonly="0" aria-pressed="${!S.pinsOnly}">${esc(scope)}</button><button type="button" data-pinsonly="1" aria-pressed="${!!S.pinsOnly}">Pins only</button></span>`;
   $('tree-col').textContent = '% of host · ' + mlabel(S.metric);
   $('side-note').innerHTML = '';
 }
@@ -404,7 +406,7 @@ function renderNetTree(){
       + `<button type="button" class="chev${open?' open':''}${kids?'':' leaf'}" ${kids?`data-toggle="${esc(n.id)}" aria-label="${open?'Collapse':'Expand'} ${esc(n.name)}"`:'tabindex="-1" aria-hidden="true"'}>${icon('chev', 2.4)}</button>`
       + `<span class="ico" style="color:var(--ink-2)">${icon(ic)}</span><button type="button" class="nm" data-netsel="${esc(n.id)}">${esc(n.name)}</button>${sub}<span class="nrate">${rate}</span></div>`;
   }).join('') : '<div class="side-note">Loading the network…</div>';
-  $('tree-title').textContent = 'Network';
+  $('tree-title').innerHTML = 'Network';
   $('tree-col').textContent = '↓ in · ↑ out';
   $('side-note').innerHTML = '';
 }
@@ -848,6 +850,7 @@ document.addEventListener('click', e => {
   const pn = e.target.closest('[data-pin]'); if (pn){ e.stopPropagation(); togglePin(pn.dataset.pin); return; }
   const tg = e.target.closest('[data-toggle]');
   if (tg){ const id = tg.dataset.toggle; const n = nodes[id] || netNodes[id]; S.open[id] = !(nodes[id] ? isOpen(n) : netOpen(n)); save(); renderTree(); return; }
+  const po = e.target.closest('[data-pinsonly]'); if (po){ S.pinsOnly = po.dataset.pinsonly === '1'; save(); renderTree(); return; }
   const tr = e.target.closest('[data-tree]'); if (tr){ S.tree = tr.dataset.tree; if (S.tree === 'network') S.view = 'overview'; lastMainHTML = ''; save(); renderAll(); refreshNow(); return; }
   const ns = e.target.closest('[data-netsel]'); if (ns){ S.netSel = ns.dataset.netsel; S.tree = 'network'; save(); renderTree(); renderToolbar(); renderMain(); return; }
   const sp = e.target.closest('[data-space]'); if (sp){ goSpace(sp.dataset.space); return; }
