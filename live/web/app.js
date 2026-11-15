@@ -1129,17 +1129,29 @@ $('sheet').addEventListener('keydown', e => { if (e.key === 'Escape'){ e.prevent
 
 /* ---------- Details panel: drag the Details pill to the right to dock it ---------- */
 function dockDetails(){ S.detailsDocked = true; if (S.view === 'details') S.view = 'overview'; if (S.tree === 'network') S.tree = 'machines'; save(); lastMainHTML = ''; renderAll(); refreshNow(); }
+// The drop zone lives exactly as long as the drag. Docking re-renders the bar and detaches the dragged
+// pill, so its dragend never reaches the document (and a poll can do the same mid-drag): every way a
+// drag can end calls endDrag(), and no mouse events fire during a drag, so the first one after it does too.
 let dragging = false;
-document.addEventListener('dragstart', e => {
-  if (!e.target.closest || !e.target.closest('[data-details]')) return;
+const DRAG_TYPE = 'application/x-fleet-details';
+function showDockZone(){
   dragging = true;
-  e.dataTransfer.setData('text/plain', 'fleet-details');
-  e.dataTransfer.effectAllowed = 'move';
+  if ($('dockzone')) return;
   const z = document.createElement('div'); z.id = 'dockzone'; z.className = 'dockzone'; z.innerHTML = `<div>${icon('layers')}<b>Drop to dock Details here</b><span>It stays beside whatever you select</span></div>`;
   document.body.appendChild(z);
+}
+function endDrag(){ dragging = false; const z = $('dockzone'); if (z) z.remove(); }
+const ourDrag = e => !!(e.dataTransfer && Array.from(e.dataTransfer.types || []).includes(DRAG_TYPE));
+document.addEventListener('dragstart', e => {
+  const pill = e.target.closest && e.target.closest('[data-details]'); if (!pill) return;
+  e.dataTransfer.setData('text/plain', 'fleet-details');
+  e.dataTransfer.setData(DRAG_TYPE, '1');
+  e.dataTransfer.effectAllowed = 'move';
+  pill.addEventListener('dragend', endDrag, {once:true});  // still heard if the pill is detached meanwhile
+  showDockZone();
 });
 document.addEventListener('dragover', e => {
-  if (!dragging) return;
+  if (!dragging){ if (!ourDrag(e)) return; showDockZone(); }  // the same drag came back into the window
   const z = $('dockzone'); if (!z) return;
   const over = e.clientX > innerWidth * 0.55;
   z.classList.toggle('hot', over);
@@ -1148,9 +1160,17 @@ document.addEventListener('dragover', e => {
 document.addEventListener('drop', e => {
   if (!dragging) return;
   e.preventDefault();
-  if (e.clientX > innerWidth * 0.55) dockDetails();
+  const dock = e.clientX > innerWidth * 0.55;
+  endDrag();
+  if (dock) dockDetails();
 });
-document.addEventListener('dragend', () => { dragging = false; const z = $('dockzone'); if (z) z.remove(); });
+document.addEventListener('dragend', endDrag);
+document.addEventListener('dragleave', e => {
+  if (dragging && !e.relatedTarget && (e.clientX <= 0 || e.clientY <= 0 || e.clientX >= innerWidth || e.clientY >= innerHeight)) endDrag();
+});
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && (dragging || $('dockzone'))) endDrag(); });
+window.addEventListener('blur', () => { if (dragging || $('dockzone')) endDrag(); });
+['mousemove', 'pointermove'].forEach(t => document.addEventListener(t, e => { if (e.buttons === 0 && (dragging || $('dockzone'))) endDrag(); }, true));
 // Resize the docked panel by its left edge.
 document.addEventListener('pointerdown', e => {
   const h = e.target.closest && e.target.closest('[data-resize]'); if (!h) return;

@@ -6,7 +6,8 @@
 // server answers /api/* from plain objects the test owns, so no machine is ever read.
 //
 //   node --test live/tests/web/*.test.mjs     (or live/tests/run.sh, which runs every Fleet Live test)
-//   FLEET_TEST_CHROME=/path/to/chrome    to pick the browser; FLEET_TEST_SHOTS=dir saves screenshots
+//   FLEET_TEST_CHROME=/path/to/chrome    to pick the browser; FLEET_TEST_SHOTS=dir saves screenshots;
+//   FLEET_TEST_WEB=dir                   tests another copy of web/ (e.g. the last commit's, for a red run)
 import http from 'node:http';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -15,7 +16,7 @@ import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-export const WEB = path.resolve(HERE, '..', '..', 'web');
+export const WEB = path.resolve(process.env.FLEET_TEST_WEB || path.join(HERE, '..', '..', 'web'));  // FLEET_TEST_WEB: test another copy (e.g. a red run)
 
 /* ---------- fixture server ---------- */
 const TYPES = {'.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml'};
@@ -107,7 +108,7 @@ async function openPage(cdp, fx, {ui = null, width = 1500, height = 950, fonts =
   // Seed the saved UI state once per tab; a reload keeps whatever the page saved since.
   if (ui) await send('Page.addScriptToEvaluateOnNewDocument', {source: `if (!sessionStorage.getItem('seeded')){ localStorage.setItem('fleet-live-ui', ${JSON.stringify(JSON.stringify(ui))}); sessionStorage.setItem('seeded', '1'); }`});
   const page = {
-    errors, send, url: server.url,
+    errors, send, url: server.url, on: (method, fn) => cdp.on(method, s, fn),
     async goto(){ const loaded = new Promise(r => { const off = cdp.on('Page.loadEventFired', s, () => { off(); r(); }); }); await send('Page.navigate', {url: server.url}); await loaded; },
     async reload(){ const loaded = new Promise(r => { const off = cdp.on('Page.loadEventFired', s, () => { off(); r(); }); }); await send('Page.reload', {ignoreCache: true}); await loaded; },
     async eval(expr){
