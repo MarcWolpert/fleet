@@ -1,0 +1,921 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fleet mockup</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  color-scheme: dark;
+  --chrome:#141416; --chrome-2:#1e1e21; --win:#1d1d20; --side:#222226; --card:#29292e; --card-2:#313137;
+  --hover:#ffffff0d; --sel:#3584e430; --line:#ffffff14; --line-2:#ffffff24;
+  --ink:#f3f3f5; --ink-2:#c6c6cd; --ink-3:#9e9ea7;
+  --accent:#78aeed; --accent-bg:#3584e4; --run:#33d17a;
+  --t-base:#8a8984; --t-compose:#3987e5; --t-container:#199e70; --t-vm:#d95926;
+  --track:#ffffff10;
+  --mono:"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --sans:Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--chrome);color:var(--ink);font:14px/1.45 var(--sans);-webkit-font-smoothing:antialiased}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer;text-align:inherit}
+button:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:7px}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+
+.app{display:flex;flex-direction:column;height:100vh;min-height:560px}
+
+/* herdr-style spaces bar */
+.spacebar{display:flex;align-items:center;gap:14px;padding:9px 14px;background:var(--chrome);border-bottom:1px solid #000}
+.lights{display:flex;gap:8px;flex:none}
+.lights i{width:12px;height:12px;border-radius:50%;display:block}
+.spaces{display:flex;gap:8px;flex:1;min-width:0;overflow-x:auto;scrollbar-width:none;padding:2px}
+.spaces::-webkit-scrollbar{display:none}
+.space{flex:0 1 auto;min-width:0;max-width:330px;display:flex;align-items:center;gap:10px;height:40px;padding:0 13px 0 6px;border-radius:11px;background:var(--chrome-2);border:1px solid transparent;color:var(--ink-2);font:500 13px/1 var(--mono)}
+.space:hover{background:#252529}
+.space.active{background:#2b2b30;border-color:#ffffff45;color:var(--ink)}
+.space .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:84px}
+.space:not(.active) .mini{display:none}
+.space.active{flex-shrink:0}
+.space .pc{color:var(--ink-3);font-size:12px;flex:none}
+.mini{display:flex;width:32px;height:4px;border-radius:2px;overflow:hidden;background:var(--track);flex:none}
+.mini i{display:block;height:100%}
+.tile{width:28px;height:28px;border-radius:8px;display:grid;place-items:center;flex:none}
+.tile svg{width:16px;height:16px}
+.tile.fleet{background:#2c2c31;color:var(--ink-2)}
+.tile.laptop{background:#7a4a35;color:#ffe3d6}
+.tile.terminal{background:#15301c;color:#62e48f}
+.tile.server{background:#3a2416;color:#ff9d62}
+.tile.globe{background:#5b5fd6;color:#fff}
+.tile.desktop{background:#16365a;color:#8cc8ff}
+.tile.vm{background:#3d2215;color:#ff8d60}
+.addbtn{width:34px;height:34px;border-radius:9px;display:grid;place-items:center;color:var(--ink-3);flex:none}
+.addbtn svg{width:16px;height:16px}
+.addbtn:hover{background:var(--chrome-2);color:var(--ink)}
+
+/* toolbar */
+.toolbar{display:flex;align-items:center;gap:10px 14px;flex-wrap:wrap;padding:9px 16px;background:var(--win);border-bottom:1px solid var(--line)}
+.crumbs{display:flex;align-items:center;gap:2px;min-width:0;flex:1 1 300px;flex-wrap:wrap;font-size:13px;color:var(--ink-3)}
+.crumbs button{color:var(--ink-2);padding:4px 7px;border-radius:7px}
+.crumbs button:hover{background:var(--hover);color:var(--ink)}
+.crumbs .cur{color:var(--ink);font-weight:600;padding:4px 7px}
+.crumbs .sep{color:#ffffff40}
+.seg{display:inline-flex;background:var(--side);border:1px solid var(--line);border-radius:10px;padding:2px;gap:2px;flex-wrap:wrap}
+.seg button{padding:6px 11px;border-radius:8px;font-size:13px;color:var(--ink-2);font-weight:500;white-space:nowrap}
+.seg button:hover{color:var(--ink)}
+.seg button[aria-pressed="true"]{background:#3a3a41;color:var(--ink)}
+.badge{font:500 11px/1 var(--mono);color:var(--ink-3);border:1px solid var(--line-2);border-radius:999px;padding:6px 10px;white-space:nowrap;display:inline-flex;align-items:center;gap:6px}
+.badge i{width:7px;height:7px;border-radius:50%;background:var(--run)}
+#live{display:none}
+#live.on{display:inline-flex}
+
+/* body */
+.body{flex:1;display:flex;min-height:0}
+.side{width:390px;flex:none;background:var(--side);border-right:1px solid var(--line);display:flex;flex-direction:column;min-height:0}
+.side-h{display:flex;justify-content:space-between;align-items:baseline;gap:10px;padding:14px 16px 8px;font-size:12px;color:var(--ink-3)}
+.side-h b{font-size:13px;color:var(--ink);font-weight:600}
+.tree{flex:1;overflow:auto;padding:2px 6px 12px}
+.row{display:flex;align-items:center;gap:6px;min-height:32px;padding-right:8px;padding-left:calc(2px + var(--d) * 17px);border-radius:7px;cursor:pointer;color:var(--ink-2)}
+.row:hover{background:var(--hover)}
+.row.sel{background:var(--sel);color:var(--ink)}
+.row.machine .nm{color:var(--ink);font-weight:600}
+.row.cronfolder .nm{color:var(--ink-3);font-style:italic}
+.chev{width:22px;height:22px;display:grid;place-items:center;border-radius:6px;color:var(--ink-3);flex:none}
+.chev:hover{background:var(--hover);color:var(--ink)}
+.chev svg{width:12px;height:12px;transition:transform .15s}
+.chev.open svg{transform:rotate(90deg)}
+.chev.leaf{visibility:hidden}
+.ico{width:18px;height:18px;display:grid;place-items:center;flex:none}
+.ico svg{width:16px;height:16px}
+.row .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13.5px;text-align:left;padding:6px 0}
+.count{font:500 11px/1 var(--mono);color:var(--ink-3);background:#ffffff0d;border-radius:5px;padding:3px 5px;flex:none}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--run);flex:none;display:none}
+.dot.on{display:block}
+.spark{width:52px;height:16px;flex:none;overflow:visible}
+.val{width:46px;text-align:right;font:500 12px/1 var(--mono);color:var(--ink-2);flex:none}
+.side-note{margin:0 12px 12px;padding:10px 12px;border-radius:9px;background:#ffffff08;border:1px dashed var(--line-2);font-size:12px;color:var(--ink-3)}
+.side-note b{color:var(--ink-2);font-weight:600}
+
+main{flex:1;min-width:0;overflow:auto;background:var(--win)}
+.wrap{max-width:1320px;padding:20px 24px 48px;display:flex;flex-direction:column;gap:16px}
+.hero{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.hero .tile{width:46px;height:46px;border-radius:12px}
+.hero .tile svg{width:24px;height:24px}
+.hero h1{margin:0;font-size:22px;font-weight:700;letter-spacing:-.01em}
+.facts{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:12.5px;color:var(--ink-3);margin-top:3px}
+.hero-stats{margin-left:auto;display:flex;gap:24px;flex-wrap:wrap}
+.hs{text-align:right}
+.hs .k{font-size:11px;color:var(--ink-3);text-transform:uppercase;letter-spacing:.07em}
+.hs .v{font:600 20px/1.25 var(--mono)}
+.hs .s{font-size:12px;color:var(--ink-3)}
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(440px,1fr));gap:16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 18px;min-width:0}
+.card-h{display:flex;align-items:center;gap:8px 12px;flex-wrap:wrap;margin-bottom:12px}
+.card-h h2{margin:0;font-size:14.5px;font-weight:600}
+.card-h .sub{font-size:12.5px;color:var(--ink-3)}
+.card-h .grow{flex:1}
+.legend{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:12.5px;color:var(--ink-2);margin-bottom:6px}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.sw{width:10px;height:10px;border-radius:3px;display:inline-block;flex:none}
+.sw.free{background:var(--track);box-shadow:inset 0 0 0 1px var(--line-2)}
+
+.res{display:grid;grid-template-columns:112px minmax(0,1fr) 118px;gap:6px 14px;align-items:center;padding:10px 0;border-top:1px solid var(--line)}
+.legend + .res{border-top:0}
+.res .lab{font-size:13px;color:var(--ink-2);font-weight:500}
+.sbar{display:flex;height:14px;border-radius:4px;background:var(--track);overflow:hidden}
+.sbar .s{height:100%;min-width:4px;border-right:2px solid var(--card)}
+.sbar.empty{background:none;border:1px dashed var(--line-2);height:14px;font-size:11px;color:var(--ink-3);align-items:center;padding-left:8px}
+.kvs{grid-column:2 / 4;display:flex;flex-wrap:wrap;gap:2px 12px;font-size:12px;color:var(--ink-3)}
+.kvs span{display:inline-flex;align-items:center;gap:5px}
+.kvs b{color:var(--ink-2);font-weight:500;font-family:var(--mono);font-size:11.5px}
+.tot{text-align:right;font:600 13px/1.25 var(--mono)}
+.tot small{display:block;font:400 11.5px/1.35 var(--sans);color:var(--ink-3)}
+
+.graph{position:relative;height:190px;margin-right:62px;margin-top:10px}
+.graph svg{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
+.gl{position:absolute;left:0;right:0;border-top:1px solid var(--line)}
+.gl span{position:absolute;left:100%;top:0;transform:translate(8px,-50%);font:500 11px/1 var(--mono);color:var(--ink-3);white-space:nowrap}
+.gx{display:flex;justify-content:space-between;margin:6px 62px 0 0;font:500 11px/1 var(--mono);color:var(--ink-3)}
+.cross{position:absolute;top:0;bottom:0;width:0;border-left:1px solid #ffffffa0;display:none;pointer-events:none}
+
+.tbl{width:100%;border-collapse:collapse;font-size:13px}
+.tbl th{text-align:right;font-weight:500;font-size:11px;color:var(--ink-3);text-transform:uppercase;letter-spacing:.06em;padding:6px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+.tbl th:first-child,.tbl td:first-child{text-align:left}
+.tbl td{text-align:right;padding:7px 10px;border-bottom:1px solid var(--line);font-family:var(--mono);font-size:12.5px;color:var(--ink-2);white-space:nowrap}
+.tbl tr:last-child td{border-bottom:0}
+.tbl td:first-child{font-family:var(--sans);font-size:13.5px}
+.tbl td.l{text-align:left}
+.namebtn{display:inline-flex;align-items:center;gap:8px;color:var(--ink);font-weight:500;padding:3px 0}
+.namebtn:hover{color:var(--accent)}
+.share{display:inline-flex;align-items:center;gap:8px;justify-content:flex-end}
+.share .b{width:80px;height:6px;border-radius:3px;background:var(--track);overflow:hidden}
+.share .b i{display:block;height:100%;border-radius:0 3px 3px 0}
+.scroll-x{overflow-x:auto}
+.pill{display:inline-flex;align-items:center;gap:6px;font:500 11.5px/1 var(--mono);color:var(--ink-2);border:1px solid var(--line-2);border-radius:999px;padding:4px 8px}
+.pill i{width:7px;height:7px;border-radius:50%;background:var(--ink-3)}
+.pill.on{color:var(--ink)}
+.pill.on i{background:var(--run)}
+
+.rank{display:grid;grid-template-columns:minmax(110px,180px) minmax(0,1fr) 128px;gap:8px 14px;align-items:center}
+.rank .track{height:12px}
+.rank .bar{height:12px;border-radius:0 4px 4px 0;min-width:3px}
+
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px}
+.st{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+.st .k{font-size:12px;color:var(--ink-3)}
+.st .v{font:600 21px/1.3 var(--mono)}
+.st .s{font-size:12px;color:var(--ink-3);min-height:18px}
+.st svg{width:100%;height:34px;margin-top:8px;display:block}
+
+.dl{display:grid;grid-template-columns:140px minmax(0,1fr);gap:8px 16px;margin:0;font-size:13px}
+.dl dt{color:var(--ink-3)}
+.dl dd{margin:0;color:var(--ink);overflow-wrap:anywhere}
+.dl code{font:500 12.5px/1.4 var(--mono);color:var(--ink)}
+
+.note{display:flex;gap:10px;align-items:flex-start;padding:12px 14px;border-radius:10px;background:#3584e418;border:1px solid #3584e445;font-size:13px;color:var(--ink-2)}
+.note svg{width:16px;height:16px;flex:none;margin-top:2px;color:var(--accent)}
+.note b{color:var(--ink);font-weight:600}
+
+.mrow{display:grid;grid-template-columns:minmax(170px,270px) minmax(0,1fr) 128px;gap:8px 14px;align-items:center;padding:9px 0;border-top:1px solid var(--line)}
+.mrow:first-of-type{border-top:0}
+.mbtn{display:flex;align-items:center;gap:10px;min-width:0;font:500 13px/1.2 var(--mono);color:var(--ink);padding:2px 0}
+.mbtn span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mbtn:hover{color:var(--accent)}
+
+.res .lab small{display:block;font-size:11px;font-weight:400;color:var(--ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.gtag{font:500 10.5px/1 var(--mono);color:var(--ink-2);border:1px solid var(--line-2);border-radius:5px;padding:2px 5px;margin-left:4px;flex:none;white-space:nowrap}
+.gpus{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px}
+.gpu{background:var(--card-2);border-radius:10px;padding:12px 14px;min-width:0}
+.gpu-h{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:10px}
+.gpu-h .k{font-size:11px;color:var(--ink-3);text-transform:uppercase;letter-spacing:.07em}
+.gpu-h .gn{font-weight:600;font-size:13.5px}
+.gpu-h .s{font-size:12px;color:var(--ink-3)}
+.gpu-h .v{font:600 20px/1.2 var(--mono)}
+.rank .track{background:var(--track);border-radius:0 4px 4px 0}
+.rank.gpu-rank{grid-template-columns:minmax(90px,160px) minmax(0,1fr) 54px}
+.rank .sub{grid-column:1 / -1;font-size:12.5px;color:var(--ink-3)}
+.tip{position:fixed;z-index:10;pointer-events:none;background:#0f0f11;border:1px solid var(--line-2);border-radius:10px;padding:9px 11px;font-size:12.5px;color:var(--ink-2);box-shadow:0 10px 30px #000a;min-width:180px;max-width:300px}
+.tip .t{color:var(--ink);font-weight:600;margin-bottom:2px}
+.tip .u{color:var(--ink-3);font-size:11.5px;margin-bottom:6px}
+.tip .r{display:flex;justify-content:space-between;align-items:center;gap:14px}
+.tip .r span{display:inline-flex;align-items:center;gap:6px}
+.tip .r b{font:500 12px/1.6 var(--mono);color:var(--ink)}
+
+@media (max-width: 900px){
+  .app{height:auto;min-height:100vh}
+  .body{flex-direction:column}
+  .side{width:auto;border-right:0;border-bottom:1px solid var(--line);max-height:52vh}
+  main{overflow:visible}
+  .wrap{padding:16px}
+  .grid2{grid-template-columns:minmax(0,1fr)}
+  .res{grid-template-columns:64px minmax(0,1fr)}
+  .res .tot{grid-column:2;text-align:left}
+  .kvs{grid-column:1 / -1}
+  .hero-stats{margin-left:0}
+  .hs{text-align:left}
+  .mrow,.rank{grid-template-columns:minmax(0,1fr)}
+  .rank .tot,.mrow .tot{text-align:left}
+  .dl{grid-template-columns:minmax(0,1fr)}
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="spacebar">
+    <div class="lights" aria-hidden="true"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i></div>
+    <nav class="spaces" id="spaces" aria-label="Machine spaces"></nav>
+    <button class="addbtn" type="button" aria-label="Add a machine" title="Add a machine (mockup)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
+  </header>
+  <div class="toolbar">
+    <nav class="crumbs" id="crumbs" aria-label="Path"></nav>
+    <div class="seg" id="metrics" role="group" aria-label="Metric"></div>
+    <span class="badge">Sample data</span>
+    <span class="badge" id="live" title="This page reloads itself when the file changes"><i></i>live · reloads on save</span>
+  </div>
+  <div class="body">
+    <aside class="side" aria-label="Machine tree">
+      <div class="side-h"><b id="tree-title">Machines</b><span id="tree-col"></span></div>
+      <div class="tree" id="tree" role="tree"></div>
+      <div id="side-note"></div>
+    </aside>
+    <main id="main"></main>
+  </div>
+</div>
+<div class="tip" id="tip" hidden></div>
+
+<script>
+/* ---------- constants ---------- */
+const H = 60; // seconds of history
+const METRICS = [
+  {id:'cpu', label:'CPU'}, {id:'mem', label:'Memory'}, {id:'gpu', label:'GPU'},
+  {id:'disk', label:'Disk I/O'}, {id:'net', label:'Network'}
+];
+const MI = {cpu:0, mem:1, gpu:2, disk:3, net:4};
+const UNIT = {cpu:'cores', mem:'GB', gpu:'%', disk:'MB/s', net:'MB/s'};
+const VOL = {cpu:.35, mem:.03, gpu:.45, disk:.6, net:.6};
+const TYPES = [
+  {id:'base', label:'Base system', short:'Base'},
+  {id:'compose', label:'Docker Compose', short:'Compose'},
+  {id:'container', label:'Containers', short:'Containers'},
+  {id:'vm', label:'VMs', short:'VMs'}
+];
+const TCOL = {base:'var(--t-base)', compose:'var(--t-compose)', container:'var(--t-container)', vm:'var(--t-vm)'};
+
+/* ---------- icons ---------- */
+const IC = {
+  chev:'<path d="M9 6l6 6-6 6"/>',
+  laptop:'<path d="M4.5 6.5A1.5 1.5 0 0 1 6 5h12a1.5 1.5 0 0 1 1.5 1.5V15h-15z"/><path d="M2.5 18.5h19"/>',
+  terminal:'<rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M7 9.5l3 2.5-3 2.5M12.5 15h4.5"/>',
+  server:'<rect x="3.5" y="4" width="17" height="7" rx="1.8"/><rect x="3.5" y="13" width="17" height="7" rx="1.8"/><path d="M7.5 7.5h.01M7.5 16.5h.01"/>',
+  globe:'<circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.6 2.4 3.6 5.2 3.6 8.5s-1 6.1-3.6 8.5c-2.6-2.4-3.6-5.2-3.6-8.5s1-6.1 3.6-8.5z"/>',
+  chip:'<rect x="7" y="7" width="10" height="10" rx="1.6"/><path d="M10 3.5V7M14 3.5V7M10 17v3.5M14 17v3.5M3.5 10H7M3.5 14H7M17 10h3.5M17 14h3.5"/>',
+  layers:'<path d="M12 3.5l8.5 4.5-8.5 4.5L3.5 8z"/><path d="M3.5 12.5l8.5 4.5 8.5-4.5"/><path d="M3.5 16.5l8.5 4.5 8.5-4.5"/>',
+  cube:'<path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M4 7.5l8 4.5 8-4.5M12 12v9"/>',
+  vm:'<rect x="3" y="4" width="18" height="13" rx="2"/><rect x="7" y="8" width="10" height="5" rx="1"/><path d="M8.5 20.5h7"/>',
+  fleet:'<rect x="4" y="4" width="6.5" height="6.5" rx="1.6"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.6"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.6"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.6"/>',
+  desktop:'<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8.5 20h7M12 16v4"/>',
+  clock:'<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>',
+  info:'<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5M12 8h.01"/>'
+};
+const icon = (k, sw) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${sw||1.8}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${IC[k]}</svg>`;
+
+/* ---------- sample fleet (numbers are made up) ---------- */
+const LINUX_PROCS = [['dockerd',0.2,0.4],['containerd',0.1,0.2],['tailscaled',0.05,0.08],['sshd',0.03,0.02],['systemd-journald',0.03,0.1]];
+const MAC_PROCS = [['WindowServer',0.9,1.4],['kernel_task',0.6,2.1],['Code Helper (Renderer)',0.5,3.8],['Cursor Helper (Renderer)',0.4,3.1],['herdr',0.3,0.6]];
+const WIN_PROCS = [['MsMpEng.exe',0.3,0.4],['svchost.exe',0.2,0.6],['explorer.exe',0.1,0.2]];
+// u = [cpu cores, mem GB, gpu %, disk MB/s, net MB/s]; every/dur/off are mockup ticks (seconds), sped up.
+// g = the GPU key(s) a workload runs on ('gpu0', or ['gpu0','gpu1'] to split across both); default is the host's first GPU.
+const cj = (name, sched, human, cmd, u, every, dur, off, last, g) => ({name, sched, human, cmd, u, every, dur, off, last, g});
+const svc = (name, u, image, cron, g) => ({name, u, image, cron: cron || [], g});
+const ctr = (name, u, image, status, cron, g) => ({name, u, image, status, cron: cron || [], g});
+const sessionsCleanup = () => cj('sessions cleanup','*/15 * * * *','every 15 min','lucky sessions.cleanup',[0.5,0.4,0,8,0.6],20,4,6,'9 min ago · took 12 s');
+const pgDump = (off) => cj('pg_dump nightly','30 3 * * *','daily at 03:30','pg_dump -Fc -f /backups/nightly.dump',[0.9,0.5,0,240,0],36,9,off,'today 03:30 · took 2 m 41 s');
+const logrotate = (off) => cj('logrotate','0 0 * * *','daily at 00:00','logrotate /etc/logrotate.conf',[0.1,0.05,0,12,0],40,3,off,'today 00:00 · took 9 s');
+
+const WIN_PROCS_HOST = [['dwm.exe',0.3,0.4],['explorer.exe',0.2,0.3],['MsMpEng.exe',0.3,0.5],['svchost.exe',0.2,0.8],['sshd.exe',0.02,0.01]];
+const UNRAID_PROCS = [['shfs',0.4,0.6],['dockerd',0.2,0.5],['libvirtd',0.05,0.1],['emhttpd',0.1,0.2],['tailscaled',0.05,0.08]];
+const defenderScan = (off) => cj('Defender quick scan','Daily 12:00','daily at 12:00','MpCmdRun.exe -Scan -ScanType 1',[1.1,0.6,0,95,0],44,6,off,'today 12:00 · took 6 m');
+const aptUpdate = (off) => cj('apt update','0 6 * * *','daily at 06:00','apt-get update',[0.3,0.2,0,15,6],50,4,off,'today 06:00 · took 38 s');
+const WIN_NOTE = {label:'Windows.', text:'Docker Desktop runs inside WSL 2 and passes the NVIDIA GPU through, so containers here can use it. Scheduled tasks play the part of cron jobs, and WSL distros show up as VMs.'};
+
+// Roots are physical machines. SPACES (below) also pins VMs as their own spaces, like the herdr tabs.
+const FLEET = [
+  {id:'nas', name:'nas', tile:'globe', os:'Unraid · x86_64', agent:'ssh + tailscale', uptime:'31 d',
+   cap:[32,128,0,3000,1250], base:[0.8,6.5,0,40,2.0], procs:UNRAID_PROCS,
+   note:{label:'From your ~/.ssh/config.', text:'dev-vm, app-vm and shared-vm are Unraid VMs on this host, so they sit under VMs here. Each one is still pinned as its own space in the bar, like your herdr tabs.'},
+   baseCron:[
+     cj('parity check','0 2 1 * *','monthly, 1st at 02:00','mdcmd check NOCORRECT',[1.2,0.5,0,900,0],60,6,20,'Nov 1 · took 9 h 12 m'),
+     cj('mover','0 3 * * *','daily at 03:00','mover start',[0.3,0.2,0,300,0],40,6,10,'today 03:00 · took 22 m')],
+   containers:[
+     ctr('nas',[0.7,1.6,0,8,2.4],'nas:latest','running · up 6 d',[cj('reindex uploads','0 2 * * *','daily at 02:00','nas reindex',[0.6,0.9,0,60,0.2],38,8,14,'today 02:00 · took 6 m 30 s')]),
+     ctr('caddy',[0.1,0.1,0,0.2,2.6],'caddy:2','running · up 31 d',[cj('certbot renew','0 */12 * * *','twice a day','certbot renew --quiet',[0.1,0.1,0,1,0.3],44,2,20,'5 h ago · took 7 s')])],
+   vms:[
+     {name:'dev-vm', tile:'terminal', os:'Ubuntu 24.04 · x86_64', agent:'ssh :2222 + tailscale', uptime:'12 d',
+      cap:[8,32,0,1500,125], base:[0.7,3.1,0,10,1.2], procs:LINUX_PROCS, baseCron:[logrotate(10)],
+      compose:[{name:'shop', file:'~/src/shop/docker-compose.yml', services:[
+        svc('backend',[2.1,4.0,0,22,3.0],'shop-backend',[sessionsCleanup()]),
+        svc('frontend',[1.1,2.2,0,5,0.9],'shop-frontend'),
+        svc('office',[0.4,1.0,0,1,0.2],'shop-office'),
+        svc('postgres',[0.9,3.6,0,48,0.6],'postgres:16',[pgDump(5)])]}]},
+     {name:'app-vm', tile:'server', os:'Ubuntu 24.04 · x86_64', agent:'ssh + tailscale', uptime:'4 d',
+      cap:[4,16,0,1000,125], base:[0.4,1.9,0,4,0.3], procs:LINUX_PROCS,
+      compose:[{name:'app', file:'~/app/compose.yml', services:[
+        svc('app',[0.6,1.4,0,3,1.1],'app-web'),
+        svc('worker',[0.9,2.0,0,6,0.4],'app-worker',[cj('thumbnails regen','*/10 * * * *','every 10 min','bin/regen-thumbnails',[0.8,0.6,0,20,1.5],16,5,9,'6 min ago · took 51 s')]),
+        svc('db',[0.3,1.8,0,14,0.2],'postgres:16')]}]},
+     {name:'shared-vm', tile:'globe', os:'Ubuntu 24.04 · x86_64', agent:'ssh + tailscale', uptime:'48 d',
+      cap:[16,64,0,2000,125], base:[1.2,4.8,0,18,2.0], procs:LINUX_PROCS, baseCron:[logrotate(22)],
+      compose:[{name:'shop', file:'~/shop/docker-compose.yml', services:[
+        svc('backend',[3.4,6.2,0,30,6.5],'shop-backend',[sessionsCleanup()]),
+        svc('frontend',[1.8,3.0,0,6,2.2],'shop-frontend'),
+        svc('office',[0.6,1.4,0,2,0.4],'shop-office'),
+        svc('postgres',[1.9,9.5,0,90,1.1],'postgres:16',[pgDump(27)])]}]}]},
+  {id:'mac', name:'this computer (M5 Max MBP)', tile:'laptop', os:'macOS 27 · arm64', agent:'local', uptime:'3 d',
+   cap:[18,128,100,7000,1250], gpus:[{name:'Apple M5 Max GPU', mem:'unified memory'}], base:[3.1,22,8,120,4], procs:MAC_PROCS,
+   note:{label:'Open question.', text:'On macOS, Compose and containers really run inside Docker Desktop’s Linux VM, which has no GPU passthrough, so they show 0% GPU. Here they are listed directly under the Mac, and the Docker VM’s own overhead counts as Base system.'},
+   baseCron:[
+     cj('restic backup ~/Code','0 * * * *','hourly','restic backup ~/Code --tag hourly',[1.4,0.8,0,180,40],24,8,2,'52 min ago · took 3 m 10 s'),
+     cj('embeddings reindex','*/30 * * * *','every 30 min','ollama-embed --reindex notes',[2.6,3.2,38,40,0.2],30,7,12,'21 min ago · took 1 m 48 s'),
+     cj('brew update','0 9 * * *','daily at 09:00','brew update && brew outdated',[0.6,0.3,0,20,8],45,4,30,'today 09:00 · took 44 s')],
+   compose:[{name:'shop', file:'~/src/shop/docker-compose.yml', services:[
+     svc('backend',[1.6,3.2,0,18,2.1],'shop-backend',[sessionsCleanup()]),
+     svc('frontend',[0.9,1.8,0,4,0.6],'shop-frontend'),
+     svc('office',[0.3,0.9,0,1,0.2],'shop-office'),
+     svc('postgres',[0.7,2.4,0,36,0.4],'postgres:16',[pgDump(18)])]}],
+   containers:[
+     ctr('jade-lsp',[0.8,1.1,0,6,0.1],'jade:latest','running · up 2 h'),
+     ctr('crystal-shards',[2.2,1.6,0,48,12],'crystallang/crystal:1.20.3','running · up 4 min')],
+   vms:[
+     {name:'win11-arm', os:'Windows 11 ARM · Parallels', agent:'guest agent', uptime:'1 h', cronLabel:'Scheduled tasks',
+      cap:[4,8,0,2000,1250], gpus:[{name:'Parallels virtual GPU', mem:'shared memory', host:'gpu0'}], base:[0.9,5.6,6,14,0.3], procs:WIN_PROCS,
+      baseCron:[cj('Windows Update scan','Daily 07:00','daily at 07:00','UsoClient StartScan',[0.4,0.3,0,30,6],40,6,25,'today 07:12 · took 4 m 2 s')]},
+     {name:'ubuntu-arm64-lab', os:'Ubuntu 24.04 · arm64 · UTM', agent:'ssh', uptime:'6 h',
+      cap:[6,12,0,2000,1250], base:[0.6,2.1,0,8,0.2], procs:LINUX_PROCS, baseCron:[aptUpdate(40)],
+      compose:[{name:'fleet-lab', file:'~/fleet-lab/compose.yml', services:[
+        svc('web',[0.4,0.6,0,2,0.8],'nginx:1.27'),
+        svc('worker',[0.5,0.9,0,3,0.3],'fleet-lab-worker',[cj('queue prune','*/5 * * * *','every 5 min','./bin/prune-queue',[0.2,0.1,0,2,0.1],12,3,1,'3 min ago · took 6 s')]),
+        svc('db',[0.3,1.2,0,9,0.2],'postgres:16')]}],
+      containers:[ctr('redis',[0.1,0.3,0,1,0.2],'redis:7','running · up 6 h')]}]},
+  {id:'win-3090', name:'win-desktop', tile:'desktop', os:'Windows 11 · x86_64', agent:'ssh (OpenSSH) + tailscale', uptime:'5 d', cronLabel:'Scheduled tasks',
+   cap:[16,64,0,5000,1250], gpus:[{name:'NVIDIA GeForce RTX 3090', mem:'24 GB VRAM'}], base:[1.0,8.5,4,20,0.8], procs:WIN_PROCS_HOST, note:WIN_NOTE,
+   baseCron:[
+     cj('backup to nas','Daily 03:30','daily at 03:30','robocopy D:\\Data \\\\nas\\backup /MIR',[0.5,0.4,0,140,110],36,9,8,'today 03:30 · took 18 m'),
+     defenderScan(30)],
+   containers:[ctr('ollama',[1.4,16,42,25,1.5],'ollama/ollama','running · up 5 d')],
+   vms:[{slug:'wsl-ubuntu', name:'Ubuntu-24.04 (WSL)', os:'WSL 2 · Ubuntu 24.04', agent:'wsl.exe via host', uptime:'5 d',
+     cap:[16,32,0,5000,1250], gpus:[{name:'RTX 3090 via WSL GPU-PV', mem:'shared with host', host:'gpu0'}], base:[0.3,1.2,6,4,0.2], procs:LINUX_PROCS, baseCron:[aptUpdate(22)]}]},
+  {id:'win-5070ti', name:'win-laptop', tile:'desktop', os:'Windows 11 · x86_64', agent:'ssh (OpenSSH) + tailscale', uptime:'2 d', cronLabel:'Scheduled tasks',
+   cap:[24,64,0,7000,1250], gpus:[{name:'NVIDIA GeForce RTX 5070 Ti', mem:'16 GB VRAM'}, {name:'Integrated graphics (guess)', mem:'shared memory'}],
+   base:[1.3,10.5,7,30,1.2], baseG:'gpu1', procs:WIN_PROCS_HOST, note:WIN_NOTE,
+   baseCron:[defenderScan(12)],
+   compose:[{name:'ai-stack', file:'%USERPROFILE%\\ai-stack\\compose.yml', services:[
+     svc('comfyui',[2.0,18,48,40,1.0],'comfyui:cuda',[cj('nightly batch render','0 1 * * *','daily at 01:00','python batch_render.py --queue nightly',[1.5,6,22,80,0],30,10,4,'today 01:00 · took 48 m')],'gpu0'),
+     svc('open-webui',[0.3,0.8,0,2,0.6],'open-webui')]}],
+   vms:[{slug:'wsl-ubuntu', name:'Ubuntu-24.04 (WSL)', os:'WSL 2 · Ubuntu 24.04', agent:'wsl.exe via host', uptime:'2 d',
+     cap:[24,32,0,7000,1250], gpus:[{name:'RTX 5070 Ti via WSL GPU-PV', mem:'shared with host', host:'gpu0'}], base:[0.5,2.0,9,6,0.4], procs:LINUX_PROCS, baseCron:[aptUpdate(31)]}]}
+];
+const SPACES = ['nas/vms/dev-vm', 'nas/vms/app-vm', 'nas', 'mac', 'nas/vms/shared-vm', 'win-3090', 'win-5070ti'];
+
+/* ---------- model ---------- */
+let T = 1000;
+const nodes = {};
+const roots = [];
+function walk(prev, base, vol){ const target = base * (1 + (Math.random()*2 - 1) * vol); return Math.max(0, prev + (target - prev) * .35); }
+function mk(id, p){ const n = Object.assign({id, children:[], parent:null}, p); nodes[id] = n; return n; }
+function attach(parent, child){ child.parent = parent; parent.children.push(child); return child; }
+function leaf(id, name, type, kind, u, meta){
+  const n = mk(id, {name, type, kind, u, meta: meta || {}});
+  n.hist = {};
+  METRICS.forEach(m => { const a = []; let v = u[MI[m.id]]; for (let i = 0; i < H; i++){ v = walk(v, u[MI[m.id]], VOL[m.id]); a.push(v); } n.hist[m.id] = a; });
+  return n;
+}
+function cronOn(j, t){ return (((t + j.off) % j.every) + j.every) % j.every < j.dur; }
+function cronStep(n, t){
+  const j = n.job, on = cronOn(j, t);
+  n.running = on;
+  METRICS.forEach(m => {
+    const a = n.hist[m.id], prev = a.length ? a[a.length-1] : 0, base = j.u[MI[m.id]];
+    a.push(on ? (prev > 0 ? walk(prev, base, VOL[m.id]) : base * (.7 + Math.random()*.3)) : 0);
+    if (a.length > H) a.shift();
+  });
+}
+function addCron(owner, list, label){
+  if (!list || !list.length) return;
+  const f = attach(owner, mk(owner.id + '/cron', {name:label || 'Cron jobs', kind:'cronfolder', type:owner.type}));
+  list.forEach((j, i) => {
+    const n = attach(f, mk(f.id + '/' + i, {name:j.name, kind:'cron', type:owner.type, job:j, u:j.u, gk:j.g ? arr(j.g) : owner.gk}));
+    n.hist = {}; METRICS.forEach(m => n.hist[m.id] = []);
+    for (let k = 0; k < H; k++) cronStep(n, T - H + 1 + k);
+  });
+}
+const arr = g => g == null ? null : Array.isArray(g) ? g : [g];
+function machine(id, spec, isVm){
+  // gpus: this machine's GPUs, keyed gpu0, gpu1, …; a VM's virtual GPU names the host GPU it lands on (host:'gpu0').
+  const gpus = (spec.gpus || []).map((g, i) => Object.assign({key:'gpu' + i}, g));
+  const cap = spec.cap.slice(); cap[MI.gpu] = 100 * gpus.length;
+  const m = mk(id, {name:spec.name, kind:'machine', type:isVm ? 'vm' : 'machine', cap, gpus, gmap:Object.fromEntries(gpus.map(g => [g.key, g.host || null])), os:spec.os, tile:spec.tile || 'vm', cronLabel:spec.cronLabel || 'Cron jobs', agent:spec.agent, uptime:spec.uptime, note:spec.note});
+  const dk = gpus.length ? [gpus[0].key] : [];
+  const gks = g => g == null ? dk : arr(g).filter(k => gpus.some(x => x.key === k));
+  const b = attach(m, leaf(id + '/base', 'Base system', 'base', 'base', spec.base, {procs:spec.procs || []}));
+  b.gk = gks(spec.baseG);
+  addCron(b, spec.baseCron, m.cronLabel);
+  if (spec.compose && spec.compose.length){
+    const g = attach(m, mk(id + '/compose', {name:'Docker Compose', kind:'group', type:'compose'}));
+    spec.compose.forEach(p => {
+      const pj = attach(g, mk(g.id + '/' + p.name, {name:p.name, kind:'project', type:'compose', meta:{file:p.file}}));
+      p.services.forEach(s => { const n = attach(pj, leaf(pj.id + '/' + s.name, s.name, 'compose', 'service', s.u, {image:s.image, project:p.name})); n.gk = gks(s.g); addCron(n, s.cron, m.cronLabel); });
+    });
+  }
+  if (spec.containers && spec.containers.length){
+    const g = attach(m, mk(id + '/containers', {name:'Containers', kind:'group', type:'container'}));
+    spec.containers.forEach(c => { const n = attach(g, leaf(g.id + '/' + c.name, c.name, 'container', 'container', c.u, {image:c.image, status:c.status})); n.gk = gks(c.g); addCron(n, c.cron, m.cronLabel); });
+  }
+  if (spec.vms && spec.vms.length){
+    const g = attach(m, mk(id + '/vms', {name:'VMs', kind:'group', type:'vm'}));
+    spec.vms.forEach(v => attach(g, machine(g.id + '/' + (v.slug || v.name), v, true)));
+  }
+  return m;
+}
+FLEET.forEach(s => roots.push(machine(s.id, s, false)));
+
+const zero = () => new Array(H).fill(0);
+function sumSeries(list){ const o = {}; METRICS.forEach(m => { const a = zero(); list.forEach(c => { const s = c.series[m.id]; for (let i = 0; i < H; i++) a[i] += s[i]; }); o[m.id] = a; }); return o; }
+// A cron job runs inside its owner, so its usage is folded into the owner and never added a second time.
+// gseries: GPU usage per GPU key of the node's host. A VM's keys are remapped onto the host's GPUs at the VM boundary.
+function splitG(series, keys){ const o = {}; (keys || []).forEach(k => { o[k] = series.map(v => v / keys.length); }); return o; }
+function addG(t, src, map){ for (const k in src){ const kk = map ? map[k] : k; if (kk == null) continue; const a = t[kk] || (t[kk] = zero()), s = src[k]; for (let i = 0; i < H; i++) a[i] += s[i]; } return t; }
+function compute(n){
+  n.children.forEach(compute);
+  if (n.kind === 'cron'){ n.series = n.hist; n.gseries = splitG(n.hist.gpu, n.gk); return; }
+  if (n.kind === 'cronfolder'){ n.series = sumSeries(n.children); n.gseries = n.children.reduce((t, c) => addG(t, c.gseries), {}); return; }
+  if (n.hist){
+    const f = n.children.find(c => c.kind === 'cronfolder');
+    n.series = {};
+    METRICS.forEach(m => { n.series[m.id] = n.hist[m.id].map((v, i) => v + (f ? f.series[m.id][i] : 0)); });
+    n.gseries = splitG(n.hist.gpu, n.gk);
+    if (f) addG(n.gseries, f.gseries);
+    return;
+  }
+  n.series = sumSeries(n.children);
+  n.gseries = n.children.reduce((t, c) => addG(t, c.gseries, c.kind === 'machine' && c.parent ? c.gmap : null), {});
+}
+roots.forEach(compute);
+
+const cur = (n, m) => n.series[m][H-1];
+const capOf = (m, metric) => m.cap[MI[metric]];
+const sumv = o => Object.values(o).reduce((a, b) => a + b, 0);
+function hostOf(n){ let p = n.kind === 'machine' ? n.parent : n; while (p && p.kind !== 'machine') p = p.parent; return p || n; }
+function rootOf(n){ while (n.parent) n = n.parent; return n; }
+function ownerOf(n){ return n.kind === 'cron' ? n.parent.parent : n.kind === 'cronfolder' ? n.parent : null; }
+function byType(m, metric, i){
+  const o = {base:0, compose:0, container:0, vm:0};
+  m.children.forEach(c => { o[c.type] += i == null ? cur(c, metric) : c.series[metric][i]; });
+  return o;
+}
+function ctxOf(key){
+  if (key === 'fleet') return {
+    name:'All machines',
+    bt:(metric, i) => { const o = {base:0, compose:0, container:0, vm:0}; roots.forEach(r => { const b = byType(r, metric, i); for (const k in o) o[k] += b[k]; }); return o; },
+    cap:metric => roots.reduce((s, r) => s + capOf(r, metric), 0)
+  };
+  const m = nodes[key];
+  return {name:m.name, bt:(metric, i) => byType(m, metric, i), cap:metric => capOf(m, metric)};
+}
+function cronCount(n){ let c = 0; (function v(x){ if (x.kind === 'cron') c++; x.children.forEach(v); })(n); return c; }
+
+/* which GPU */
+function gpuBt(m, key, i){ const o = {base:0, compose:0, container:0, vm:0}; m.children.forEach(c => { const s = c.gseries[key]; if (s) o[c.type] += i == null ? s[H-1] : s[i]; }); return o; }
+function keysUsed(n){ // GPU keys on hostOf(n) that n runs on
+  if (n.kind === 'cron') return n.u[MI.gpu] > 0 ? n.gk : [];
+  const map = n.kind === 'machine' && n.parent ? n.gmap : null, out = [];
+  for (const k in n.gseries){ if (Math.max(...n.gseries[k]) <= 0) continue; const kk = map ? map[k] : k; if (kk != null && !out.includes(kk)) out.push(kk); }
+  return out;
+}
+function gpuIdxs(n){ const host = hostOf(n); return keysUsed(n).map(k => host.gpus.findIndex(g => g.key === k)).filter(i => i >= 0).sort((a, b) => a - b); }
+function whichGpu(n){ const ix = gpuIdxs(n); return ix.length ? 'GPU' + ix.join('+') : ''; }
+function whichGpuLong(n){ const host = hostOf(n), ix = gpuIdxs(n); return ix.map(i => `GPU ${i} (${host.gpus[i].name})`).join(' + '); }
+function gpuConsumers(m, key){
+  const out = [];
+  (function v(n){ n.children.forEach(c => {
+    if (c.kind === 'machine'){ const ks = Object.keys(c.gseries).filter(k => c.gmap[k] === key); if (ks.length) out.push({n:c, v:ks.reduce((s, k) => s + c.gseries[k][H-1], 0)}); return; }
+    if (c.hist){ const s = c.gseries[key]; if (s && Math.max(...s) > 0) out.push({n:c, v:s[H-1]}); return; }
+    v(c);
+  }); })(m);
+  return out.sort((a, b) => b.v - a.v);
+}
+function gpuSub(n){
+  const host = hostOf(n);
+  if (!host.gpus.length) return 'host has no GPU';
+  const w = whichGpuLong(n);
+  return w ? 'on ' + esc(w) : 'not using a GPU';
+}
+function gpuCell(n, running){
+  if (running === false) return '—';
+  const w = whichGpu(n);
+  return fmt(cur(n, 'gpu'), 'gpu') + (w ? ` <span class="gtag">${w}</span>` : '');
+}
+
+/* ---------- formatting ---------- */
+function num(v){ if (v >= 100) return Math.round(v).toString(); if (v >= 10) return v.toFixed(0); if (v >= 1) return v.toFixed(1); if (v === 0) return '0'; return v.toFixed(2); }
+function fmt(v, m){ return m === 'gpu' ? num(v) + '%' : num(v) + ' ' + UNIT[m]; }
+function capText(c, m){ return m === 'gpu' ? (c / 100) + (c > 100 ? ' GPUs' : ' GPU') : fmt(c, m); }
+function pct(p){ if (!isFinite(p)) return '—'; if (p >= 10) return Math.round(p) + '%'; if (p >= .1) return p.toFixed(1) + '%'; if (p > 0) return '<0.1%'; return '0%'; }
+const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const mlabel = id => METRICS.find(m => m.id === id).label;
+function niceMax(v){ if (!(v > 0)) return 1; const p = Math.pow(10, Math.floor(Math.log10(v))); const f = v / p; return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 2.5 ? 2.5 : f <= 5 ? 5 : 10) * p; }
+
+/* ---------- state ---------- */
+const S = {space:'mac', sel:'mac', metric:'cpu', mode:'cap', open:{}, hover:null, mx:0, my:0};
+try {
+  const saved = JSON.parse(sessionStorage.getItem('fleet-mock') || 'null');
+  if (saved && (saved.sel === 'fleet' || nodes[saved.sel]) && (saved.space === 'fleet' || nodes[saved.space])){
+    Object.assign(S, {space:saved.space, sel:saved.sel, metric:METRICS.some(m => m.id === saved.metric) ? saved.metric : 'cpu', mode:saved.mode === 'used' ? 'used' : 'cap', open:saved.open || {}});
+  }
+} catch (e) {}
+try { // deep links: #sel=<node id>&metric=gpu
+  const q = new URLSearchParams(location.hash.slice(1)), sel = q.get('sel'), metric = q.get('metric');
+  if (sel && (sel === 'fleet' || nodes[sel])){ S.sel = sel; S.space = 'fleet'; if (sel !== 'fleet') S.space = spaceFor(nodes[sel]); }
+  if (metric && METRICS.some(m => m.id === metric)) S.metric = metric;
+} catch (e) {}
+function save(){ try { sessionStorage.setItem('fleet-mock', JSON.stringify({space:S.space, sel:S.sel, metric:S.metric, mode:S.mode, open:S.open})); } catch (e) {} }
+function isOpen(n){
+  if (S.open[n.id] !== undefined) return S.open[n.id];
+  if (n.kind === 'cronfolder') return n.id === 'mac/base/cron';
+  return S.space !== 'fleet';
+}
+
+/* ---------- small renderers ---------- */
+const $ = id => document.getElementById(id);
+function colOf(n){ return TCOL[n.type] || 'var(--ink-2)'; }
+function iconOf(n){
+  if (n.kind === 'machine') return n.parent ? 'vm' : n.tile;
+  if (n.kind === 'cronfolder' || n.kind === 'cron') return 'clock';
+  if (n.kind === 'base') return 'chip';
+  if (n.type === 'compose' && n.kind !== 'service') return 'layers';
+  if (n.type === 'vm') return 'vm';
+  return 'cube';
+}
+function sparkPts(data, w, h){ const max = Math.max(...data) * 1.15 || 1; return data.map((v, i) => `${(i/(H-1)*w).toFixed(2)},${(h - v/max*h).toFixed(2)}`).join(' '); }
+function sparkSVG(data, color, cls, w, h){ w = w || 60; h = h || 16; return `<svg class="${cls}" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-hidden="true"><polyline points="${sparkPts(data, w, h)}" fill="none" stroke="${color}" stroke-width="1.6" vector-effect="non-scaling-stroke" stroke-linejoin="round"/></svg>`; }
+function shareOfHost(n, metric){ return cur(n, metric) / capOf(hostOf(n), metric) * 100; }
+function legendHTML(withFree){ return `<div class="legend">${TYPES.map(t => `<span><i class="sw" style="background:${TCOL[t.id]}"></i>${t.label}</span>`).join('')}${withFree ? '<span><i class="sw free"></i>Free</span>' : ''}</div>`; }
+function modeSeg(){ return `<div class="seg" role="group" aria-label="Show percentages of"><button type="button" data-mode="cap" aria-pressed="${S.mode==='cap'}">of capacity</button><button type="button" data-mode="used" aria-pressed="${S.mode==='used'}">of what’s in use</button></div>`; }
+function noteHTML(html){ return `<div class="note">${icon('info')}<div>${html}</div></div>`; }
+function heroStats(list){ return `<div class="hero-stats">${list.map(s => `<div class="hs"><div class="k">${s.k}</div><div class="v">${s.v}</div><div class="s">${s.s}</div></div>`).join('')}</div>`; }
+
+/* ---------- spaces bar ---------- */
+function miniBar(key){
+  const c = ctxOf(key), bt = c.bt(S.metric), cap = c.cap(S.metric);
+  if (!cap) return '';
+  return TYPES.map(t => `<i style="width:${(bt[t.id]/cap*100).toFixed(2)}%;background:${TCOL[t.id]}"></i>`).join('');
+}
+function spacePct(key){ const c = ctxOf(key); return pct(sumv(c.bt(S.metric)) / c.cap(S.metric) * 100); }
+function renderSpaces(){
+  const pills = [{key:'fleet', name:'All machines', tile:'fleet'}].concat(SPACES.map(id => ({key:id, name:nodes[id].name, tile:nodes[id].tile, on:nodes[id].parent ? hostOf(nodes[id]).name : ''})));
+  $('spaces').innerHTML = pills.map(p => `<button type="button" class="space${S.space===p.key?' active':''}" data-space="${p.key}" aria-pressed="${S.space===p.key}" title="${esc(p.name)}${p.on ? ' · VM on ' + esc(p.on) : ''}"><span class="tile ${p.tile}">${icon(p.tile)}</span><span class="nm">${esc(p.name)}</span><span class="mini" data-mini="${p.key}" aria-hidden="true">${miniBar(p.key)}</span><span class="pc" data-pc="${p.key}">${spacePct(p.key)}</span></button>`).join('');
+}
+function updateSpaces(){
+  document.querySelectorAll('[data-mini]').forEach(e => e.innerHTML = miniBar(e.dataset.mini));
+  document.querySelectorAll('[data-pc]').forEach(e => e.textContent = spacePct(e.dataset.pc));
+}
+
+/* ---------- toolbar ---------- */
+function renderToolbar(){
+  let crumbs;
+  if (S.sel === 'fleet') crumbs = `<span class="cur">All machines</span>`;
+  else {
+    const path = []; for (let n = nodes[S.sel]; n; n = n.parent) path.unshift(n);
+    crumbs = `<button type="button" data-space="fleet">All machines</button>` + path.map((n, i) => `<span class="sep" aria-hidden="true">/</span>` + (i === path.length - 1 ? `<span class="cur">${esc(n.name)}</span>` : `<button type="button" data-select="${esc(n.id)}">${esc(n.name)}</button>`)).join('');
+  }
+  $('crumbs').innerHTML = crumbs;
+  $('metrics').innerHTML = METRICS.map(m => `<button type="button" data-metric="${m.id}" aria-pressed="${S.metric===m.id}">${m.label}</button>`).join('');
+}
+
+/* ---------- tree ---------- */
+function rowVal(n){ return pct(n.kind === 'machine' && !n.parent ? cur(n, S.metric) / capOf(n, S.metric) * 100 : shareOfHost(n, S.metric)); }
+function renderTree(){
+  const rows = [];
+  (function walkRows(list, d){ list.forEach(n => { rows.push({n, d}); if (n.children.length && isOpen(n)) walkRows(n.children, d + 1); }); })(S.space === 'fleet' ? roots : [nodes[S.space]], 0);
+  $('tree').innerHTML = rows.map(({n, d}) => {
+    const kids = n.children.length > 0, open = kids && isOpen(n);
+    const count = (n.kind === 'group' || n.kind === 'cronfolder') ? `<span class="count">${n.children.length}</span>` : '';
+    const dot = n.kind === 'cron' ? `<i class="dot${n.running?' on':''}" data-dot="${esc(n.id)}" title="running now"></i>` : '';
+    const gw = S.metric === 'gpu' && n.parent && hostOf(n).gpus.length > 1 ? whichGpu(n) : '';
+    const gtag = gw ? `<span class="gtag" title="${esc(whichGpuLong(n))}">${gw}</span>` : '';
+    return `<div class="row ${n.kind}${S.sel===n.id?' sel':''}" style="--d:${d}" role="treeitem" aria-level="${d+1}" ${kids?`aria-expanded="${open}"`:''} aria-selected="${S.sel===n.id}" data-select="${esc(n.id)}">`
+      + `<button type="button" class="chev${open?' open':''}${kids?'':' leaf'}" ${kids?`data-toggle="${esc(n.id)}" aria-label="${open?'Collapse':'Expand'} ${esc(n.name)}"`:'tabindex="-1" aria-hidden="true"'}>${icon('chev', 2.4)}</button>`
+      + `<span class="ico" style="color:${n.kind==='cronfolder'||n.kind==='cron'?'var(--ink-3)':colOf(n)}">${icon(iconOf(n))}</span>`
+      + `<button type="button" class="nm" data-select="${esc(n.id)}">${esc(n.name)}</button>${count}${gtag}${dot}`
+      + `<svg class="spark" data-spark="${esc(n.id)}" viewBox="0 0 60 16" preserveAspectRatio="none" aria-hidden="true"><polyline points="${sparkPts(n.series[S.metric], 60, 16)}" fill="none" stroke="${n.kind==='machine'&&!n.parent?'var(--accent)':colOf(n)}" stroke-width="1.5" vector-effect="non-scaling-stroke" stroke-linejoin="round"/></svg>`
+      + `<span class="val" data-val="${esc(n.id)}" title="share of host ${mlabel(S.metric)}">${rowVal(n)}</span></div>`;
+  }).join('');
+  $('tree-title').textContent = S.space === 'fleet' ? 'All machines' : 'Machine tree';
+  $('tree-col').textContent = '% of host · ' + mlabel(S.metric);
+  const r = S.space === 'fleet' ? null : nodes[S.space];
+  $('side-note').innerHTML = `<div class="side-note"><b>Cron jobs</b> (Scheduled tasks on Windows) sit under whatever runs them: the host’s Base system, a Compose service or a container. Their usage is part of that owner’s, not added on top.${r && r.parent ? ` <b>${esc(r.name)}</b> is a VM on ${esc(hostOf(r).name)}, pinned as its own space.` : ''}</div>`;
+}
+function updateTree(){
+  document.querySelectorAll('[data-val]').forEach(e => { const n = nodes[e.dataset.val]; if (n) e.textContent = rowVal(n); });
+  document.querySelectorAll('[data-spark]').forEach(e => { const n = nodes[e.dataset.spark]; if (n) e.firstElementChild.setAttribute('points', sparkPts(n.series[S.metric], 60, 16)); });
+  document.querySelectorAll('[data-dot]').forEach(e => { const n = nodes[e.dataset.dot]; if (n) e.classList.toggle('on', !!n.running); });
+}
+
+/* ---------- cards ---------- */
+function whereRows(key){
+  // One row per resource; on a machine, GPU becomes one row per GPU so you can see which GPU the load is on.
+  const c = ctxOf(key), rows = [];
+  METRICS.forEach(m => {
+    if (m.id === 'gpu' && key !== 'fleet'){
+      const mm = nodes[key];
+      if (!mm.gpus.length){ rows.push({label:'GPU', empty:true}); return; }
+      mm.gpus.forEach((g, gi) => rows.push({label:'GPU ' + gi, sub:g.name, metric:'gpu', bt:gpuBt(mm, g.key), cap:100, tip:`gseg|${key}|${g.key}`}));
+      return;
+    }
+    const cap = c.cap(m.id);
+    if (!cap){ rows.push({label:m.label, empty:true}); return; }
+    rows.push({label:m.label, sub:m.id === 'gpu' ? `all ${cap/100} GPUs` : '', metric:m.id, bt:c.bt(m.id), cap, tip:`seg|${key}|${m.id}`});
+  });
+  return rows;
+}
+function whereCard(key, title){
+  const rows = whereRows(key).map(r => {
+    const lab = `<div class="lab">${esc(r.label)}${r.sub ? `<small title="${esc(r.sub)}">${esc(r.sub)}</small>` : ''}</div>`;
+    if (r.empty) return `<div class="res">${lab}<div class="sbar empty">no ${esc(r.label)} on this machine</div><div class="tot">—</div></div>`;
+    const bt = r.bt, used = sumv(bt), cap = r.cap, m = r.metric;
+    const den = S.mode === 'cap' ? cap : (used || 1);
+    const live = TYPES.filter(t => bt[t.id] > 0);
+    const segs = live.map(t => `<span class="s" style="width:${(bt[t.id]/den*100).toFixed(3)}%;background:${TCOL[t.id]}" data-tip="${esc(r.tip)}|${t.id}"></span>`).join('');
+    const kv = live.map(t => `<span><i class="sw" style="background:${TCOL[t.id]}"></i>${t.short} <b>${pct(bt[t.id]/den*100)}</b></span>`).join('')
+      + (S.mode === 'cap' ? `<span><i class="sw free"></i>Free <b>${pct(Math.max(0, cap - used)/cap*100)}</b></span>` : '');
+    return `<div class="res">${lab}<div class="sbar" role="img" aria-label="${esc(r.label)}: ${live.map(t => t.label + ' ' + pct(bt[t.id]/den*100)).join(', ') || 'idle'}">${segs}</div><div class="tot">${pct(used/cap*100)} used<small>${fmt(used, m)} of ${capText(cap, m)}</small></div><div class="kvs">${kv}</div></div>`;
+  }).join('');
+  return `<section class="card"><div class="card-h"><h2>${title}</h2><span class="grow"></span>${modeSeg()}</div>${legendHTML(S.mode === 'cap')}${rows}</section>`;
+}
+
+let lastGraph = null;
+function graphCard(title, sub, series, yMax, metric){
+  lastGraph = {series, metric};
+  const W = 600, GH = 190, x = i => i/(H-1)*W, y = v => GH - Math.min(v, yMax)/yMax*GH;
+  let cum = zero(), paths = '';
+  series.forEach(s => {
+    const lo = cum, hi = cum.map((c, i) => c + s.data[i]);
+    const top = hi.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`);
+    const bot = lo.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).reverse();
+    paths += `<path d="M${top.join('L')}L${bot.join('L')}Z" fill="${s.color}" fill-opacity=".92"/>`;
+    paths += `<path d="M${top.join('L')}" fill="none" stroke="${series.length > 1 ? 'var(--card)' : s.color}" stroke-width="2" vector-effect="non-scaling-stroke"/>`;
+    cum = hi;
+  });
+  const grid = [1, .75, .5, .25].map(f => `<div class="gl" style="top:${(1-f)*100}%"><span>${metric === 'gpu' ? num(yMax*f) + '%' : num(yMax*f) + (f === 1 ? ' ' + UNIT[metric] : '')}</span></div>`).join('') + `<div class="gl" style="top:100%"><span>0</span></div>`;
+  const cx = S.hover && S.hover.k === 'graph' ? S.hover.idx : null;
+  const legend = series.length > 1 ? `<div class="legend">${series.map(s => `<span><i class="sw" style="background:${s.color}"></i>${esc(s.label)}</span>`).join('')}</div>` : '';
+  return `<section class="card"><div class="card-h"><h2>${title}</h2><span class="sub">${sub}</span></div>${legend}<div class="graph" data-graph="1" role="img" aria-label="${esc(title)}">${grid}<svg viewBox="0 0 ${W} ${GH}" preserveAspectRatio="none" aria-hidden="true">${paths}</svg><div class="cross" style="${cx != null ? `display:block;left:${cx/(H-1)*100}%` : ''}"></div></div><div class="gx"><span>60 s ago</span><span>now</span></div></section>`;
+}
+function graphMax(capVal, series, metric){
+  if (capVal && (metric === 'cpu' || metric === 'mem' || metric === 'gpu')) return capVal;
+  let mx = 0; for (let i = 0; i < H; i++){ let s = 0; series.forEach(x => s += x.data[i]); mx = Math.max(mx, s); }
+  return niceMax(mx * 1.3);
+}
+
+function tableCard(title, sub, list){
+  const rows = list.map(({n, d}) => {
+    const share = shareOfHost(n, S.metric), w = isFinite(share) ? Math.min(100, share) : 0;
+    return `<tr><td style="padding-left:${10 + d*20}px"><button type="button" class="namebtn" data-select="${esc(n.id)}"><span class="ico" style="color:${n.kind==='cron'||n.kind==='cronfolder'?'var(--ink-3)':colOf(n)}">${icon(iconOf(n))}</span>${esc(n.name)}</button></td>`
+      + METRICS.map(m => `<td>${m.id === 'gpu' ? gpuCell(n) : fmt(cur(n, m.id), m.id)}</td>`).join('')
+      + `<td><span class="share" data-tip="child|${esc(n.id)}|${S.metric}"><span class="b"><i style="width:${w}%;background:${TCOL[n.type] || 'var(--accent-bg)'}"></i></span>${pct(share)}</span></td></tr>`;
+  }).join('');
+  return `<section class="card"><div class="card-h"><h2>${title}</h2><span class="sub">${sub}</span></div><div class="scroll-x"><table class="tbl"><thead><tr><th>Name</th>${METRICS.map(m => `<th>${m.label}</th>`).join('')}<th>Share of host · ${mlabel(S.metric)}</th></tr></thead><tbody>${rows}</tbody></table></div></section>`;
+}
+
+function cronTableCard(folder, title){
+  const rows = folder.children.map(n => `<tr><td><button type="button" class="namebtn" data-select="${esc(n.id)}"><span class="ico" style="color:var(--ink-3)">${icon('clock')}</span>${esc(n.name)}</button></td><td class="l"><code>${esc(n.job.sched)}</code></td><td class="l"><span class="pill${n.running?' on':''}"><i></i>${n.running ? 'running' : 'idle'}</span></td>`
+    + METRICS.map(m => `<td>${!n.running ? '—' : m.id === 'gpu' ? gpuCell(n) : fmt(cur(n, m.id), m.id)}</td>`).join('') + `</tr>`).join('');
+  return `<section class="card"><div class="card-h"><h2>${title}</h2><span class="sub">live while running · timing sped up in this mockup</span></div><div class="scroll-x"><table class="tbl"><thead><tr><th>Job</th><th style="text-align:left">Schedule</th><th style="text-align:left">Status</th>${METRICS.map(m => `<th>${m.label}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table></div></section>`;
+}
+
+/* ---------- views ---------- */
+function typeSeries(getBt){ return TYPES.map(t => ({label:t.label, color:TCOL[t.id], data:Array.from({length:H}, (_, i) => getBt(i)[t.id])})).filter(s => s.data.some(v => v > 0)); }
+
+function fleetView(){
+  const c = ctxOf('fleet'), nVm = Object.values(nodes).filter(n => n.kind === 'machine' && n.parent).length;
+  const nCron = Object.values(nodes).filter(n => n.kind === 'cron').length;
+  const stat = m => ({k:mlabel(m), v:pct(sumv(c.bt(m)) / c.cap(m) * 100), s:`${fmt(sumv(c.bt(m)), m)} of ${capText(c.cap(m), m)}`});
+  const series = typeSeries(i => c.bt(S.metric, i));
+  const fleetUsed = sumv(c.bt(S.metric));
+  const mrows = roots.map(r => {
+    const bt = byType(r, S.metric), used = sumv(bt), cap = capOf(r, S.metric);
+    const den = S.mode === 'cap' ? cap : (used || 1);
+    const bar = cap ? `<div class="sbar">${TYPES.filter(t => bt[t.id] > 0).map(t => `<span class="s" style="width:${(bt[t.id]/den*100).toFixed(3)}%;background:${TCOL[t.id]}" data-tip="seg|${esc(r.id)}|${S.metric}|${t.id}"></span>`).join('')}</div>` : `<div class="sbar empty">no ${mlabel(S.metric)}</div>`;
+    return `<div class="mrow"><button type="button" class="mbtn" data-space="${esc(r.id)}"><span class="tile ${r.tile}">${icon(r.tile)}</span><span>${esc(r.name)}</span></button>${bar}<div class="tot">${cap ? pct(used/cap*100) + ' used' : '—'}<small>${pct(used/(fleetUsed||1)*100)} of fleet ${mlabel(S.metric)}</small></div></div>`;
+  }).join('');
+  return `<div class="hero"><span class="tile fleet">${icon('fleet')}</span><div><h1>All machines</h1><div class="facts"><span>${roots.length} machines</span><span>${nVm} VMs inside them</span><span>${nCron} cron jobs</span><span>${c.cap('cpu')} cores</span><span>${c.cap('mem')} GB RAM</span></div></div>${heroStats([stat('cpu'), stat('mem'), stat('gpu')])}</div>`
+    + `<div class="grid2">${whereCard('fleet', 'Where your fleet’s usage goes')}${graphCard(`Fleet ${mlabel(S.metric)}, last minute`, 'all machines, by type', series, graphMax(c.cap(S.metric), series, S.metric), S.metric)}</div>`
+    + `<section class="card"><div class="card-h"><h2>By machine · ${mlabel(S.metric)}</h2><span class="sub">each bar is that machine’s own ${S.mode === 'cap' ? 'capacity' : 'usage'}</span><span class="grow"></span>${modeSeg()}</div>${legendHTML(S.mode === 'cap')}${mrows}</section>`;
+}
+
+function machineView(m){
+  const host = m.parent ? hostOf(m) : null;
+  const stat = k => ({k:mlabel(k), v:capOf(m, k) ? pct(cur(m, k)/capOf(m, k)*100) : '—', s:capOf(m, k) ? `${fmt(cur(m, k), k)} of ${capText(capOf(m, k), k)}` : `no ${mlabel(k)}`});
+  const stats = [stat('cpu'), stat('mem'), stat('gpu')];
+  if (m.gpus.length > 1) stats[2] = {k:'GPU', v:pct(cur(m, 'gpu') / m.gpus.length), s:m.gpus.map((g, i) => `GPU${i} ${pct(sumv(gpuBt(m, g.key)))}`).join(' · ')};
+  if (host) stats.push({k:'of host ' + mlabel(S.metric), v:pct(shareOfHost(m, S.metric)), s:esc(host.name)});
+  const series = typeSeries(i => byType(m, S.metric, i));
+  const list = [];
+  m.children.forEach(c => { list.push({n:c, d:0}); if (c.kind === 'group') c.children.forEach(cc => list.push({n:cc, d:1})); });
+  const facts = [m.os, `${m.cap[0]} cores`, `${m.cap[1]} GB RAM`].concat(m.gpus.length ? m.gpus.map((g, i) => `GPU ${i}: ${g.name}`) : ['no GPU'], [`agent: ${m.agent}`, `up ${m.uptime}`], host ? [`VM on ${host.name}`] : []);
+  return `<div class="hero"><span class="tile ${m.tile}">${icon(m.tile)}</span><div><h1>${esc(m.name)}</h1><div class="facts">${facts.map(f => `<span>${esc(f)}</span>`).join('')}</div></div>${heroStats(stats)}</div>`
+    + (m.note ? noteHTML(`<b>${esc(m.note.label)}</b> ${esc(m.note.text)}`) : '')
+    + `<div class="grid2">${whereCard(m.id, m.parent ? 'Where this VM’s usage goes' : 'Where this machine’s usage goes')}${graphCard(`${mlabel(S.metric)}, last minute`, S.metric === 'gpu' && m.gpus.length > 1 ? `all ${m.gpus.length} GPUs, by type` : 'by type, stacked', series, graphMax(capOf(m, S.metric), series, S.metric), S.metric)}</div>`
+    + gpuCard(m)
+    + tableCard('Inside ' + esc(m.name), 'live, every second', list);
+}
+
+function gpuCard(m){
+  if (!m.gpus.length) return '';
+  const blocks = m.gpus.map((g, gi) => {
+    const total = sumv(gpuBt(m, g.key)), cons = gpuConsumers(m, g.key);
+    const rows = cons.length ? cons.map(c => `<button type="button" class="namebtn" data-select="${esc(c.n.id)}"><span class="ico" style="color:${colOf(c.n)}">${icon(iconOf(c.n))}</span>${esc(c.n.name)}</button><div class="track"><div class="bar" style="width:${Math.min(100, c.v).toFixed(2)}%;background:${colOf(c.n)}" data-tip="gpu|${esc(m.id)}|${g.key}|${esc(c.n.id)}"></div></div><div class="tot">${pct(c.v)}</div>`).join('') : `<div class="sub">nothing is using it</div>`;
+    return `<div class="gpu"><div class="gpu-h"><div><div class="k">GPU ${gi}</div><div class="gn">${esc(g.name)}</div><div class="s">${esc(g.mem || '')}${g.host ? ' · on host ' + esc(g.host.replace('gpu', 'GPU ')) : ''}</div></div><div class="v">${pct(total)}</div></div><div class="rank gpu-rank">${rows}</div></div>`;
+  }).join('');
+  return `<section class="card"><div class="card-h"><h2>${m.gpus.length > 1 ? 'GPUs: what runs on which' : 'GPU: what runs on it'}</h2><span class="sub">% of each GPU, cron jobs included in their owner</span></div><div class="gpus">${blocks}</div></section>`;
+}
+
+function groupView(n){
+  const host = hostOf(n), kids = n.children.slice().sort((a, b) => cur(b, S.metric) - cur(a, S.metric));
+  const max = Math.max(...kids.map(k => cur(k, S.metric)), 1e-9), total = cur(n, S.metric);
+  const kindLabel = n.kind === 'project' ? `Compose project · ${n.children.length} services` : `${n.name} · ${n.children.length}`;
+  const ranks = kids.map(k => { const v = cur(k, S.metric); return `<button type="button" class="namebtn" data-select="${esc(k.id)}"><span class="ico" style="color:${colOf(k)}">${icon(iconOf(k))}</span>${esc(k.name)}</button><div class="track"><div class="bar" style="width:${(v/max*100).toFixed(2)}%;background:${TCOL[n.type]}" data-tip="child|${esc(k.id)}|${S.metric}"></div></div><div class="tot">${pct(v/capOf(host, S.metric)*100)}<small>${fmt(v, S.metric)} · ${pct(v/(total||1)*100)} of ${esc(n.name)}</small></div>`; }).join('');
+  const list = [];
+  n.children.forEach(c => { list.push({n:c, d:0}); if (c.kind === 'project') c.children.forEach(cc => list.push({n:cc, d:1})); });
+  const series = [{label:n.name, color:TCOL[n.type], data:n.series[S.metric]}];
+  const facts = [kindLabel, `on ${host.name}`].concat(n.meta && n.meta.file ? [n.meta.file] : []).concat([`${cronCount(n)} cron jobs`]);
+  return `<div class="hero"><span class="tile" style="background:color-mix(in srgb, ${TCOL[n.type]} 22%, transparent);color:${TCOL[n.type]}">${icon(iconOf(n))}</span><div><h1>${esc(n.name)}</h1><div class="facts">${facts.map(f => `<span>${esc(f)}</span>`).join('')}</div></div>${heroStats(['cpu','mem','gpu'].map(k => ({k:mlabel(k) + ' of host', v:pct(shareOfHost(n, k)), s:fmt(cur(n, k), k)})))}</div>`
+    + `<div class="grid2"><section class="card"><div class="card-h"><h2>Where ${esc(n.name)}’s ${mlabel(S.metric)} goes</h2><span class="sub">% of host</span></div><div class="rank">${ranks}</div></section>${graphCard(`${mlabel(S.metric)}, last minute`, esc(n.name), series, graphMax(0, series, S.metric), S.metric)}</div>`
+    + tableCard('Inside ' + esc(n.name), 'live, every second', list);
+}
+
+function leafView(n){
+  const host = hostOf(n), cronF = n.children.find(c => c.kind === 'cronfolder');
+  const ref = n.parent, refName = ref.kind === 'machine' ? 'the machine’s use' : esc(ref.name);
+  const tiles = METRICS.map(m => { const v = cur(n, m.id); return `<div class="st" data-tip="child|${esc(n.id)}|${m.id}"><div class="k">${m.label}</div><div class="v">${fmt(v, m.id)}</div><div class="s">${m.id === 'gpu' ? gpuSub(n) : `${pct(v/capOf(host, m.id)*100)} of host · ${pct(v/(cur(ref, m.id)||1)*100)} of ${refName}`}</div>${sparkSVG(n.series[m.id], colOf(n), '', 120, 34)}</div>`; }).join('');
+  let detail = '';
+  if (n.kind === 'base'){
+    detail = `<section class="card"><div class="card-h"><h2>Top processes</h2><span class="sub">sample · Base system is everything on the host that isn’t a Compose service, a container or a VM</span></div><div class="scroll-x"><table class="tbl"><thead><tr><th>Process</th><th>CPU</th><th>Memory</th></tr></thead><tbody>${n.meta.procs.map(p => `<tr><td>${esc(p[0])}</td><td>${fmt(p[1], 'cpu')}</td><td>${fmt(p[2], 'mem')}</td></tr>`).join('')}</tbody></table></div></section>`;
+  } else {
+    detail = `<section class="card"><div class="card-h"><h2>Details</h2></div><dl class="dl"><dt>Image</dt><dd><code>${esc(n.meta.image)}</code></dd>${n.meta.project ? `<dt>Compose project</dt><dd>${esc(n.meta.project)}</dd>` : ''}${n.meta.status ? `<dt>Status</dt><dd>${esc(n.meta.status)}</dd>` : ''}<dt>Host</dt><dd>${esc(host.name)}</dd><dt>GPU</dt><dd>${host.gpus.length ? (whichGpuLong(n) || 'none in use') : 'host has no GPU'}</dd></dl></section>`;
+  }
+  const series = [{label:n.name, color:colOf(n), data:n.series[S.metric]}];
+  return `<div class="hero"><span class="tile" style="background:color-mix(in srgb, ${colOf(n)} 22%, transparent);color:${colOf(n)}">${icon(iconOf(n))}</span><div><h1>${esc(n.name)}</h1><div class="facts"><span>${n.kind === 'base' ? 'Base system' : n.kind === 'service' ? 'Compose service' : 'Container'}</span><span>on ${esc(host.name)}</span>${cronF ? `<span>${cronF.children.length} cron jobs</span>` : ''}</div></div></div>`
+    + `<div class="tiles">${tiles}</div>`
+    + (cronF ? cronTableCard(cronF, esc(cronF.name) + ' in ' + esc(n.name)) : '')
+    + `<div class="grid2">${graphCard(`${mlabel(S.metric)}, last minute`, cronF ? 'includes its cron jobs' : esc(n.name), series, graphMax(0, series, S.metric), S.metric)}${detail}</div>`;
+}
+
+function cronFolderView(f){
+  const owner = f.parent, host = hostOf(f);
+  const series = [{label:'Cron jobs', color:colOf(owner), data:f.series[S.metric]}];
+  return `<div class="hero"><span class="tile" style="background:#ffffff10;color:var(--ink-2)">${icon('clock')}</span><div><h1>${esc(f.name)} in ${esc(owner.name)}</h1><div class="facts"><span>${f.children.length} jobs</span><span>on ${esc(host.name)}</span></div></div>${heroStats([{k:'running now', v:String(f.children.filter(c => c.running).length), s:`of ${f.children.length}`}])}</div>`
+    + noteHTML(`${esc(f.name)} run inside <b>${esc(owner.name)}</b>, so their usage is already part of its numbers. They’re a breakdown, not an extra line.`)
+    + cronTableCard(f, 'Jobs')
+    + graphCard(`${mlabel(S.metric)} from ${f.name.toLowerCase()}, last minute`, 'all jobs here', series, graphMax(0, series, S.metric), S.metric);
+}
+
+function cronView(n){
+  const j = n.job, owner = ownerOf(n), host = hostOf(n);
+  const tiles = METRICS.map(m => { const v = cur(n, m.id); return `<div class="st" data-tip="child|${esc(n.id)}|${m.id}"><div class="k">${m.label}</div><div class="v">${n.running ? fmt(v, m.id) : '—'}</div><div class="s">${m.id === 'gpu' ? gpuSub(n) : n.running ? `${pct(v/capOf(host, m.id)*100)} of host · ${pct(v/(cur(owner, m.id)||1)*100)} of ${esc(owner.name)}` : 'idle'}</div>${sparkSVG(n.series[m.id], colOf(owner), '', 120, 34)}</div>`; }).join('');
+  const series = [{label:n.name, color:colOf(owner), data:n.series[S.metric]}];
+  return `<div class="hero"><span class="tile" style="background:#ffffff10;color:var(--ink-2)">${icon('clock')}</span><div><h1>${esc(n.name)}</h1><div class="facts"><span>${n.parent.name === 'Scheduled tasks' ? 'scheduled task' : 'cron job'}</span><span>in ${esc(owner.name)}</span><span>on ${esc(host.name)}</span></div></div><div class="hero-stats"><span class="pill${n.running?' on':''}"><i></i>${n.running ? 'running now' : 'idle'}</span></div></div>`
+    + `<div class="tiles">${tiles}</div>`
+    + `<div class="grid2"><section class="card"><div class="card-h"><h2>Schedule</h2></div><dl class="dl"><dt>Schedule</dt><dd><code>${esc(j.sched)}</code> · ${esc(j.human)}</dd><dt>Command</dt><dd><code>${esc(j.cmd)}</code></dd><dt>Runs inside</dt><dd>${esc(owner.name)} on ${esc(host.name)}</dd><dt>GPU</dt><dd>${host.gpus.length ? (whichGpuLong(n) || 'doesn’t use a GPU') : 'host has no GPU'}</dd><dt>Last run</dt><dd>${esc(j.last)}</dd></dl></section>`
+    + graphCard(`${mlabel(S.metric)}, last minute`, 'spikes are runs (sped up)', series, graphMax(0, series, S.metric), S.metric) + `</div>`;
+}
+
+function renderMain(){
+  const main = $('main');
+  const a = document.activeElement; let refocus = null;
+  if (a && main.contains(a) && a.dataset) for (const k of ['select', 'mode', 'space']) if (a.dataset[k] != null){ refocus = `[data-${k}="${CSS.escape(a.dataset[k])}"]`; break; }
+  const n = S.sel === 'fleet' ? null : nodes[S.sel];
+  const html = !n ? fleetView() : n.kind === 'machine' ? machineView(n) : n.kind === 'cronfolder' ? cronFolderView(n) : n.kind === 'cron' ? cronView(n) : n.hist ? leafView(n) : groupView(n);
+  main.innerHTML = `<div class="wrap">${html}</div>`;
+  if (refocus){ const e = main.querySelector(refocus); if (e) e.focus({preventScroll:true}); }
+}
+function renderAll(){ renderSpaces(); renderToolbar(); renderTree(); renderMain(); refreshTip(); }
+
+/* ---------- tooltips ---------- */
+const tip = $('tip');
+function tipHTML(h){
+  const p = h.k.split('|');
+  if (h.k === 'graph' && lastGraph){
+    const i = h.idx, g = lastGraph; let tot = 0;
+    const rows = g.series.slice().reverse().map(s => { tot += s.data[i]; return `<div class="r"><span><i class="sw" style="background:${s.color}"></i>${esc(s.label)}</span><b>${fmt(s.data[i], g.metric)}</b></div>`; }).join('');
+    return `<div class="t">${i === H-1 ? 'now' : (H-1-i) + ' s ago'}</div><div class="u">${mlabel(g.metric)}</div>${rows}${g.series.length > 1 ? `<div class="r"><span>Total</span><b>${fmt(tot, g.metric)}</b></div>` : ''}`;
+  }
+  if (p[0] === 'seg'){
+    const c = ctxOf(p[1]), bt = c.bt(p[2]), v = bt[p[3]], used = sumv(bt), cap = c.cap(p[2]);
+    const t = TYPES.find(x => x.id === p[3]);
+    return `<div class="t"><i class="sw" style="background:${TCOL[t.id]}"></i> ${t.label}</div><div class="u">${esc(c.name)} · ${mlabel(p[2])}</div><div class="r"><span>Using</span><b>${fmt(v, p[2])}</b></div><div class="r"><span>of capacity</span><b>${pct(v/cap*100)}</b></div><div class="r"><span>of what’s in use</span><b>${pct(v/(used||1)*100)}</b></div>`;
+  }
+  if (p[0] === 'gseg'){
+    const m = nodes[p[1]]; if (!m) return null;
+    const gi = m.gpus.findIndex(g => g.key === p[2]), bt = gpuBt(m, p[2]), v = bt[p[3]], used = sumv(bt);
+    const t = TYPES.find(x => x.id === p[3]);
+    return `<div class="t"><i class="sw" style="background:${TCOL[t.id]}"></i> ${t.label}</div><div class="u">${esc(m.name)} · GPU ${gi} · ${esc(m.gpus[gi].name)}</div><div class="r"><span>of this GPU</span><b>${pct(v)}</b></div><div class="r"><span>of what’s in use</span><b>${pct(v/(used||1)*100)}</b></div>`;
+  }
+  if (p[0] === 'gpu'){
+    const m = nodes[p[1]], n = nodes[p[3]]; if (!m || !n) return null;
+    const gi = m.gpus.findIndex(g => g.key === p[2]), c = gpuConsumers(m, p[2]).find(x => x.n === n);
+    return `<div class="t">${esc(n.name)}</div><div class="u">GPU ${gi} · ${esc(m.gpus[gi].name)}</div><div class="r"><span>of this GPU</span><b>${pct(c ? c.v : 0)}</b></div>${whichGpu(n).includes('+') ? `<div class="r"><span>also on</span><b>${esc(whichGpu(n))}</b></div>` : ''}`;
+  }
+  if (p[0] === 'child'){
+    const n = nodes[p[1]]; if (!n) return null;
+    const host = hostOf(n), v = cur(n, p[2]), par = n.kind === 'cron' ? ownerOf(n) : n.parent;
+    return `<div class="t">${esc(n.name)}</div><div class="u">${mlabel(p[2])}${n.kind === 'cron' ? (n.running ? ' · running' : ' · idle') : ''}</div><div class="r"><span>Using</span><b>${fmt(v, p[2])}</b></div><div class="r"><span>of ${esc(host.name)}</span><b>${pct(v/capOf(host, p[2])*100)}</b></div>${par ? `<div class="r"><span>of ${esc(par.name)}</span><b>${pct(v/(cur(par, p[2])||1)*100)}</b></div>` : ''}`;
+  }
+  return null;
+}
+function placeTip(){
+  const r = tip.getBoundingClientRect();
+  let x = S.mx + 16, y = S.my + 16;
+  if (x + r.width > innerWidth - 8) x = S.mx - r.width - 16;
+  if (y + r.height > innerHeight - 8) y = S.my - r.height - 16;
+  tip.style.left = Math.max(8, x) + 'px'; tip.style.top = Math.max(8, y) + 'px';
+}
+function refreshTip(){
+  if (!S.hover){ tip.hidden = true; return; }
+  const h = tipHTML(S.hover);
+  if (!h){ tip.hidden = true; return; }
+  tip.innerHTML = h; tip.hidden = false; placeTip();
+}
+document.addEventListener('mousemove', e => {
+  S.mx = e.clientX; S.my = e.clientY;
+  const g = e.target.closest('[data-graph]');
+  if (g){
+    const r = g.getBoundingClientRect();
+    const idx = Math.max(0, Math.min(H-1, Math.round((e.clientX - r.left) / r.width * (H-1))));
+    S.hover = {k:'graph', idx};
+    const c = g.querySelector('.cross'); c.style.display = 'block'; c.style.left = (idx/(H-1)*100) + '%';
+    refreshTip(); return;
+  }
+  const t = e.target.closest('[data-tip]');
+  if (t){ S.hover = {k:t.dataset.tip}; refreshTip(); return; }
+  if (S.hover){ if (S.hover.k === 'graph') document.querySelectorAll('.cross').forEach(c => c.style.display = 'none'); S.hover = null; refreshTip(); }
+});
+document.addEventListener('mouseleave', () => { S.hover = null; refreshTip(); });
+
+/* ---------- actions ---------- */
+function spaceFor(n){
+  if (S.space !== 'fleet') for (let p = n; p; p = p.parent) if (p.id === S.space) return S.space;
+  for (let p = n; p; p = p.parent) if (SPACES.includes(p.id)) return p.id;
+  return rootOf(n).id;
+}
+function goSpace(id){ S.space = id; S.sel = id; save(); renderAll(); $('main').scrollTop = 0; }
+function select(id){
+  if (id === 'fleet') return goSpace('fleet');
+  const n = nodes[id]; if (!n) return;
+  S.space = spaceFor(n); S.sel = id;
+  for (let p = n.parent; p; p = p.parent) S.open[p.id] = true;
+  save(); renderAll();
+}
+document.addEventListener('click', e => {
+  const tg = e.target.closest('[data-toggle]');
+  if (tg){ const n = nodes[tg.dataset.toggle]; S.open[n.id] = !isOpen(n); save(); renderTree(); return; }
+  const sp = e.target.closest('[data-space]'); if (sp){ goSpace(sp.dataset.space); return; }
+  const se = e.target.closest('[data-select]'); if (se){ select(se.dataset.select); return; }
+  const me = e.target.closest('[data-metric]'); if (me){ S.metric = me.dataset.metric; save(); renderAll(); return; }
+  const mo = e.target.closest('[data-mode]'); if (mo){ S.mode = mo.dataset.mode; save(); renderMain(); return; }
+});
+
+/* ---------- live tick ---------- */
+function tick(){
+  T++;
+  Object.values(nodes).forEach(n => {
+    if (n.kind === 'cron'){ cronStep(n, T); return; }
+    if (n.hist) METRICS.forEach(m => { const a = n.hist[m.id]; a.push(walk(a[a.length-1], n.u[MI[m.id]], VOL[m.id])); a.shift(); });
+  });
+  roots.forEach(compute);
+  updateSpaces(); updateTree(); renderMain(); refreshTip();
+}
+
+renderAll();
+setInterval(tick, 1000);
+
+/* ---------- reload when the file changes (served by serve.py) ---------- */
+(function(){
+  if (!/^https?:$/.test(location.protocol)) return;
+  $('live').classList.add('on');
+  let sig = null;
+  async function check(){
+    try {
+      const r = await fetch(location.pathname, {method:'HEAD', cache:'no-store'});
+      const s = (r.headers.get('etag') || '') + '|' + (r.headers.get('content-length') || '');
+      if (sig !== null && s !== sig){ save(); location.reload(); return; }
+      sig = s;
+    } catch (e) {}
+  }
+  setInterval(check, 800); check();
+})();
+</script>
+</body>
+</html>
