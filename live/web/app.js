@@ -928,10 +928,19 @@ function detailsView(n, docked){
     const groups = new Map();
     list.forEach(p => { const g = groupBy(p); if (!groups.has(g)) groups.set(g, []); groups.get(g).push(p); });
     const ordered = [...groups.entries()].sort((a, b) => b[1].reduce((s, p) => s + p[4], 0) - a[1].reduce((s, p) => s + p[4], 0));
+    // Groups start collapsed, showing a summary; a header click expands one (remembered per grouping).
+    const openSet = (S.groupOpen || {})[S.group] || [];
     ordered.forEach(([g, ps]) => {
       const c = ps.reduce((s, p) => s + p[4], 0), mem = ps.reduce((s, p) => s + p[5], 0);
-      body += `<tr class="gh"><td colspan="${COLS.length}">${esc(g)}<span>${ps.length} processes · CPU ${pct(c / ncpu * 100)} · ${memText(mem)}</span></td></tr>`;
-      ps.slice(0, Math.max(10, Math.floor(LIMIT / ordered.length))).forEach(p => { body += rowHTML(p); shown++; });
+      const dk = ps.reduce((s, p) => s + (p[6] || 0), 0), nt = ps.reduce((s, p) => s + Math.max(0, p[16] || 0), 0);
+      const open = openSet.includes(String(g));
+      const sum = `${ps.length} process${ps.length === 1 ? '' : 'es'} · CPU ${pct(c / ncpu * 100)} · ${memText(mem)}${dk > 0 ? ' · disk ' + rateText(dk) : ''}${nt > 0 ? ' · net ' + rateText(nt) : ''}`;
+      body += `<tr class="gh"><td colspan="${COLS.length}"><button type="button" class="ghbtn" data-gtoggle="${esc(String(g))}" aria-expanded="${open}"><span class="chev${open ? ' open' : ''}">${icon('chev', 2.4)}</span><b>${esc(g)}</b><span>${sum}</span></button></td></tr>`;
+      if (open){
+        ps.slice(0, 300).forEach(p => { body += rowHTML(p); shown++; });
+        if (ps.length > 300){ body += `<tr><td colspan="${COLS.length}" class="l more">${ps.length - 300} more in ${esc(g)}; sort or filter to see others.</td></tr>`; shown += ps.length - 300; }
+      }
+      else shown += ps.length;  // summarized, not hidden by a limit
     });
   } else {
     list.slice(0, LIMIT).forEach(p => { body += rowHTML(p); shown++; });
@@ -941,7 +950,7 @@ function detailsView(n, docked){
   const head = docked
     ? `<div class="dhead"><div class="dtitle"><b>Details · ${esc(n.name)}${F ? ' · ' + esc(F.label) : ''}</b><span>${all ? list.length + ' processes' : 'loading…'} on ${esc(m ? m.name : '')}${F && !F.apply ? ' · ' + esc(F.why) : ''}</span></div>${F ? `<button type="button" class="selchip" data-clearsel="${F.kind}" title="Stop filtering by this selection">${esc(F.short)}${icon('x', 2.4)}</button>` : ''}<button type="button" class="iconbtn" data-undock="1" title="Pop out to the full Details view" aria-label="Pop out Details">${icon('layers')}</button><button type="button" class="iconbtn" data-closedock="1" title="Close the Details panel" aria-label="Close the Details panel">${icon('x', 2.2)}</button></div>`
     : `<div class="hero"><span class="tile" style="background:#ffffff10;color:var(--ink-2)">${icon('chip')}</span><div><h1>Details · ${esc(n.name)}${F ? ' · ' + esc(F.label) : ''}${F ? `<button type="button" class="selchip" data-clearsel="${F.kind}" title="Stop filtering by this selection">${esc(F.short)}${icon('x', 2.4)}</button>` : ''}</h1><div class="facts">${F && !F.apply ? `<span>${esc(F.why)}</span>` : ''}<span>${all ? list.length + ' processes' : 'loading…'}</span><span>on ${esc(m ? m.name : '')}</span>${hasGroups ? `<span>CPU groups: ${esc(m.groups.map(g => g.name).join(', '))}</span>` : ''}</div></div><button type="button" class="btn" data-dock="1" style="margin-left:auto" title="Or drag the Details pill onto the right side">${icon('layers')}Dock to the right</button></div>`;
-  const tools = `<div class="dtools"><input type="search" id="pfilter" placeholder="Filter by name, PID, user or command" value="${esc(S.filter)}" aria-label="Filter processes"><label>Group by <select id="pgroup"><option value="none"${S.group==='none'?' selected':''}>Nothing</option><option value="cpugroup"${S.group==='cpugroup'?' selected':''}>CPU group (CCD, P-/E-cores)</option><option value="owner"${S.group==='owner'?' selected':''}>Where it runs (tree node)</option><option value="user"${S.group==='user'?' selected':''}>User</option><option value="state"${S.group==='state'?' selected':''}>Status</option></select></label></div>`;
+  const tools = `<div class="dtools"><input type="search" id="pfilter" placeholder="Filter by name, PID, user or command" value="${esc(S.filter)}" aria-label="Filter processes">${groupBy ? `<button type="button" class="btn" data-gall="open">Expand all</button><button type="button" class="btn" data-gall="close">Collapse all</button>` : ''}<label>Group by <select id="pgroup"><option value="none"${S.group==='none'?' selected':''}>Nothing</option><option value="cpugroup"${S.group==='cpugroup'?' selected':''}>CPU group (CCD, P-/E-cores)</option><option value="owner"${S.group==='owner'?' selected':''}>Where it runs (tree node)</option><option value="user"${S.group==='user'?' selected':''}>User</option><option value="state"${S.group==='state'?' selected':''}>Status</option></select></label></div>`;
   const thead = `<tr>${COLS.map(c => `<th class="${c.l ? 'l' : ''}" ${c.k === S.sort.k ? `aria-sort="${dir < 0 ? 'descending' : 'ascending'}"` : ''}><button type="button" data-sort="${c.k}">${c.label}${c.k === S.sort.k ? (dir < 0 ? ' ↓' : ' ↑') : ''}</button></th>`).join('')}</tr>`;
   if (F && F.apply && all && !list.length) body = `<tr><td colspan="${COLS.length}" class="l" style="padding:18px 10px;color:var(--ink-3)">Nothing on ${esc(F.label)} right now.</td></tr>`;
   return head + groupNote + `<section class="card">${tools}<div class="pscroll"><table class="ptbl"><thead>${thead}</thead><tbody>${body}</tbody></table>${list.length > shown ? `<div class="more">Showing ${shown} of ${list.length}. Sort or filter to see others.</div>` : ''}</div></section>`;
@@ -1129,6 +1138,10 @@ document.addEventListener('click', e => {
   if (ds){ const m = nodes[S.sel]; if (!m) return; const k = ds.dataset.dsel, cur0 = diskSel(m), add = e.metaKey || e.ctrlKey || e.shiftKey;
     const next = add ? (cur0.includes(k) ? cur0.filter(x => x !== k) : cur0.concat([k])) : (cur0.length === 1 && cur0[0] === k ? [] : [k]);
     S.diskSel = {mid:m.id, names:next}; save(); renderMain(); refreshNow(); return; }
+  const gt = e.target.closest('[data-gtoggle]');
+  if (gt){ const k = gt.dataset.gtoggle, cur0 = ((S.groupOpen || {})[S.group] || []).slice(), i = cur0.indexOf(k); if (i >= 0) cur0.splice(i, 1); else cur0.push(k); S.groupOpen = Object.assign({}, S.groupOpen, {[S.group]:cur0}); save(); lastMainHTML = ''; renderMain(); return; }
+  const ga = e.target.closest('[data-gall]');
+  if (ga){ const all = ga.dataset.gall === 'open' ? [...document.querySelectorAll('[data-gtoggle]')].map(x => x.dataset.gtoggle) : []; S.groupOpen = Object.assign({}, S.groupOpen, {[S.group]:all}); save(); lastMainHTML = ''; renderMain(); return; }
   const cs = e.target.closest('[data-clearsel]'); if (cs){ const k = cs.dataset.clearsel; if (k === 'cpu') S.cpuSel = null; if (k === 'gpu') S.gpuSel = null; if (k === 'disk') S.diskSel = null; if (k === 'net') S.ifSel = null; save(); lastMainHTML = ''; renderMain(); return; }
   const gv = e.target.closest('[data-gpuview]'); if (gv){ S.gpuView = gv.dataset.gpuview; save(); renderMain(); return; }
   if (e.target.closest('[data-gpuclear]')){ S.gpuSel = null; save(); renderMain(); return; }
