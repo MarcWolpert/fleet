@@ -729,6 +729,23 @@ function cpuGroupNames(mid){
 }
 const STATE = {R:'running', S:'sleeping', D:'disk wait', Z:'zombie', T:'stopped', t:'traced', I:'idle', U:'waiting', X:'dead'};
 function stateLabel(s){ return s ? (STATE[s[0]] || s) : ''; }
+// The docked Details follows the processors selected (Logical processors) on its own machine.
+function detailsFilter(m){ return {cpus:cpuSel(m)}; }
+function cpuSelLabel(m, cpus){
+  const whole = (m.groups || []).filter(g => g.cpus.length && g.cpus.every(c => cpus.includes(c)));
+  const inWhole = new Set(whole.flatMap(g => g.cpus));
+  if (whole.length && cpus.every(c => inWhole.has(c))) return whole.map(g => g.name).join(' + ');
+  return (cpus.length === 1 ? 'CPU ' : 'CPUs ') + cpuRanges(cpus);
+}
+function filterChips(m, f, all){
+  if (!f.cpus.length) return '';
+  const label = cpuSelLabel(m, f.cpus), named = !/^CPUs? /.test(label);
+  const tipText = `Details lists only the processes that last ran on ${label}${named ? ' (' + (f.cpus.length === 1 ? 'CPU ' : 'CPUs ') + cpuRanges(f.cpus) + ')' : ''} at the latest reading. Processes move between processors, so this is where each one ran last, not where it always runs.`;
+  const chip = `<span class="fchip" data-fchip="cpu" title="${esc(tipText)}"><span>Last ran on ${esc(label)}</span><button type="button" data-dfclear="cpu" aria-label="Clear the filter: last ran on ${esc(label)}">${icon('x', 2.4)}</button></span>`;
+  const unreported = all && all.length && !all.some(p => p[12] >= 0)
+    ? noteHTML(`${esc(m.os.split(' ')[0] || 'This OS')} doesn’t report which processor a process last ran on, so Details can’t show what ran on ${esc(label)}.`) : '';
+  return `<div class="dfchips" role="group" aria-label="Details is filtered">${chip}</div>${unreported}`;
+}
 // Details groups are collapsed unless opened; open ones are kept per Group-by mode.
 function groupOpen(mode, g){ return !!(S.gopen && S.gopen[mode] && S.gopen[mode].includes(g)); }
 function setGroupsOpen(mode, names){ S.gopen = Object.assign({}, S.gopen, {[mode]:names}); save(); renderMain(); }
@@ -742,6 +759,8 @@ function detailsView(n, docked){
   let list = all ? (scopeAll ? all : all.filter(p => nodes[p[10]] && within(nodes[p[10]], n.id))) : [];
   const q = S.filter.trim().toLowerCase();
   if (q) list = list.filter(p => String(p[0]) === q || (p[1] || '').toLowerCase().includes(q) || (p[9] || '').toLowerCase().includes(q) || (p[2] || '').toLowerCase().includes(q));
+  const f = docked && m ? detailsFilter(m) : {cpus:[]};
+  if (f.cpus.length) list = list.filter(p => f.cpus.includes(p[12]));
   const ownerName = id => nodes[id] ? nodes[id].name : '';
   const groupOf = p => p[12] >= 0 ? (gnames[p[12]] || 'CPU ' + p[12]) : 'not reported by this OS';
   const COLS = [
@@ -790,13 +809,13 @@ function detailsView(n, docked){
     if (list.length > shown) more = `Showing ${shown} of ${list.length}. Sort or filter to see others.`;
   }
   const hasGroups = (m && m.groups || []).length > 1;
-  const groupNote = Object.keys(gnames).length && !list.some(p => p[12] >= 0) && S.group === 'cpugroup' ? noteHTML('This OS doesn’t report which processor a process last ran on, so CPU groups can’t be assigned per process here. The <b>Logical processors</b> view under CPU still shows each group.') : '';
+  const groupNote = Object.keys(gnames).length && all && !all.some(p => p[12] >= 0) && S.group === 'cpugroup' && !f.cpus.length ? noteHTML('This OS doesn’t report which processor a process last ran on, so CPU groups can’t be assigned per process here. The <b>Logical processors</b> view under CPU still shows each group.') : '';
   const head = docked
     ? `<div class="dhead"><div class="dtitle"><b>Details · ${esc(n.name)}</b><span>${all ? list.length + ' processes' : 'loading…'} on ${esc(m ? m.name : '')}</span></div><button type="button" class="iconbtn" data-undock="1" title="Pop out to the full Details view" aria-label="Pop out Details">${icon('layers')}</button><button type="button" class="iconbtn" data-closedock="1" title="Close the Details panel" aria-label="Close the Details panel">${icon('x', 2.2)}</button></div>`
     : `<div class="hero"><span class="tile" style="background:#ffffff10;color:var(--ink-2)">${icon('chip')}</span><div><h1>Details · ${esc(n.name)}</h1><div class="facts"><span>${all ? list.length + ' processes' : 'loading…'}</span><span>on ${esc(m ? m.name : '')}</span>${hasGroups ? `<span>CPU groups: ${esc(m.groups.map(g => g.name).join(', '))}</span>` : ''}</div></div><button type="button" class="btn" data-dock="1" style="margin-left:auto" title="Or drag the Details pill onto the right side">${icon('layers')}Dock to the right</button></div>`;
   const tools = `<div class="dtools"><input type="search" id="pfilter" placeholder="Filter by name, PID, user or command" value="${esc(S.filter)}" aria-label="Filter processes"><label>Group by <select id="pgroup"><option value="none"${S.group==='none'?' selected':''}>Nothing</option><option value="cpugroup"${S.group==='cpugroup'?' selected':''}>CPU group (CCD, P-/E-cores)</option><option value="owner"${S.group==='owner'?' selected':''}>Where it runs (tree node)</option><option value="user"${S.group==='user'?' selected':''}>User</option><option value="state"${S.group==='state'?' selected':''}>Status</option></select></label>${groupBy ? `<span class="gall"><button type="button" class="btn" data-gall="open">Expand all</button><button type="button" class="btn" data-gall="close">Collapse all</button></span>` : ''}</div>`;
   const thead = `<tr>${COLS.map(c => `<th class="${c.l ? 'l' : ''}" ${c.k === S.sort.k ? `aria-sort="${dir < 0 ? 'descending' : 'ascending'}"` : ''}><button type="button" data-sort="${c.k}">${c.label}${c.k === S.sort.k ? (dir < 0 ? ' ↓' : ' ↑') : ''}</button></th>`).join('')}</tr>`;
-  return head + groupNote + `<section class="card">${tools}<div class="pscroll"><table class="ptbl"><thead>${thead}</thead><tbody>${body}</tbody></table>${more ? `<div class="more">${more}</div>` : ''}</div></section>`;
+  return head + groupNote + `<section class="card">${tools}${docked && m ? filterChips(m, f, all) : ''}<div class="pscroll"><table class="ptbl"><thead>${thead}</thead><tbody>${body}</tbody></table>${more ? `<div class="more">${more}</div>` : ''}</div></section>`;
 }
 
 /* ---------- network detail ---------- */
@@ -956,6 +975,7 @@ document.addEventListener('click', e => {
   if (e.target.closest('[data-dock]')){ dockDetails(); return; }
   if (e.target.closest('[data-undock]')){ S.detailsDocked = false; S.view = 'details'; save(); renderAll(); return; }
   if (e.target.closest('[data-closedock]')){ S.detailsDocked = false; save(); renderAll(); return; }
+  const dc = e.target.closest('[data-dfclear]'); if (dc){ if (dc.dataset.dfclear === 'cpu') S.cpuSel = null; save(); renderMain(); return; }
   const gt = e.target.closest('[data-gtoggle]');
   if (gt){ const g = gt.dataset.gtoggle, cur = (S.gopen && S.gopen[S.group]) || []; setGroupsOpen(S.group, cur.includes(g) ? cur.filter(x => x !== g) : cur.concat([g])); return; }
   const ga = e.target.closest('[data-gall]');
