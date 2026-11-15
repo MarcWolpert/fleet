@@ -316,6 +316,8 @@ class Machine:
         gpu_by_pid = {}
         for g in r.get("gproc", []):
             gpu_by_pid[g[1]] = gpu_by_pid.get(g[1], 0) + g[2]
+        slot = {g["index"]: i for i, g in enumerate(r.get("gpus", []))}  # nvidia-smi index -> position in gpus
+        gpu_on = gpus_by_pid((g[1], slot[g[0]]) for g in r.get("gproc", []) if g[0] in slot)
         procs = []
         cont_u, vm_u, unit_u = {}, {}, {}
         by_pid = {}
@@ -325,7 +327,7 @@ class Machine:
             c = self.rate("p.%d.t" % pid, ticks, t) / hz
             d = self.rate("p.%d.io" % pid, iob, t) / MB if iob >= 0 else 0.0
             g = gpu_by_pid.get(pid, 0.0)
-            row = [pid, ppid, comm, user, state, c, rss / GB, d, g, threads, cmd, "", lastcpu]
+            row = [pid, ppid, comm, user, state, c, rss / GB, d, g, threads, cmd, "", lastcpu, gpu_on.get(pid, [])]
             procs.append(row)
             by_pid[pid] = row
             u = [c, rss / GB, g, d, 0.0]
@@ -395,6 +397,7 @@ class Machine:
             "cap": [ncpu, r["mem"][0] / GB, 100.0 * len(gpus), self.disk_peak / MB, net_cap],
             "gpus": gpus, "lcpus": lcpus, "groups": groups, "containers": containers, "vms": vms, "jobs": jobs,
             "procs": procs, "ifs": ifs, "dockernets": r.get("dockernets", []), "cronLabel": "Cron jobs",
+            "gpu_procs": bool(gpus),  # nvidia-smi pmon names each process's GPUs (p[13])
         }
 
     def prune(self, t):
@@ -457,7 +460,7 @@ class Machine:
         for p in r.get("procs", []):
             pid, ppid, name, c, ws, threads, io, cmd = p
             g = sum(gpu_by_pid.get(pid, {}).values())
-            row = [pid, ppid, name, "", "", c, ws / GB, io / MB, g, threads, cmd, "base", -1]
+            row = [pid, ppid, name, "", "", c, ws / GB, io / MB, g, threads, cmd, "base", -1, sorted(gpu_by_pid.get(pid, {}))]
             if name.lower() in ("vmmem", "vmmemwsl"):
                 row[11] = "vm:WSL"
                 for i, v in enumerate((c, ws / GB, g, io / MB)):
@@ -506,6 +509,7 @@ class Machine:
             "cap": [ncpu, r["mem"][0] / GB, 100.0 * len(gpus), self.disk_peak / MB, (speed / 8.0) if speed else 125.0],
             "gpus": gpus, "lcpus": lcpus, "groups": groups, "containers": containers, "vms": vms, "jobs": jobs,
             "procs": procs, "ifs": ifs, "dockernets": [], "cronLabel": "Scheduled tasks",
+            "gpu_procs": bool(gpus),  # GPU engine counters name each process's adapters (p[13])
         }
 
     # ------------------------------------------------------------ macOS (already rates)
@@ -534,6 +538,14 @@ def match_job(jobs, comm, cmd):
         if comm and (comm in j["cmd"] or (cmd and cmd.split()[0] in j["cmd"])):
             return j
     return None
+
+
+def gpus_by_pid(pairs):
+    """{pid: sorted GPU positions} from (pid, position) pairs: the GPUs each process has a context on."""
+    out = {}
+    for pid, pos in pairs:
+        out.setdefault(pid, set()).add(pos)
+    return {pid: sorted(v) for pid, v in out.items()}
 
 
 def group_lcpus_linux(lcpus):
@@ -1019,8 +1031,11 @@ class Fleet:
                 node = mid + "/base"
             else:
                 node = mid + "/base"
-            out.append([p[0], p[2], p[3], p[4], round(p[5], 4), round(p[6], 5), round(p[7], 4), round(p[8], 2), p[9], p[10], node, p[1], p[12] if len(p) > 12 else -1])
-        return {"procs": out, "t": view["t"]}
+            out.append([p[0], p[2], p[3], p[4], round(p[5], 4), round(p[6], 5), round(p[7], 4), round(p[8], 2), p[9], p[10], node, p[1],
+                        p[12] if len(p) > 12 else -1, list(p[13]) if len(p) > 13 else []])
+        # p[13]: positions (in this machine's gpus) of the GPUs the process has a context on; gpu_procs says
+        # whether the host reports that at all (macOS doesn't).
+        return {"procs": out, "t": view["t"], "gpu_procs": bool(view.get("gpu_procs"))}
 
     def api_cpus(self, mid):
         m = self.machines.get(mid)
