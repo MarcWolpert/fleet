@@ -11,7 +11,7 @@ after(async () => { await browser.close(); });
 
 const HEADS = `[...document.querySelectorAll('.ptbl tr.gh')].map(r => { const b = r.querySelector('button[data-gtoggle]'); return b ? b.dataset.gtoggle + (b.getAttribute('aria-expanded') === 'true' ? ' (open)' : '') : 'NOT A BUTTON: ' + r.textContent; })`;
 const NOTE = `(document.querySelector('.pscroll .more') || {}).textContent || ''`;
-const SAVED = `JSON.parse(localStorage.getItem('fleet-live-ui')).gopen`;
+const SAVED = `JSON.parse(localStorage.getItem('fleet-live-ui')).groupOpen`;
 const view = p => p.eval(`({heads: ${HEADS}, pids: ${PIDS}, note: ${NOTE}})`);
 
 async function open(over = {}, fx = fixture()){

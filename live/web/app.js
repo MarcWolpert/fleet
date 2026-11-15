@@ -932,8 +932,8 @@ function filterChips(fs){
   return `<div class="dfchips" role="group" aria-label="Details is filtered">${chips}</div>` + fs.filter(f => !f.apply).map(f => noteHTML(esc(f.why))).join('');
 }
 // Details groups are collapsed unless opened; open ones are kept per Group-by mode.
-function groupOpen(mode, g){ return !!(S.gopen && S.gopen[mode] && S.gopen[mode].includes(g)); }
-function setGroupsOpen(mode, names){ S.gopen = Object.assign({}, S.gopen, {[mode]:names}); save(); renderMain(); }
+function groupOpen(mode, g){ return !!(S.groupOpen && S.groupOpen[mode] && S.groupOpen[mode].includes(String(g))); }
+function setGroupsOpen(mode, names){ S.groupOpen = Object.assign({}, S.groupOpen, {[mode]:names}); save(); renderMain(); }
 function detailsView(n, docked){
   const mid = procMachineFor(n);
   const m = nodes[mid];
@@ -971,7 +971,8 @@ function detailsView(n, docked){
   let body = '', shown = 0, more = '';
   const rowHTML = p => `<tr>${COLS.map(c => `<td class="${c.l ? 'l' : ''} ${c.cls || ''}">${c.show(p)}</td>`).join('')}</tr>`;
   if (groupBy){
-    // Groups start collapsed; the open ones are remembered per Group-by mode (S.gopen) and share the row limit.
+    // Groups start collapsed, each header a summary; open ones are remembered per Group-by mode (S.groupOpen)
+    // and share the row limit.
     const groups = new Map();
     list.forEach(p => { const g = groupBy(p); if (!groups.has(g)) groups.set(g, []); groups.get(g).push(p); });
     const ordered = [...groups.entries()].sort((a, b) => b[1].reduce((s, p) => s + p[4], 0) - a[1].reduce((s, p) => s + p[4], 0));
@@ -981,7 +982,8 @@ function detailsView(n, docked){
     let closedN = 0, closedG = 0, cut = 0;
     ordered.forEach(([g, ps]) => {
       const c = ps.reduce((s, p) => s + p[4], 0), mem = ps.reduce((s, p) => s + p[5], 0), open = isOpen(g);
-      body += `<tr class="gh"><td colspan="${COLS.length}"><button type="button" class="ghbtn" data-gtoggle="${esc(g)}" aria-expanded="${open}" aria-label="${open ? 'Collapse' : 'Expand'} ${esc(g)}">${icon('chev', 2.4)}${esc(g)}<span>${ps.length} process${ps.length === 1 ? '' : 'es'} · CPU ${pct(c / ncpu * 100)} · ${memText(mem)}</span></button></td></tr>`;
+      const dk = ps.reduce((s, p) => s + (p[6] || 0), 0), nt = ps.reduce((s, p) => s + Math.max(0, p[16] || 0), 0);
+      body += `<tr class="gh"><td colspan="${COLS.length}"><button type="button" class="ghbtn" data-gtoggle="${esc(g)}" aria-expanded="${open}" aria-label="${open ? 'Collapse' : 'Expand'} ${esc(g)}">${icon('chev', 2.4)}${esc(g)}<span>${ps.length} process${ps.length === 1 ? '' : 'es'} · CPU ${pct(c / ncpu * 100)} · ${memText(mem)}${dk > 0 ? ' · disk ' + rateText(dk) : ''}${nt > 0 ? ' · net ' + rateText(nt) : ''}</span></button></td></tr>`;
       if (!open){ closedN += ps.length; closedG++; return; }
       ps.slice(0, per).forEach(p => { body += rowHTML(p); shown++; });
       cut += Math.max(0, ps.length - per);
@@ -1167,7 +1169,7 @@ document.addEventListener('click', e => {
   if (e.target.closest('[data-closedock]')){ S.detailsDocked = false; save(); renderAll(); return; }
   const dc = e.target.closest('[data-dfclear]'); if (dc){ const k = dc.dataset.dfclear; if (k === 'cpu' || k === 'all') S.cpuSel = null; if (k === 'gpu' || k === 'all') S.gpuSel = null; if (k === 'disk' || k === 'all') S.diskSel = null; if (k === 'net' || k === 'all') S.ifSel = null; save(); renderMain(); return; }
   const gt = e.target.closest('[data-gtoggle]');
-  if (gt){ const g = gt.dataset.gtoggle, cur = (S.gopen && S.gopen[S.group]) || []; setGroupsOpen(S.group, cur.includes(g) ? cur.filter(x => x !== g) : cur.concat([g])); return; }
+  if (gt){ const g = gt.dataset.gtoggle, cur = (S.groupOpen && S.groupOpen[S.group]) || []; setGroupsOpen(S.group, cur.includes(g) ? cur.filter(x => x !== g) : cur.concat([g])); return; }
   const ga = e.target.closest('[data-gall]');
   if (ga){ setGroupsOpen(S.group, ga.dataset.gall === 'open' ? [...document.querySelectorAll('[data-gtoggle]')].map(b => b.dataset.gtoggle) : []); return; }
   const so = e.target.closest('[data-sort]'); if (so){ const k = so.dataset.sort; S.sort = {k, dir:S.sort.k === k ? -S.sort.dir : (['name','owner','user','state','cpugroup','cmd'].includes(k) ? 1 : -1)}; save(); renderMain(); return; }
