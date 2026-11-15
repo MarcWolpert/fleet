@@ -261,8 +261,14 @@ main{flex:1;min-width:0;overflow:auto;background:var(--win)}
 .ptbl td{padding:5px 8px;border-bottom:1px solid #ffffff0b;text-align:right;font-family:var(--mono);font-size:12px;color:var(--ink-2);white-space:nowrap}
 .ptbl td.l{font-family:var(--sans);font-size:12.5px}
 .ptbl td.cmd{max-width:460px;overflow:hidden;text-overflow:ellipsis;font-family:var(--mono);font-size:11.5px;color:var(--ink-3);text-align:left}
-.ptbl tr.gh td{background:#ffffff08;color:var(--ink);font-family:var(--sans);font-weight:600;text-align:left;padding:8px}
+.ptbl tr.gh td{background:#ffffff08;color:var(--ink);font-family:var(--sans);font-weight:600;text-align:left;padding:0}
 .ptbl tr.gh td span{color:var(--ink-3);font-weight:400;margin-left:10px;font-family:var(--mono);font-size:11.5px}
+.ghbtn{display:flex;align-items:center;gap:7px;width:100%;padding:8px;color:var(--ink);font:600 12.5px/1.3 var(--sans);text-align:left}
+.ghbtn:hover{background:#ffffff08}
+.ghbtn svg{width:12px;height:12px;flex:none;color:var(--ink-3);transition:transform .12s}
+.ghbtn[aria-expanded="true"] svg{transform:rotate(90deg)}
+.ghbtn:focus-visible{outline-offset:-2px}
+.dtools .gall{display:inline-flex;gap:6px;margin-left:auto}
 .ptbl tr:hover td{background:#ffffff06}
 .heat{display:inline-block;min-width:44px}
 .pscroll{overflow:auto;max-height:calc(100vh - 230px);border:1px solid var(--line);border-radius:10px}

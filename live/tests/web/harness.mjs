@@ -129,7 +129,11 @@ async function openPage(cdp, fx, {ui = null, width = 1500, height = 950, fonts =
       await send('Input.dispatchMouseEvent', {type: 'mousePressed', x: r.x, y: r.y, button: 'left', buttons: 1, clickCount: 1, modifiers});
       await send('Input.dispatchMouseEvent', {type: 'mouseReleased', x: r.x, y: r.y, button: 'left', buttons: 0, clickCount: 1, modifiers});
     },
-    async key(key, code = key){ await send('Input.dispatchKeyEvent', {type: 'keyDown', key, code, windowsVirtualKeyCode: key === 'Escape' ? 27 : key === 'Enter' ? 13 : 0}); await send('Input.dispatchKeyEvent', {type: 'keyUp', key, code}); },
+    async key(key, code = key){
+      const vk = {Escape: 27, Enter: 13, ' ': 32}[key] || 0, text = {Enter: '\r', ' ': ' '}[key];
+      await send('Input.dispatchKeyEvent', Object.assign({type: 'keyDown', key, code, windowsVirtualKeyCode: vk}, text ? {text} : {}));
+      await send('Input.dispatchKeyEvent', {type: 'keyUp', key, code, windowsVirtualKeyCode: vk});
+    },
     async shot(name){
       const dir = process.env.FLEET_TEST_SHOTS; if (!dir) return null;
       fs.mkdirSync(dir, {recursive: true});

@@ -729,6 +729,9 @@ function cpuGroupNames(mid){
 }
 const STATE = {R:'running', S:'sleeping', D:'disk wait', Z:'zombie', T:'stopped', t:'traced', I:'idle', U:'waiting', X:'dead'};
 function stateLabel(s){ return s ? (STATE[s[0]] || s) : ''; }
+// Details groups are collapsed unless opened; open ones are kept per Group-by mode.
+function groupOpen(mode, g){ return !!(S.gopen && S.gopen[mode] && S.gopen[mode].includes(g)); }
+function setGroupsOpen(mode, names){ S.gopen = Object.assign({}, S.gopen, {[mode]:names}); save(); renderMain(); }
 function detailsView(n, docked){
   const mid = procMachineFor(n);
   const m = nodes[mid];
@@ -760,28 +763,40 @@ function detailsView(n, docked){
   list = list.slice().sort((a, b) => { const x = col.get(a), y = col.get(b); return (x < y ? -1 : x > y ? 1 : 0) * dir || b[4] - a[4]; });
   const groupBy = {none:null, cpugroup:groupOf, owner:p => ownerName(p[10]) || '—', user:p => p[2] || '—', state:p => stateLabel(p[3]) || '—'}[S.group];
   const LIMIT = 400;
-  let body = '', shown = 0;
+  let body = '', shown = 0, more = '';
   const rowHTML = p => `<tr>${COLS.map(c => `<td class="${c.l ? 'l' : ''} ${c.cls || ''}">${c.show(p)}</td>`).join('')}</tr>`;
   if (groupBy){
+    // Groups start collapsed; the open ones are remembered per Group-by mode (S.gopen) and share the row limit.
     const groups = new Map();
     list.forEach(p => { const g = groupBy(p); if (!groups.has(g)) groups.set(g, []); groups.get(g).push(p); });
     const ordered = [...groups.entries()].sort((a, b) => b[1].reduce((s, p) => s + p[4], 0) - a[1].reduce((s, p) => s + p[4], 0));
+    const isOpen = g => groupOpen(S.group, g);
+    const nOpen = ordered.filter(([g]) => isOpen(g)).length;
+    const per = nOpen ? Math.max(10, Math.floor(LIMIT / nOpen)) : 0;
+    let closedN = 0, closedG = 0, cut = 0;
     ordered.forEach(([g, ps]) => {
-      const c = ps.reduce((s, p) => s + p[4], 0), mem = ps.reduce((s, p) => s + p[5], 0);
-      body += `<tr class="gh"><td colspan="${COLS.length}">${esc(g)}<span>${ps.length} processes · CPU ${pct(c / ncpu * 100)} · ${memText(mem)}</span></td></tr>`;
-      ps.slice(0, Math.max(10, Math.floor(LIMIT / ordered.length))).forEach(p => { body += rowHTML(p); shown++; });
+      const c = ps.reduce((s, p) => s + p[4], 0), mem = ps.reduce((s, p) => s + p[5], 0), open = isOpen(g);
+      body += `<tr class="gh"><td colspan="${COLS.length}"><button type="button" class="ghbtn" data-gtoggle="${esc(g)}" aria-expanded="${open}" aria-label="${open ? 'Collapse' : 'Expand'} ${esc(g)}">${icon('chev', 2.4)}${esc(g)}<span>${ps.length} process${ps.length === 1 ? '' : 'es'} · CPU ${pct(c / ncpu * 100)} · ${memText(mem)}</span></button></td></tr>`;
+      if (!open){ closedN += ps.length; closedG++; return; }
+      ps.slice(0, per).forEach(p => { body += rowHTML(p); shown++; });
+      cut += Math.max(0, ps.length - per);
     });
+    if (shown < list.length)
+      more = `Showing ${shown} of ${list.length} processes.`
+        + (closedG ? ` ${closedN} ${closedN === 1 ? 'is' : 'are'} in ${closedG} collapsed group${closedG === 1 ? '; open it' : 's; open a group'} to see ${closedN === 1 ? 'it' : 'them'}.` : '')
+        + (cut ? ` Open groups show their first ${per}; sort or filter to see others.` : '');
   } else {
     list.slice(0, LIMIT).forEach(p => { body += rowHTML(p); shown++; });
+    if (list.length > shown) more = `Showing ${shown} of ${list.length}. Sort or filter to see others.`;
   }
   const hasGroups = (m && m.groups || []).length > 1;
   const groupNote = Object.keys(gnames).length && !list.some(p => p[12] >= 0) && S.group === 'cpugroup' ? noteHTML('This OS doesn’t report which processor a process last ran on, so CPU groups can’t be assigned per process here. The <b>Logical processors</b> view under CPU still shows each group.') : '';
   const head = docked
     ? `<div class="dhead"><div class="dtitle"><b>Details · ${esc(n.name)}</b><span>${all ? list.length + ' processes' : 'loading…'} on ${esc(m ? m.name : '')}</span></div><button type="button" class="iconbtn" data-undock="1" title="Pop out to the full Details view" aria-label="Pop out Details">${icon('layers')}</button><button type="button" class="iconbtn" data-closedock="1" title="Close the Details panel" aria-label="Close the Details panel">${icon('x', 2.2)}</button></div>`
     : `<div class="hero"><span class="tile" style="background:#ffffff10;color:var(--ink-2)">${icon('chip')}</span><div><h1>Details · ${esc(n.name)}</h1><div class="facts"><span>${all ? list.length + ' processes' : 'loading…'}</span><span>on ${esc(m ? m.name : '')}</span>${hasGroups ? `<span>CPU groups: ${esc(m.groups.map(g => g.name).join(', '))}</span>` : ''}</div></div><button type="button" class="btn" data-dock="1" style="margin-left:auto" title="Or drag the Details pill onto the right side">${icon('layers')}Dock to the right</button></div>`;
-  const tools = `<div class="dtools"><input type="search" id="pfilter" placeholder="Filter by name, PID, user or command" value="${esc(S.filter)}" aria-label="Filter processes"><label>Group by <select id="pgroup"><option value="none"${S.group==='none'?' selected':''}>Nothing</option><option value="cpugroup"${S.group==='cpugroup'?' selected':''}>CPU group (CCD, P-/E-cores)</option><option value="owner"${S.group==='owner'?' selected':''}>Where it runs (tree node)</option><option value="user"${S.group==='user'?' selected':''}>User</option><option value="state"${S.group==='state'?' selected':''}>Status</option></select></label></div>`;
+  const tools = `<div class="dtools"><input type="search" id="pfilter" placeholder="Filter by name, PID, user or command" value="${esc(S.filter)}" aria-label="Filter processes"><label>Group by <select id="pgroup"><option value="none"${S.group==='none'?' selected':''}>Nothing</option><option value="cpugroup"${S.group==='cpugroup'?' selected':''}>CPU group (CCD, P-/E-cores)</option><option value="owner"${S.group==='owner'?' selected':''}>Where it runs (tree node)</option><option value="user"${S.group==='user'?' selected':''}>User</option><option value="state"${S.group==='state'?' selected':''}>Status</option></select></label>${groupBy ? `<span class="gall"><button type="button" class="btn" data-gall="open">Expand all</button><button type="button" class="btn" data-gall="close">Collapse all</button></span>` : ''}</div>`;
   const thead = `<tr>${COLS.map(c => `<th class="${c.l ? 'l' : ''}" ${c.k === S.sort.k ? `aria-sort="${dir < 0 ? 'descending' : 'ascending'}"` : ''}><button type="button" data-sort="${c.k}">${c.label}${c.k === S.sort.k ? (dir < 0 ? ' ↓' : ' ↑') : ''}</button></th>`).join('')}</tr>`;
-  return head + groupNote + `<section class="card">${tools}<div class="pscroll"><table class="ptbl"><thead>${thead}</thead><tbody>${body}</tbody></table>${list.length > shown ? `<div class="more">Showing ${shown} of ${list.length}. Sort or filter to see others.</div>` : ''}</div></section>`;
+  return head + groupNote + `<section class="card">${tools}<div class="pscroll"><table class="ptbl"><thead>${thead}</thead><tbody>${body}</tbody></table>${more ? `<div class="more">${more}</div>` : ''}</div></section>`;
 }
 
 /* ---------- network detail ---------- */
@@ -809,7 +824,7 @@ function renderMain(){
   let refocus = null, selStart = null;
   if (a && main.contains(a)){
     if (a.id) { refocus = '#' + a.id; selStart = a.selectionStart; }
-    else if (a.dataset) for (const k of ['select', 'mode', 'sort', 'pin', 'cpuview', 'netsel']) if (a.dataset[k] != null){ refocus = `[data-${k}="${CSS.escape(a.dataset[k])}"]`; break; }
+    else if (a.dataset) for (const k of ['select', 'mode', 'sort', 'pin', 'cpuview', 'netsel', 'gtoggle', 'gall']) if (a.dataset[k] != null){ refocus = `[data-${k}="${CSS.escape(a.dataset[k])}"]`; break; }
   }
   let html;
   let panel = '';
@@ -941,6 +956,10 @@ document.addEventListener('click', e => {
   if (e.target.closest('[data-dock]')){ dockDetails(); return; }
   if (e.target.closest('[data-undock]')){ S.detailsDocked = false; S.view = 'details'; save(); renderAll(); return; }
   if (e.target.closest('[data-closedock]')){ S.detailsDocked = false; save(); renderAll(); return; }
+  const gt = e.target.closest('[data-gtoggle]');
+  if (gt){ const g = gt.dataset.gtoggle, cur = (S.gopen && S.gopen[S.group]) || []; setGroupsOpen(S.group, cur.includes(g) ? cur.filter(x => x !== g) : cur.concat([g])); return; }
+  const ga = e.target.closest('[data-gall]');
+  if (ga){ setGroupsOpen(S.group, ga.dataset.gall === 'open' ? [...document.querySelectorAll('[data-gtoggle]')].map(b => b.dataset.gtoggle) : []); return; }
   const so = e.target.closest('[data-sort]'); if (so){ const k = so.dataset.sort; S.sort = {k, dir:S.sort.k === k ? -S.sort.dir : (['name','owner','user','state','cpugroup','cmd'].includes(k) ? 1 : -1)}; save(); renderMain(); return; }
   const lc = e.target.closest('[data-lcpu]'), lg = e.target.closest('[data-lgroup]');
   if (lc || lg){
