@@ -41,6 +41,139 @@ def netdev(text):
 
 
 
+# ---- GPUs from every vendor: the kernel's DRM devices, per-process engine time from fdinfo ----
+DISPLAY_ONLY = {"ast", "mgag200", "simpledrm", "simplefb", "bochs", "bochs-drm", "cirrus", "cirrus-qemu", "hibmc-drm",
+                "vboxvideo", "udl", "efifb", "vesafb", "gm12u320", "gud"}
+VENDORS = {"0x10de": "NVIDIA", "0x1002": "AMD", "0x8086": "Intel", "0x1af4": "virtio", "0x15ad": "VMware",
+           "0x1414": "Microsoft", "0x5143": "Qualcomm", "0x106b": "Apple", "0x1a03": "ASPEED"}
+NAME_CACHE, GPU_FDS, SCAN = {}, [], {"n": 0, "cost": 0.0}
+
+
+def gpu_name(pdev, vendor, driver):
+    if pdev in NAME_CACHE:
+        return NAME_CACHE[pdev]
+    name = ""
+    out = run(["lspci", "-mm", "-s", pdev], timeout=4).strip()
+    f = re.findall(r'"([^"]*)"', out)
+    if len(f) >= 3:
+        vend = VENDORS.get(vendor) or f[1].split()[0]
+        m = re.search(r"\[([^\]]+)\]", f[2])
+        name = "%s %s" % (vend, m.group(1) if m else f[2])
+    if not name:
+        name = "%s GPU (%s)" % (VENDORS.get(vendor, "Unknown"), driver or "no driver")
+    NAME_CACHE[pdev] = name
+    return name
+
+
+def drm_gpus():
+    """Every GPU the kernel exposes (any vendor), minus display-only chips; plus GPUs passed through to VMs."""
+    cards, seen = [], set()
+    for c in sorted(os.listdir("/sys/class/drm")):
+        if not re.match(r"^card\d+$", c):
+            continue
+        dev = os.path.realpath("/sys/class/drm/%s/device" % c)
+        drv = os.path.basename(os.path.realpath(dev + "/driver")) if os.path.exists(dev + "/driver") else ""
+        if drv in DISPLAY_ONLY:
+            continue
+        pdev, vendor = os.path.basename(dev), rd(dev + "/vendor").strip()
+        if pdev in seen:
+            continue
+        seen.add(pdev)
+        base = "/sys/class/drm/%s/" % c
+        mhz = rd(base + "gt_act_freq_mhz").strip() or rd(dev + "/tile0/gt0/freq0/act_freq").strip()
+        maxmhz = rd(base + "gt_max_freq_mhz").strip() or rd(dev + "/tile0/gt0/freq0/max_freq").strip()
+        if not mhz:  # amdgpu: the current shader clock is the starred line of pp_dpm_sclk
+            m = re.search(r"(\d+)Mhz \*", rd(dev + "/pp_dpm_sclk"))
+            mhz = m.group(1) if m else ""
+        busy = rd(dev + "/gpu_busy_percent").strip()  # amdgpu
+        vt, vu = rd(dev + "/mem_info_vram_total").strip(), rd(dev + "/mem_info_vram_used").strip()
+        cards.append({"card": c, "pdev": pdev, "driver": drv, "vendor": VENDORS.get(vendor, vendor), "name": gpu_name(pdev, vendor, drv),
+                      "mhz": int(mhz) if mhz.isdigit() else 0, "maxmhz": int(maxmhz) if maxmhz.isdigit() else 0,
+                      "busy": int(busy) if busy.isdigit() else -1, "vram": [int(vt) if vt.isdigit() else 0, int(vu) if vu.isdigit() else 0]})
+    # Display controllers bound to vfio-pci belong to a VM: still a GPU of this host, used by that VM.
+    for pdev in sorted(os.listdir("/sys/bus/pci/devices")):
+        d = "/sys/bus/pci/devices/" + pdev
+        if pdev in seen or not rd(d + "/class").startswith("0x03"):
+            continue
+        drv = os.path.basename(os.path.realpath(d + "/driver")) if os.path.exists(d + "/driver") else ""
+        if drv in ("vfio-pci", "pci-stub"):
+            vendor = rd(d + "/vendor").strip()
+            if vendor == "0x1a03":
+                continue
+            cards.append({"card": "", "pdev": pdev, "driver": drv, "vendor": VENDORS.get(vendor, vendor), "name": gpu_name(pdev, vendor, drv),
+                          "mhz": 0, "maxmhz": 0, "busy": -1, "vram": [0, 0], "passthrough": True})
+    return cards
+
+
+def node_pdev(path):
+    """/dev/dri/renderD128 or card1 -> the PCI (or platform) device it belongs to."""
+    return os.path.basename(os.path.realpath("/sys/class/drm/%s/device" % os.path.basename(path)))
+
+
+def gpu_clients(cards):
+    """[pid, pdev, client id, {engine: busy ns}, {engine: capacity}, memory bytes] for every process using a GPU."""
+    want = {c["pdev"] for c in cards if c.get("card")}
+    if not want:
+        return []
+    pids = set()
+    debug = [d for d in ("/sys/kernel/debug/dri/" + p for p in want) if os.path.exists(d + "/clients")]
+    if debug:  # cheap: the kernel lists each GPU's clients (root + debugfs)
+        for d in debug:
+            for line in rd(d + "/clients").splitlines()[1:]:
+                f = line.split()
+                if len(f) > 1 and f[1].isdigit():
+                    pids.add(f[1])
+        fds = []
+        for pid in pids:
+            try:
+                for fd in os.listdir("/proc/%s/fd" % pid):
+                    l = os.readlink("/proc/%s/fd/%s" % (pid, fd))
+                    if l.startswith("/dev/dri/"):
+                        fds.append((pid, fd, node_pdev(l)))
+            except Exception:
+                pass
+        GPU_FDS[:] = fds
+    else:  # scan every open file, but only as often as it's cheap
+        SCAN["n"] += 1
+        if SCAN["cost"] < 0.15 or SCAN["n"] % 10 == 1:
+            began, fds = time.time(), []
+            for pid in os.listdir("/proc"):
+                if not pid.isdigit():
+                    continue
+                try:
+                    for fd in os.listdir("/proc/%s/fd" % pid):
+                        try:
+                            l = os.readlink("/proc/%s/fd/%s" % (pid, fd))
+                        except Exception:
+                            continue
+                        if l.startswith("/dev/dri/"):
+                            fds.append((pid, fd, node_pdev(l)))
+                except Exception:
+                    continue
+            GPU_FDS[:] = fds
+            SCAN["cost"] = time.time() - began
+    out, seen = [], set()
+    for pid, fd, pdev in GPU_FDS:
+        info = rd("/proc/%s/fdinfo/%s" % (pid, fd))
+        if not info:
+            continue
+        m = re.search(r"drm-pdev:\s*(\S+)", info)
+        pdev = m.group(1) if m else pdev
+        cid = re.search(r"drm-client-id:\s*(\d+)", info)
+        key = (pdev, cid.group(1) if cid else pid + "/" + fd)
+        if key in seen or pdev not in want:
+            continue  # the same client shows up in every process that shares its file
+        seen.add(key)
+        eng = {k: int(v) for k, v in re.findall(r"drm-engine-([a-z0-9-]+):\s*(\d+) ns", info) if not k.startswith("capacity")}
+        cap = {k: int(v) for k, v in re.findall(r"drm-engine-capacity-([a-z0-9-]+):\s*(\d+)", info)}
+        mem = 0
+        for k, v, u in re.findall(r"drm-(?:resident)-([a-z0-9]+):\s*(\d+)\s*(\w*)", info):
+            if k.startswith(("vram", "local")):
+                mem += int(v) * {"KiB": 1024, "MiB": 1024 ** 2, "GiB": 1024 ** 3}.get(u, 1)
+        out.append([int(pid), pdev, key[1], eng, cap, mem])
+    return out
+
+
 def snapshot():
     global out
     out = {"t": time.time(), "hz": HZ, "ncpu": os.cpu_count(), "host": os.uname()[1], "kernel": os.uname()[2]}
@@ -233,10 +366,29 @@ def snapshot():
 
     # NVIDIA GPUs and which processes use them.
     gpus = []
-    for line in run(["nvidia-smi", "--query-gpu=index,name,utilization.gpu,memory.used,memory.total", "--format=csv,noheader,nounits"]).splitlines():
+    for line in run(["nvidia-smi", "--query-gpu=index,name,utilization.gpu,memory.used,memory.total,pci.bus_id", "--format=csv,noheader,nounits"]).splitlines():
         f = [x.strip() for x in line.split(",")]
-        if len(f) == 5:
-            gpus.append({"index": int(f[0]), "name": f[1], "util": float(f[2] or 0), "memUsed": float(f[3] or 0), "memTotal": float(f[4] or 0)})
+        if len(f) == 6:
+            bus = f[5].lower()
+            bus = bus[4:] if re.match(r"^0000[0-9a-f]{4}:", bus) else bus  # 00000000:83:00.0 -> 0000:83:00.0
+            gpus.append({"index": int(f[0]), "name": f[1], "util": float(f[2] or 0), "memUsed": float(f[3] or 0), "memTotal": float(f[4] or 0), "pdev": bus})
+    try:
+        cards = drm_gpus()
+    except Exception:
+        cards = []
+    out["drm"] = cards
+    try:
+        out["gclients"] = gpu_clients(cards)
+    except Exception:
+        out["gclients"] = []
+    for c in cards:  # which VM a passed-through GPU belongs to (the full QEMU command line names its PCI address)
+        if c.get("passthrough"):
+            for p in procs:
+                if p[10]:
+                    full = rd("/proc/%d/cmdline" % p[0]).replace("\0", " ")
+                    if c["pdev"] in full or c["pdev"][5:] in full:
+                        c["vm"] = p[10]
+                        break
     out["gpus"] = gpus
     gproc = []
     if gpus:

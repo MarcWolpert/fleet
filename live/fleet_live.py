@@ -313,9 +313,9 @@ class Machine:
                         "state": v.get("state", ""), "speed": v.get("speed", "")})
 
         # Processes: per-process rates; owner = container, VM, timer unit or base.
-        gpu_by_pid = {}
-        for g in r.get("gproc", []):
-            gpu_by_pid[g[1]] = gpu_by_pid.get(g[1], 0) + g[2]
+        gpus, pid_gpu = self.linux_gpus(r, t)
+        gpu_by_pid = {pid: sum(v.values()) for pid, v in pid_gpu.items()}
+        cont_gk = {}
         procs = []
         cont_u, vm_u, unit_u = {}, {}, {}
         by_pid = {}
@@ -325,6 +325,8 @@ class Machine:
             c = self.rate("p.%d.t" % pid, ticks, t) / hz
             d = self.rate("p.%d.io" % pid, iob, t) / MB if iob >= 0 else 0.0
             g = gpu_by_pid.get(pid, 0.0)
+            if cid and pid in pid_gpu:
+                cont_gk.setdefault(cid, set()).update("gpu%d" % i for i, v in pid_gpu[pid].items() if v > 0)
             row = [pid, ppid, comm, user, state, c, rss / GB, d, g, threads, cmd, "", lastcpu]
             procs.append(row)
             by_pid[pid] = row
@@ -376,8 +378,9 @@ class Machine:
             jobs.append({"name": tm["timer"].replace(".timer", ""), "sched": "systemd timer", "human": "timer",
                          "cmd": tm["unit"], "src": "systemd", "last": " ".join(line[-6:-4]) if len(line) > 6 else "",
                          "running": tm["unit"] in unit_u, "u": u})
-        gpus = [{"name": g["name"], "mem": "%d GB VRAM" % round(g["memTotal"] / 1024) if g["memTotal"] else "", "util": g["util"]} for g in r.get("gpus", [])]
         gpu_total = sum(g["util"] for g in gpus)
+        for c in containers:
+            c["gkeys"] = sorted(cont_gk.get(c["id"], ()))
         owner = {}
         for p in r["procs"]:
             if p[9]:
@@ -396,6 +399,53 @@ class Machine:
             "gpus": gpus, "lcpus": lcpus, "groups": groups, "containers": containers, "vms": vms, "jobs": jobs,
             "procs": procs, "ifs": ifs, "dockernets": r.get("dockernets", []), "cronLabel": "Cron jobs",
         }
+
+    def linux_gpus(self, r, t):
+        """Every GPU on a Linux host, any vendor: the kernel's DRM devices (and GPUs passed through to VMs),
+        with NVIDIA's numbers from nvidia-smi. Returns (gpus, {pid: {gpu index: %}})."""
+        nv = {g.get("pdev", ""): g for g in r.get("gpus", [])}
+        gpus, idx_of = [], {}
+        for c in r.get("drm") or []:
+            if c.get("driver") == "nvidia" and c["pdev"] in nv:
+                continue  # nvidia-smi reports it below
+            idx_of[c["pdev"]] = len(gpus)
+            vram = c.get("vram") or [0, 0]
+            if c.get("passthrough"):
+                mem = "passed through to " + (c.get("vm") or "a VM")
+            elif vram[0]:
+                mem = "%d GB VRAM" % round(vram[0] / GB)
+            elif c.get("maxmhz"):
+                mem = "up to %.2f GHz" % (c["maxmhz"] / 1000.0)
+            else:
+                mem = ""
+            gpus.append({"name": c["name"], "mem": mem, "util": 0.0, "busy": c.get("busy", -1), "mhz": c.get("mhz", 0),
+                         "passthrough": bool(c.get("passthrough"))})
+        nv_idx = {}
+        for g in sorted(r.get("gpus", []), key=lambda g: g["index"]):
+            nv_idx[g["index"]] = len(gpus)
+            gpus.append({"name": g["name"], "mem": "%d GB VRAM" % round(g["memTotal"] / 1024) if g["memTotal"] else "", "util": g["util"], "nvidia": True})
+        eng, pid_gpu = {}, {}
+        for pid, pdev, cid, engines, cap, _mem in r.get("gclients", []):
+            idx = idx_of.get(pdev)
+            if idx is None:
+                continue
+            best = 0.0
+            for e, ns in engines.items():
+                v = self.rate("gpu.%s.%s.%s" % (pdev, cid, e), ns, t) / 1e9 * 100.0 / max(1, cap.get(e, 1))
+                eng[(idx, e)] = eng.get((idx, e), 0.0) + v
+                best = max(best, v)
+            if best > 0:
+                pid_gpu.setdefault(pid, {})[idx] = pid_gpu.get(pid, {}).get(idx, 0.0) + best
+        for i, g in enumerate(gpus):
+            if g.get("nvidia") or g.get("passthrough"):
+                continue
+            busiest = max([v for (gi, _e), v in eng.items() if gi == i] or [0.0])  # like nvtop: the busiest engine
+            g["util"] = min(100.0, max(busiest, float(g["busy"]) if g.get("busy", -1) >= 0 else 0.0))
+        for gidx, pid, sm in r.get("gproc", []):
+            idx = nv_idx.get(gidx)
+            if idx is not None:
+                pid_gpu.setdefault(pid, {})[idx] = pid_gpu.get(pid, {}).get(idx, 0.0) + sm
+        return gpus, pid_gpu
 
     def prune(self, t):
         if len(self.cum) > 40000:
@@ -584,6 +634,20 @@ class MacCollector:
         self.last_slow = 0
         self.jobs_cache = []
         self.docker_cache = ([], {})
+        self.gpu_info = self.read_gpus()
+
+    def read_gpus(self):
+        """Every GPU in this Mac (Apple silicon's, or an Intel Mac's integrated and discrete ones), in IOAccelerator order."""
+        try:
+            d = json.loads(run(["system_profiler", "SPDisplaysDataType", "-json"], timeout=20) or "{}")
+            out = []
+            for g in d.get("SPDisplaysDataType", []):
+                vram = g.get("spdisplays_vram") or g.get("spdisplays_vram_shared") or ""
+                out.append({"name": g.get("sppci_model") or g.get("_name") or "GPU",
+                            "mem": "unified memory" if "Apple" in (g.get("sppci_model") or "") else (vram.replace("_", " ") if vram else "")})
+            return out or [{"name": self.model + " GPU", "mem": "unified memory"}]
+        except Exception:
+            return [{"name": self.model + " GPU", "mem": "unified memory"}]
 
     def read_groups(self):
         levels = {}
@@ -683,10 +747,9 @@ class MacCollector:
                 for x in ifs:
                     if x["name"] == cur_if:
                         x["addrs"].append("%s/%d" % (m.group(1), bits))
-        gpu = 0.0
-        m = re.search(r'"Device Utilization %"=(\d+)', run(["ioreg", "-r", "-d", "1", "-w", "0", "-c", "IOAccelerator"]))
-        if m:
-            gpu = float(m.group(1))
+        utils = [float(x) for x in re.findall(r'"Device Utilization %"=(\d+)', run(["ioreg", "-r", "-d", "1", "-w", "0", "-c", "IOAccelerator"]))]
+        gpus = [{"name": gi["name"], "mem": gi["mem"], "util": utils[i] if i < len(utils) else 0.0} for i, gi in enumerate(self.gpu_info)]
+        gpu = sum(g["util"] for g in gpus)
         # Processes: CPU from cumulative cpu time deltas.
         procs = []
         args = {}
@@ -778,8 +841,8 @@ class MacCollector:
             "t": t, "os": self.osver, "arch": platform.machine(), "cpu_model": self.model, "ncpu": self.ncpu,
             "uptime": time.time() - float((re.search(r"sec = (\d+)", run(["sysctl", "-n", "kern.boottime"])) or re.search("(0)", "0")).group(1)),
             "host": [busy_tot, mem_used, gpu, disk, net],
-            "cap": [self.ncpu, self.memsize / GB, 100.0, self.disk_peak / MB, 1250.0],
-            "gpus": [{"name": self.model + " GPU", "mem": "unified memory", "util": gpu}],
+            "cap": [self.ncpu, self.memsize / GB, 100.0 * len(gpus), self.disk_peak / MB, 1250.0],
+            "gpus": gpus,
             "lcpus": lcpus, "groups": self.groups, "containers": containers, "vms": list(vms.values()), "jobs": jobs,
             "procs": procs, "ifs": ifs, "dockernets": [], "cronLabel": "Cron & launchd jobs",
             "note": "Docker Desktop runs containers in its own Linux VM (no GPU passthrough). They are listed here directly; that VM's overhead counts as Base system.",
@@ -916,12 +979,12 @@ class Fleet:
                     nid += "-" + c["id"][:6]
                 cont_ids[c["id"]] = nid
                 proj.setdefault(c["project"], {"id": pid, "name": c["project"], "file": c["file"].split(",")[0], "services": []})["services"].append(
-                    {"id": nid, "name": c["service"] or c["name"], "cname": c["name"], "image": c["image"], "status": c["status"], "g": dflt_g if c["u"][2] else [],
+                    {"id": nid, "name": c["service"] or c["name"], "cname": c["name"], "image": c["image"], "status": c["status"], "g": c.get("gkeys") or (dflt_g if c["u"][2] else []),
                      "h": self.leaf(nid, c["u"], record)})
             else:
                 nid = "%s/containers/%s" % (mid, slug(c["name"]))
                 cont_ids[c["id"]] = nid
-                loose.append({"id": nid, "name": c["name"], "cname": c["name"], "image": c["image"], "status": c["status"], "g": dflt_g if c["u"][2] else [],
+                loose.append({"id": nid, "name": c["name"], "cname": c["name"], "image": c["image"], "status": c["status"], "g": c.get("gkeys") or (dflt_g if c["u"][2] else []),
                               "h": self.leaf(nid, c["u"], record)})
         spec["compose"] = list(proj.values())
         spec["containers"] = loose

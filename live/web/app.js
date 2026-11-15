@@ -38,6 +38,8 @@ const IC = {
   check:'<path d="M5 12.5l4.5 4.5L19 7.5"/>',
   trash:'<path d="M4.5 7h15M10 11v6M14 11v6M6.5 7l1 12.5a2 2 0 0 0 2 1.8h5a2 2 0 0 0 2-1.8l1-12.5M9.5 7V4.5h5V7"/>',
   search:'<circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/>',
+  grip:'<circle cx="9" cy="6.5" r="1.3" fill="currentColor" stroke="none"/><circle cx="15" cy="6.5" r="1.3" fill="currentColor" stroke="none"/><circle cx="9" cy="12" r="1.3" fill="currentColor" stroke="none"/><circle cx="15" cy="12" r="1.3" fill="currentColor" stroke="none"/><circle cx="9" cy="17.5" r="1.3" fill="currentColor" stroke="none"/><circle cx="15" cy="17.5" r="1.3" fill="currentColor" stroke="none"/>',
+  panelright:'<rect x="3" y="4.5" width="18" height="15" rx="2"/><path d="M14.5 4.5v15"/><path d="M16.8 9h1.7M16.8 12h1.7"/>',
   net:'<circle cx="12" cy="5.5" r="2.5"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/><path d="M12 8v4M12 12l-5 4.5M12 12l5 4.5"/>',
   nic:'<rect x="3" y="7" width="18" height="10" rx="1.5"/><path d="M7 17v2.5M11 17v2.5M15 17v2.5M7 10.5h4"/>',
   bridge:'<path d="M3 15c4-6 14-6 18 0"/><path d="M3 15v4M21 15v4M8 11.5V19M16 11.5V19M12 10.5V19"/>'
@@ -300,7 +302,8 @@ function renderToolbar(){
   }
   $('crumbs').innerHTML = crumbs;
   $('metrics').innerHTML = METRICS.map(m => `<button type="button" data-metric="${m.id}" aria-pressed="${S.view === 'overview' && S.metric===m.id}">${m.label}</button>`).join('')
-    + `<span class="sep-pill" aria-hidden="true"></span><button type="button" data-details="1" draggable="true" aria-pressed="${S.view === 'details' || !!S.detailsDocked}" title="Click to open; drag onto the right side to dock it">Details${S.detailsDocked ? ' · docked' : ''}</button>`;
+    + `<span class="sep-pill" aria-hidden="true"></span><button type="button" class="dpill" data-details="1" draggable="true" aria-pressed="${S.view === 'details' || !!S.detailsDocked}" title="Open Details, or drag it onto the right half to dock it as a panel"><span class="grip">${icon('grip')}</span>Details</button>`
+    + `<button type="button" class="dockbtn${S.detailsDocked ? ' on' : ''}" ${S.detailsDocked ? 'data-closedock' : 'data-dock'}="1" aria-pressed="${!!S.detailsDocked}" aria-label="${S.detailsDocked ? 'Undock Details' : 'Dock Details beside the overview'}" title="${S.detailsDocked ? 'Close the docked Details panel' : 'Dock Details as a panel on the right'}">${icon('panelright')}</button>`;
   document.querySelectorAll('[data-tree]').forEach(b => b.setAttribute('aria-pressed', String(S.tree === b.dataset.tree)));
 }
 
@@ -937,7 +940,7 @@ document.addEventListener('click', e => {
   const sp = e.target.closest('[data-space]'); if (sp){ goSpace(sp.dataset.space); return; }
   const se = e.target.closest('[data-select]'); if (se){ select(se.dataset.select); return; }
   const me = e.target.closest('[data-metric]'); if (me){ S.metric = me.dataset.metric; S.view = 'overview'; save(); renderAll(); refreshNow(); return; }
-  const de = e.target.closest('[data-details]'); if (de){ S.view = 'details'; S.detailsDocked = false; if (S.tree === 'network') S.tree = 'machines'; save(); renderAll(); refreshNow(); return; }
+  const de = e.target.closest('[data-details]'); if (de){ if (!S.dockTipShown){ S.dockTipShown = true; setTimeout(() => toast('Tip: drag Details onto the right half, or press the panel button beside it, to dock it next to the overview.'), 400); } S.view = 'details'; S.detailsDocked = false; if (S.tree === 'network') S.tree = 'machines'; save(); renderAll(); refreshNow(); return; }
   if (e.target.closest('[data-dock]')){ dockDetails(); return; }
   if (e.target.closest('[data-undock]')){ S.detailsDocked = false; S.view = 'details'; save(); renderAll(); return; }
   if (e.target.closest('[data-closedock]')){ S.detailsDocked = false; save(); renderAll(); return; }
@@ -1145,12 +1148,17 @@ document.addEventListener('dragover', e => {
   z.classList.toggle('hot', over);
   if (over){ e.preventDefault(); e.dataTransfer.dropEffect = 'move'; }
 });
+function clearDockZone(){ dragging = false; const z = $('dockzone'); if (z) z.remove(); }
 document.addEventListener('drop', e => {
   if (!dragging) return;
   e.preventDefault();
-  if (e.clientX > innerWidth * 0.55) dockDetails();
+  const dock = e.clientX > innerWidth * 0.55;
+  clearDockZone();  // some webviews never send dragend
+  if (dock) dockDetails();
 });
-document.addEventListener('dragend', () => { dragging = false; const z = $('dockzone'); if (z) z.remove(); });
+document.addEventListener('pointerdown', () => { if ($('dockzone')) clearDockZone(); }, true);
+document.addEventListener('dragleave', e => { if (dragging && e.clientX <= 0 && e.clientY <= 0){ const z = $('dockzone'); if (z) z.classList.remove('hot'); } });
+document.addEventListener('dragend', clearDockZone);
 // Resize the docked panel by its left edge.
 document.addEventListener('pointerdown', e => {
   const h = e.target.closest && e.target.closest('[data-resize]'); if (!h) return;
