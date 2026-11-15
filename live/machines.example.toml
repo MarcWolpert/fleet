@@ -1,0 +1,40 @@
+# Fleet Live machine list. Copied to ~/.config/fleet/machines.toml on first run.
+# Every machine is read-only: Fleet runs listing commands over SSH and installs nothing.
+#
+#   id       stable id (used in pins and node ids)
+#   name     what the UI shows
+#   kind     "local" for the computer running Fleet Live
+#   ssh      an ssh destination (a Host alias from ~/.ssh/config, user@host, or a Tailscale name)
+#   os       "linux" (needs python3 on the host) or "windows" (OpenSSH + PowerShell)
+#   tile     icon: laptop, desktop, terminal, server, globe, vm
+#   vm_on    id of the machine this one runs on as a VM (it then nests under that host's VMs)
+#   domain   the VM's name on its host (libvirt domain), when it differs from `name`
+
+interval = 3   # seconds between readings
+
+[[machine]]
+id = "this"
+name = "this computer"
+kind = "local"
+tile = "laptop"
+
+# [[machine]]
+# id = "nas"
+# name = "my-unraid-box"
+# ssh = "root@nas.example.ts.net"
+# os = "linux"
+# tile = "globe"
+
+# [[machine]]
+# id = "app-vm"
+# name = "app-vm"
+# ssh = "app-vm"
+# os = "linux"
+# vm_on = "nas"
+
+# [[machine]]
+# id = "gaming-pc"
+# name = "gaming-pc"
+# ssh = "me@gaming-pc"
+# os = "windows"
+# tile = "desktop"
