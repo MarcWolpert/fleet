@@ -101,7 +101,7 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-r
 .side-note b{color:var(--ink-2);font-weight:600}
 
 main{flex:1;min-width:0;overflow:auto;background:var(--win)}
-.wrap{max-width:1320px;padding:20px 24px 48px;display:flex;flex-direction:column;gap:16px}
+.wrap{max-width:none;padding:20px 24px 48px;display:flex;flex-direction:column;gap:16px}
 .hero{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
 .hero .tile{width:46px;height:46px;border-radius:12px}
 .hero .tile svg{width:24px;height:24px}
@@ -274,6 +274,7 @@ main{flex:1;min-width:0;overflow:auto;background:var(--win)}
 .fchip button{width:20px;height:20px;border-radius:50%;display:grid;place-items:center;color:var(--ink-2)}
 .fchip button:hover{background:#ffffff1a;color:var(--ink)}
 .fchip button svg{width:11px;height:11px}
+.fchip.na{background:#ffffff0a;border-color:var(--line-2);color:var(--ink-3)}
 .dpanel .note{margin-bottom:12px}
 .dfbar{display:inline-flex;align-items:center;flex-wrap:wrap;gap:6px}
 .dfbar[hidden]{display:none}
@@ -405,6 +406,13 @@ button.lcell:hover{border-color:#ffffff40}
 .gcell .gn{position:absolute;left:10px;top:27px;right:10px;font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .gcell .gm{position:absolute;left:10px;top:45px;font-size:11.5px;color:var(--ink-3)}
 html.native .lights{display:none}
+/* Native macOS window: the space bar is the title bar (traffic lights sit in it, like herdr) */
+html.native .spacebar{height:52px;padding:0 12px 0 84px;border-bottom:1px solid #000;-webkit-user-select:none;user-select:none}
+html.native .space{height:34px}
+html.native .space .tile{width:24px;height:24px;border-radius:7px}
+html.native .space .tile svg{width:14px;height:14px}
+html.native .addpin{width:32px;height:32px}
+html.native .setbtn{height:32px}
 .split{display:flex;align-items:flex-start;min-height:100%}
 .split>.wrap{flex:1 1 auto;min-width:0}
 .dpanel{position:sticky;top:0;flex:none;max-width:70vw;height:calc(100vh - 112px);overflow:auto;border-left:1px solid var(--line-2);background:#1a1a1d;padding:14px 14px 24px}
@@ -421,6 +429,25 @@ html.native .lights{display:none}
 .dockzone div{display:flex;flex-direction:column;align-items:center;gap:6px;color:var(--ink-2);font-size:13px}
 .dockzone svg{width:28px;height:28px;color:var(--accent)}
 .dockzone b{color:var(--ink);font-size:15px}
+.dpill{display:inline-flex;align-items:center;gap:5px;cursor:grab}
+.dpill:active{cursor:grabbing}
+.dpill .grip svg{width:12px;height:12px;color:var(--ink-3);display:block}
+.dpill:hover .grip svg{color:var(--ink)}
+.dockbtn{width:30px;border-radius:8px;display:grid;place-items:center;color:var(--ink-3)}
+.dockbtn svg{width:16px;height:16px}
+.dockbtn:hover{color:var(--ink);background:#ffffff0d}
+.dockbtn.on{color:var(--accent);background:#3584e41f}
+.kgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:8px;margin-top:4px}
+.kcell{position:relative;height:118px;border:1px solid var(--line);border-radius:10px;background:var(--card-2);overflow:hidden;padding:0;font:inherit;color:inherit;cursor:pointer;text-align:left}
+.kcell:hover{border-color:#ffffff40}
+.kcell.sel{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent) inset}
+.kcell svg{position:absolute;left:0;right:0;bottom:0;width:100%;height:48%}
+.kcell .kn{position:absolute;left:10px;top:8px;font:600 12.5px/1 var(--mono);color:var(--ink)}
+.kcell .kb{position:absolute;right:10px;top:8px;font:600 12px/1 var(--mono);color:var(--ink-2)}
+.kcell .km{position:absolute;left:10px;right:10px;top:25px;font-size:12px;color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.kcell .ks{position:absolute;left:10px;right:10px;top:41px;font-size:11px;color:var(--ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.kcell .kr{position:absolute;right:8px;bottom:6px;display:flex;gap:8px;font:600 10.5px/1 var(--mono);text-shadow:0 1px 2px #000}
+.kcell .kr i{font-style:normal}.kcell .rd{color:#8fc1ff}.kcell .wr{color:#ffab7a}
 .empty-pins{display:flex;flex-direction:column;align-items:center;text-align:center;gap:8px;padding:28px 18px;color:var(--ink-3);font-size:12.5px;line-height:1.5}
 .empty-pins svg{width:22px;height:22px;color:var(--ink-3)}
 .empty-pins b{color:var(--ink-2);font-size:13px}

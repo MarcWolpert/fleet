@@ -41,6 +41,260 @@ def netdev(text):
 
 
 
+# ---- GPUs from every vendor: the kernel's DRM devices, per-process engine time from fdinfo ----
+DISPLAY_ONLY = {"ast", "mgag200", "simpledrm", "simplefb", "bochs", "bochs-drm", "cirrus", "cirrus-qemu", "hibmc-drm",
+                "vboxvideo", "udl", "efifb", "vesafb", "gm12u320", "gud"}
+VENDORS = {"0x10de": "NVIDIA", "0x1002": "AMD", "0x8086": "Intel", "0x1af4": "virtio", "0x15ad": "VMware",
+           "0x1414": "Microsoft", "0x5143": "Qualcomm", "0x106b": "Apple", "0x1a03": "ASPEED"}
+NAME_CACHE, GPU_FDS, SCAN = {}, [], {"n": 0, "cost": 0.0}
+
+
+def gpu_name(pdev, vendor, driver):
+    if pdev in NAME_CACHE:
+        return NAME_CACHE[pdev]
+    name = ""
+    out = run(["lspci", "-mm", "-s", pdev], timeout=4).strip()
+    f = re.findall(r'"([^"]*)"', out)
+    if len(f) >= 3:
+        vend = VENDORS.get(vendor) or f[1].split()[0]
+        m = re.search(r"\[([^\]]+)\]", f[2])
+        name = "%s %s" % (vend, m.group(1) if m else f[2])
+    if not name:
+        name = "%s GPU (%s)" % (VENDORS.get(vendor, "Unknown"), driver or "no driver")
+    NAME_CACHE[pdev] = name
+    return name
+
+
+def drm_gpus():
+    """Every GPU the kernel exposes (any vendor), minus display-only chips; plus GPUs passed through to VMs."""
+    cards, seen = [], set()
+    for c in sorted(os.listdir("/sys/class/drm")):
+        if not re.match(r"^card\d+$", c):
+            continue
+        dev = os.path.realpath("/sys/class/drm/%s/device" % c)
+        drv = os.path.basename(os.path.realpath(dev + "/driver")) if os.path.exists(dev + "/driver") else ""
+        if drv in DISPLAY_ONLY:
+            continue
+        pdev, vendor = os.path.basename(dev), rd(dev + "/vendor").strip()
+        if pdev in seen:
+            continue
+        seen.add(pdev)
+        base = "/sys/class/drm/%s/" % c
+        mhz = rd(base + "gt_act_freq_mhz").strip() or rd(dev + "/tile0/gt0/freq0/act_freq").strip()
+        maxmhz = rd(base + "gt_max_freq_mhz").strip() or rd(dev + "/tile0/gt0/freq0/max_freq").strip()
+        if not mhz:  # amdgpu: the current shader clock is the starred line of pp_dpm_sclk
+            m = re.search(r"(\d+)Mhz \*", rd(dev + "/pp_dpm_sclk"))
+            mhz = m.group(1) if m else ""
+        busy = rd(dev + "/gpu_busy_percent").strip()  # amdgpu
+        vt, vu = rd(dev + "/mem_info_vram_total").strip(), rd(dev + "/mem_info_vram_used").strip()
+        cards.append({"card": c, "pdev": pdev, "driver": drv, "vendor": VENDORS.get(vendor, vendor), "name": gpu_name(pdev, vendor, drv),
+                      "mhz": int(mhz) if mhz.isdigit() else 0, "maxmhz": int(maxmhz) if maxmhz.isdigit() else 0,
+                      "busy": int(busy) if busy.isdigit() else -1, "vram": [int(vt) if vt.isdigit() else 0, int(vu) if vu.isdigit() else 0]})
+    # Display controllers bound to vfio-pci belong to a VM: still a GPU of this host, used by that VM.
+    for pdev in sorted(os.listdir("/sys/bus/pci/devices")):
+        d = "/sys/bus/pci/devices/" + pdev
+        if pdev in seen or not rd(d + "/class").startswith("0x03"):
+            continue
+        drv = os.path.basename(os.path.realpath(d + "/driver")) if os.path.exists(d + "/driver") else ""
+        if drv in ("vfio-pci", "pci-stub"):
+            vendor = rd(d + "/vendor").strip()
+            if vendor == "0x1a03":
+                continue
+            cards.append({"card": "", "pdev": pdev, "driver": drv, "vendor": VENDORS.get(vendor, vendor), "name": gpu_name(pdev, vendor, drv),
+                          "mhz": 0, "maxmhz": 0, "busy": -1, "vram": [0, 0], "passthrough": True})
+    return cards
+
+
+def node_pdev(path):
+    """/dev/dri/renderD128 or card1 -> the PCI (or platform) device it belongs to."""
+    return os.path.basename(os.path.realpath("/sys/class/drm/%s/device" % os.path.basename(path)))
+
+
+def gpu_clients(cards):
+    """[pid, pdev, client id, {engine: busy ns}, {engine: capacity}, memory bytes] for every process using a GPU."""
+    want = {c["pdev"] for c in cards if c.get("card")}
+    if not want:
+        return []
+    pids = set()
+    debug = [d for d in ("/sys/kernel/debug/dri/" + p for p in want) if os.path.exists(d + "/clients")]
+    if debug:  # cheap: the kernel lists each GPU's clients (root + debugfs)
+        for d in debug:
+            for line in rd(d + "/clients").splitlines()[1:]:
+                f = line.split()
+                if len(f) > 1 and f[1].isdigit():
+                    pids.add(f[1])
+        fds = []
+        for pid in pids:
+            try:
+                for fd in os.listdir("/proc/%s/fd" % pid):
+                    l = os.readlink("/proc/%s/fd/%s" % (pid, fd))
+                    if l.startswith("/dev/dri/"):
+                        fds.append((pid, fd, node_pdev(l)))
+            except Exception:
+                pass
+        GPU_FDS[:] = fds
+    else:  # scan every open file, but only as often as it's cheap
+        SCAN["n"] += 1
+        if SCAN["cost"] < 0.15 or SCAN["n"] % 10 == 1:
+            began, fds = time.time(), []
+            for pid in os.listdir("/proc"):
+                if not pid.isdigit():
+                    continue
+                try:
+                    for fd in os.listdir("/proc/%s/fd" % pid):
+                        try:
+                            l = os.readlink("/proc/%s/fd/%s" % (pid, fd))
+                        except Exception:
+                            continue
+                        if l.startswith("/dev/dri/"):
+                            fds.append((pid, fd, node_pdev(l)))
+                except Exception:
+                    continue
+            GPU_FDS[:] = fds
+            SCAN["cost"] = time.time() - began
+    out, seen = [], set()
+    for pid, fd, pdev in GPU_FDS:
+        info = rd("/proc/%s/fdinfo/%s" % (pid, fd))
+        if not info:
+            continue
+        m = re.search(r"drm-pdev:\s*(\S+)", info)
+        pdev = m.group(1) if m else pdev
+        cid = re.search(r"drm-client-id:\s*(\d+)", info)
+        key = (pdev, cid.group(1) if cid else pid + "/" + fd)
+        if key in seen or pdev not in want:
+            continue  # the same client shows up in every process that shares its file
+        seen.add(key)
+        eng = {k: int(v) for k, v in re.findall(r"drm-engine-([a-z0-9-]+):\s*(\d+) ns", info) if not k.startswith("capacity")}
+        cap = {k: int(v) for k, v in re.findall(r"drm-engine-capacity-([a-z0-9-]+):\s*(\d+)", info)}
+        mem = 0
+        for k, v, u in re.findall(r"drm-(?:resident)-([a-z0-9]+):\s*(\d+)\s*(\w*)", info):
+            if k.startswith(("vram", "local")):
+                mem += int(v) * {"KiB": 1024, "MiB": 1024 ** 2, "GiB": 1024 ** 3}.get(u, 1)
+        out.append([int(pid), pdev, key[1], eng, cap, mem])
+    return out
+
+
+# ---- Disks: each physical disk, and which processes and containers do I/O on it ----
+PHYS = re.compile(r"^(sd[a-z]+|vd[a-z]+|xvd[a-z]+|hd[a-z]+|nvme\d+n\d+|mmcblk\d+)$")
+PREV_IO, RESOLVE = {}, {}
+UNRAID = {"t": 0.0, "map": {}, "role": {}}
+
+
+def unraid_map():
+    """Unraid's array driver hides which physical disk is behind /dev/mdNp1; mdcmd status (read-only) says."""
+    if time.time() - UNRAID["t"] < 60 or not os.path.exists("/usr/local/sbin/mdcmd"):
+        return
+    UNRAID["t"] = time.time()
+    st = run(["/usr/local/sbin/mdcmd", "status"], timeout=5)
+    names = dict(re.findall(r"^diskName\.(\d+)=(\S*)$", st, re.M))
+    for n, dev in re.findall(r"^rdevName\.(\d+)=(\S*)$", st, re.M):
+        if not dev:
+            continue
+        md = names.get(n, "")
+        if md:
+            UNRAID["map"][md] = dev
+            UNRAID["role"][dev] = "array disk %s" % n
+        else:
+            UNRAID["role"][dev] = "parity" if n == "0" else "parity 2" if n == "29" else "slot %s" % n
+    RESOLVE.clear()
+
+
+def disks_of(majmin):
+    """major:minor of a block device (partition, md/dm array, disk) -> the physical disks under it."""
+    if majmin in RESOLVE:
+        return RESOLVE[majmin]
+    out = set()
+    path = os.path.realpath("/sys/dev/block/" + majmin)
+    if os.path.exists(path):
+        name = os.path.basename(path)
+        if name in UNRAID["map"]:
+            RESOLVE[majmin] = {UNRAID["map"][name]}
+            return RESOLVE[majmin]
+        base = os.path.dirname(path) if os.path.exists(path + "/partition") else path
+        slaves = os.path.join(base, "slaves")
+        if os.path.isdir(slaves) and os.listdir(slaves):
+            for sl in os.listdir(slaves):
+                out |= disks_of(rd("/sys/class/block/%s/dev" % sl).strip())
+        elif PHYS.match(os.path.basename(base)):
+            out.add(os.path.basename(base))
+        elif PHYS.match(name):
+            out.add(name)
+    RESOLVE[majmin] = out
+    return out
+
+
+def disk_info(procs, containers):
+    unraid_map()
+    disks = []
+    for line in rd("/proc/diskstats").splitlines():
+        f = line.split()
+        if len(f) < 14 or not PHYS.match(f[2]):
+            continue
+        n = f[2]
+        b = "/sys/block/%s/" % n
+        size = rd(b + "size").strip()
+        disks.append({"name": n, "r": int(f[5]) * 512, "w": int(f[9]) * 512, "ms": int(f[12]),
+                      "model": (rd(b + "device/model").strip() or rd(b + "device/name").strip()), "size": int(size) * 512 if size.isdigit() else 0,
+                      "rot": rd(b + "queue/rotational").strip() == "1", "mounts": [], "role": UNRAID["role"].get(n, "")})
+    by = {d["name"]: d for d in disks}
+    for line in rd("/proc/self/mountinfo").splitlines():
+        f = line.split()
+        if len(f) > 4 and f[2] and not f[2].startswith("0:"):
+            for dn in disks_of(f[2]):
+                if dn in by and len(by[dn]["mounts"]) < 4 and f[4] not in by[dn]["mounts"]:
+                    by[dn]["mounts"].append(f[4])
+    # Processes that did I/O since the last reading: which disks hold the files they have open.
+    pdisks = {}
+    busy = []
+    for p in procs:
+        if p[8] >= 0:
+            prev = PREV_IO.get(p[0])
+            PREV_IO[p[0]] = p[8]
+            if prev is not None and p[8] > prev and not p[9]:
+                busy.append(p[0])
+    for pid in busy[:300]:
+        found = set()
+        try:
+            fds = os.listdir("/proc/%d/fd" % pid)[:2000]
+        except Exception:
+            continue
+        for fd in fds:
+            try:
+                st = os.stat("/proc/%d/fd/%s" % (pid, fd))
+            except Exception:
+                continue
+            if st.st_dev and os.major(st.st_dev):
+                found |= disks_of("%d:%d" % (os.major(st.st_dev), os.minor(st.st_dev)))
+        if found:
+            pdisks[pid] = sorted(found)
+    if len(PREV_IO) > 20000:
+        live = {p[0] for p in procs}
+        for k in [k for k in PREV_IO if k not in live]:
+            del PREV_IO[k]
+    # Containers: their cgroup counts I/O per device.
+    cdisks = {}
+    first = {}
+    for p in procs:
+        if p[9] and p[9] not in first:
+            first[p[9]] = p[0]
+    for cid, pid in first.items():
+        m = re.search(r"0::(\S+)", rd("/proc/%d/cgroup" % pid))
+        if not m:
+            continue
+        acc = {}
+        for line in rd("/sys/fs/cgroup%s/io.stat" % m.group(1)).splitlines():
+            f = line.split()
+            if not f:
+                continue
+            kv = dict(x.split("=", 1) for x in f[1:] if "=" in x)
+            tot = int(kv.get("rbytes", 0)) + int(kv.get("wbytes", 0))
+            for dn in disks_of(f[0]):
+                acc[dn] = acc.get(dn, 0) + tot
+        if acc:
+            cdisks[cid] = acc
+    return disks, pdisks, cdisks
+
+
 def snapshot():
     global out
     out = {"t": time.time(), "hz": HZ, "ncpu": os.cpu_count(), "host": os.uname()[1], "kernel": os.uname()[2]}
@@ -183,6 +437,10 @@ def snapshot():
                            "file": labels.get("com.docker.compose.project.config_files", ""),
                            "networks": c.get("Networks", ""), "rx": rx, "tx": tx})
     out["containers"] = containers
+    try:
+        out["disks"], out["pdisks"], out["cdisks"] = disk_info(procs, containers)
+    except Exception:
+        out["disks"], out["pdisks"], out["cdisks"] = [], {}, {}
     nets = []
     for line in run(["docker", "network", "ls", "--format", "{{json .}}"]).splitlines():
         try:
@@ -233,10 +491,29 @@ def snapshot():
 
     # NVIDIA GPUs and which processes use them.
     gpus = []
-    for line in run(["nvidia-smi", "--query-gpu=index,name,utilization.gpu,memory.used,memory.total", "--format=csv,noheader,nounits"]).splitlines():
+    for line in run(["nvidia-smi", "--query-gpu=index,name,utilization.gpu,memory.used,memory.total,pci.bus_id", "--format=csv,noheader,nounits"]).splitlines():
         f = [x.strip() for x in line.split(",")]
-        if len(f) == 5:
-            gpus.append({"index": int(f[0]), "name": f[1], "util": float(f[2] or 0), "memUsed": float(f[3] or 0), "memTotal": float(f[4] or 0)})
+        if len(f) == 6:
+            bus = f[5].lower()
+            bus = bus[4:] if re.match(r"^0000[0-9a-f]{4}:", bus) else bus  # 00000000:83:00.0 -> 0000:83:00.0
+            gpus.append({"index": int(f[0]), "name": f[1], "util": float(f[2] or 0), "memUsed": float(f[3] or 0), "memTotal": float(f[4] or 0), "pdev": bus})
+    try:
+        cards = drm_gpus()
+    except Exception:
+        cards = []
+    out["drm"] = cards
+    try:
+        out["gclients"] = gpu_clients(cards)
+    except Exception:
+        out["gclients"] = []
+    for c in cards:  # which VM a passed-through GPU belongs to (the full QEMU command line names its PCI address)
+        if c.get("passthrough"):
+            for p in procs:
+                if p[10]:
+                    full = rd("/proc/%d/cmdline" % p[0]).replace("\0", " ")
+                    if c["pdev"] in full or c["pdev"][5:] in full:
+                        c["vm"] = p[10]
+                        break
     out["gpus"] = gpus
     gproc = []
     if gpus:

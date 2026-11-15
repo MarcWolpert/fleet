@@ -7,8 +7,26 @@
 # tasks and adapter addresses refresh every 10th line.
 $ErrorActionPreference = 'SilentlyContinue'; $ProgressPreference = 'SilentlyContinue'
 if (-not $FleetInterval) { $FleetInterval = 3 }
-$loop = 0; $taskCache = @(); $addrCache = @{}; $cmdCache = @{}
+$loop = 0; $taskCache = @(); $addrCache = @{}; $cmdCache = @{}; $diskInfo = @{}
+# Stop when Fleet goes away. Fleet keeps our stdin open and never writes to it, so the pending read
+# completes (EOF) the moment the SSH session ends for any reason; also stop if our parent shell is
+# gone, and after 6 hours in any case (Fleet reconnects).
+$lifeline = $null
+try { $stdin = [Console]::OpenStandardInput(); $lifeline = $stdin.ReadAsync((New-Object byte[] 1), 0, 1) } catch {}
+# On Windows the pipe often never reports EOF (children inherit its handles), so the reliable signal
+# is the SSH session process itself: find the nearest sshd ancestor and exit when it is gone.
+$sshd = $null; $anc = $PID
+for ($k = 0; $k -lt 8 -and -not $sshd; $k++) {
+  $pp = (Get-CimInstance Win32_Process -Filter "ProcessId=$anc").ParentProcessId
+  if (-not $pp) { break }
+  $pn = (Get-Process -Id $pp -ErrorAction SilentlyContinue).ProcessName
+  if ($pn -like 'sshd*') { $sshd = $pp } else { $anc = $pp }
+}
+$born = Get-Date
 while ($true) {
+if ($lifeline -and $lifeline.IsCompleted) { exit 0 }
+if ($sshd -and -not (Get-Process -Id $sshd -ErrorAction SilentlyContinue)) { exit 0 }
+if (((Get-Date) - $born).TotalHours -ge 6) { exit 0 }
 $started = Get-Date
 $o = [ordered]@{}
 $o.t = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() / 1000.0
@@ -21,16 +39,18 @@ $o.cpu_model = (@(Get-CimInstance Win32_Processor)[0].Name).Trim()
 $o.mem = @([double]$cs.TotalPhysicalMemory, [double]$os.FreePhysicalMemory * 1024)
 
 $paths = @('\Processor(*)\% Processor Time', '\Processor Information(*)\Processor Frequency',
-  '\PhysicalDisk(_Total)\Disk Bytes/sec', '\Process(*)\% Processor Time', '\Process(*)\ID Process',
-  '\Process(*)\Working Set - Private', '\Process(*)\IO Data Bytes/sec', '\Process(*)\Thread Count',
+  '\PhysicalDisk(*)\Disk Bytes/sec', '\PhysicalDisk(*)\Disk Read Bytes/sec', '\PhysicalDisk(*)\Disk Write Bytes/sec', '\PhysicalDisk(*)\% Idle Time',
   '\GPU Engine(*)\Utilization Percentage', '\GPU Adapter Memory(*)\Dedicated Usage', '\Memory\Available Bytes')
 $samples = (Get-Counter -Counter $paths -SampleInterval 1 -MaxSamples 1).CounterSamples
-$lcpu = @{}; $freq = @{}; $procs = @{}; $eng = @{}; $pidGpu = @{}; $adMem = @{}
+$lcpu = @{}; $freq = @{}; $procs = @{}; $eng = @{}; $pidGpu = @{}; $adMem = @{}; $pd = @{}
 foreach ($s in $samples) {
   $parts = $s.Path.Split('\'); $counter = $parts[-1]; $set = $parts[-2]; $inst = $s.InstanceName; $v = $s.CookedValue
   if ($set -like 'processor(*') { if ($inst -ne '_total') { $lcpu[[int]$inst] = $v } }
   elseif ($set -like 'processor information(*') { if ($inst -match '^(\d+),(\d+)$') { $freq[[int]$Matches[2] + 64 * [int]$Matches[1]] = $v } }
-  elseif ($set -like 'physicaldisk(*') { $o.diskBps = $v }
+  elseif ($set -like 'physicaldisk(*') {
+    if ($inst -eq '_total') { if ($counter -eq 'disk bytes/sec') { $o.diskBps = $v } }
+    else { if (-not $pd.ContainsKey($inst)) { $pd[$inst] = @{} }; $pd[$inst][$counter] = $v }
+  }
   elseif ($set -like 'process(*') {
     $inst = $set.Substring(8, $set.Length - 9)   # keeps svchost#12 distinct
     if ($inst -eq '_total' -or $inst -eq 'idle') { continue }
@@ -58,16 +78,25 @@ $o.gproc = @($pidGpu.Keys | ForEach-Object { $gp = $_.Split('|'); ,@([int]$gp[0]
 
 if ($loop % 3 -eq 0) { $cmdCache = @{}; foreach ($wp in Get-CimInstance Win32_Process) { $cmdCache[[int]$wp.ProcessId] = @([int]$wp.ParentProcessId, [string]$wp.CommandLine) } }
 $plist = New-Object System.Collections.ArrayList
-foreach ($kv in $procs.GetEnumerator()) {
-  $pc = $kv.Value; $id = [int]$pc['id process']; $wc = $cmdCache[$id]
-  $cmd = ''; $ppid = 0
+foreach ($gp in Get-Process) {
+  if ($gp.Id -eq 0) { continue }
+  $wc = $cmdCache[[int]$gp.Id]; $cmd = ''; $ppid = 0
   if ($wc) { $ppid = $wc[0]; if ($wc[1]) { $cmd = [string]$wc[1] } }
   if ($cmd.Length -gt 300) { $cmd = $cmd.Substring(0, 300) }
-  [void]$plist.Add(@($id, $ppid, ($kv.Key -replace '#\d+$', ''), ([double]$pc['% processor time'] / 100.0),
-    [double]$pc['working set - private'], [int]$pc['thread count'], [double]$pc['io data bytes/sec'], $cmd))
+  $cpu = 0.0; try { $cpu = $gp.TotalProcessorTime.TotalSeconds } catch {}
+  [void]$plist.Add(@([int]$gp.Id, $ppid, $gp.ProcessName, $cpu, [double]$gp.PrivateMemorySize64, [int]$gp.Threads.Count, -1, $cmd))
 }
 $o.procs = $plist
 $o.perr = [string]$Error[0]; $Error.Clear()
+if ($loop % 10 -eq 0) { $diskInfo = @{}
+  foreach ($dd in Get-PhysicalDisk) { $diskInfo[[string]$dd.DeviceId] = @{ model = [string]$dd.FriendlyName; size = [double]$dd.Size; media = [string]$dd.MediaType } } }
+$o.disks = @(foreach ($k in $pd.Keys) {
+  $num = ($k -split ' ')[0]; $letters = (($k -split ' ', 2) | Select-Object -Skip 1) -join ' '
+  $di = $diskInfo[$num]
+  @{ name = "Disk $num"; letters = $letters; model = $(if ($di) { $di.model } else { '' }); size = $(if ($di) { $di.size } else { 0 })
+     rot = $(if ($di) { $di.media -eq 'HDD' } else { $false }); read = [double]$pd[$k]['disk read bytes/sec']; write = [double]$pd[$k]['disk write bytes/sec']
+     busy = [math]::Max(0, 100 - [double]$pd[$k]['% idle time']) }
+})
 $o.ifs = @(Get-NetAdapter | ForEach-Object {
   $st = Get-NetAdapterStatistics -Name $_.Name
   @{ name = $_.Name; desc = $_.InterfaceDescription; status = [string]$_.Status; speed = [string]$_.LinkSpeed; virtual = [bool]$_.Virtual

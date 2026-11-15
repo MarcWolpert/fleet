@@ -10,7 +10,7 @@ before(async () => { browser = await launch(); });
 after(async () => { await browser.close(); });
 
 const ZONE = `!!document.getElementById('dockzone')`;
-const state = p => p.eval(`({zone: ${ZONE}, docked: !!S.detailsDocked, panel: !!document.querySelector('.dpanel'), pill: document.querySelector('[data-details]').textContent})`);
+const state = p => p.eval(`({zone: ${ZONE}, docked: !!S.detailsDocked, panel: !!document.querySelector('.dpanel'), dockbtn: document.querySelector('.dockbtn').getAttribute('aria-pressed')})`);
 
 async function open(over = {}){
   const p = await browser.page(fixture(), {ui: ui(over)});
@@ -53,9 +53,9 @@ test('real drag: dropping Details on the right docks it and leaves no drop zone'
     await d.at('dragOver', 1300);
     assert.equal(await p.eval(`document.getElementById('dockzone').classList.contains('hot')`), true, 'the zone lights up over the right side');
     await d.at('drop', 1300);
-    assert.deepEqual(await state(p), {zone: false, docked: true, panel: true, pill: 'Details · docked'}, 'right after the drop');
+    assert.deepEqual(await state(p), {zone: false, docked: true, panel: true, dockbtn: 'true'}, 'right after the drop');
     await d.release(1300);
-    assert.deepEqual(await state(p), {zone: false, docked: true, panel: true, pill: 'Details · docked'}, 'after the mouse is released and moves');
+    assert.deepEqual(await state(p), {zone: false, docked: true, panel: true, dockbtn: 'true'}, 'after the mouse is released and moves');
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
 });
@@ -68,7 +68,7 @@ test('real drag: dropping on the left docks nothing and leaves no drop zone', as
     assert.equal(await p.eval(`document.getElementById('dockzone').classList.contains('hot')`), false, 'the left side is not a dock target');
     await d.at('drop', 400);
     await d.release(400);
-    assert.deepEqual(await state(p), {zone: false, docked: false, panel: false, pill: 'Details'});
+    assert.deepEqual(await state(p), {zone: false, docked: false, panel: false, dockbtn: 'false'});
   } finally { await p.close(); }
 });
 
@@ -79,7 +79,7 @@ test('real drag: a cancelled drag leaves no drop zone', async () => {
     await d.at('dragEnter', 1300); await d.at('dragOver', 1300);
     await d.at('dragCancel', 1300);
     await d.release(1300);
-    assert.deepEqual(await state(p), {zone: false, docked: false, panel: false, pill: 'Details'});
+    assert.deepEqual(await state(p), {zone: false, docked: false, panel: false, dockbtn: 'false'});
   } finally { await p.close(); }
 });
 
@@ -88,7 +88,7 @@ test('a drop on the right removes the zone itself, without waiting for dragend',
   try {
     await synth(p);
     await p.eval(`(() => { const pill = document.querySelector('[data-details]'); __fire('dragstart', pill, 900, 20); const t = document.elementFromPoint(1300, 500); __fire('dragover', t, 1300, 500); __fire('drop', t, 1300, 500); return true; })()`);
-    assert.deepEqual(await state(p), {zone: false, docked: true, panel: true, pill: 'Details · docked'});
+    assert.deepEqual(await state(p), {zone: false, docked: true, panel: true, dockbtn: 'true'});
   } finally { await p.close(); }
 });
 
@@ -97,7 +97,7 @@ test('a dragend fired at a pill that a poll detached mid-drag still ends the dra
   try {
     await synth(p);
     await p.eval(`(() => { const pill = document.querySelector('[data-details]'); __fire('dragstart', pill, 900, 20); __fire('dragover', document.elementFromPoint(900, 500), 900, 500); renderAll(); __fire('dragend', pill, 400, 500); return !pill.isConnected; })()`);
-    assert.deepEqual(await state(p), {zone: false, docked: false, panel: false, pill: 'Details'});
+    assert.deepEqual(await state(p), {zone: false, docked: false, panel: false, dockbtn: 'false'});
   } finally { await p.close(); }
 });
 
@@ -108,7 +108,7 @@ test('fallback: the first mouse move with no button held ends a drag whose drage
     assert.equal(await p.eval(ZONE), true, 'precondition: the zone is stuck');
     await p.send('Input.dispatchMouseEvent', {type: 'mouseMoved', x: 700, y: 400, buttons: 0});
     await sleep(50);
-    assert.deepEqual(await state(p), {zone: false, docked: false, panel: false, pill: 'Details'});
+    assert.deepEqual(await state(p), {zone: false, docked: false, panel: false, dockbtn: 'false'});
   } finally { await p.close(); }
 });
 
@@ -139,7 +139,7 @@ test('fallback: the drag leaving the window ends it, and coming back shows it ag
     await p.eval(`(() => { const t = document.elementFromPoint(1300, 500); __fire('dragenter', t, 1300, 500); __fire('dragover', t, 1300, 500); return true; })()`);
     assert.equal(await p.eval(ZONE), true, 'back when the same drag returns');
     await p.eval(`__fire('drop', document.elementFromPoint(1300, 500), 1300, 500)`);
-    assert.deepEqual(await state(p), {zone: false, docked: true, panel: true, pill: 'Details · docked'});
+    assert.deepEqual(await state(p), {zone: false, docked: true, panel: true, dockbtn: 'true'});
   } finally { await p.close(); }
 });
 

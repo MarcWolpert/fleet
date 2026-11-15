@@ -30,6 +30,7 @@ export function startServer(fx){
       if (u.pathname === '/api/fleet') return json(fx.fleet);
       if (u.pathname === '/api/procs') return json((fx.procs || {})[mid] || {procs: []});
       if (u.pathname === '/api/cpus') return json((fx.cpus || {})[mid] || {});
+      if (u.pathname === '/api/disks') return json((fx.disks || {})[mid] || {disks: [], per_process: true});
       if (u.pathname === '/api/net') return json(fx.net || {tailnet: 'tailnet', machines: []});
       if (u.pathname === '/api/config') return json({path: '/dev/null', interval: 3, machines: [], status: {}, terminals: []});
       res.writeHead(404); return res.end();

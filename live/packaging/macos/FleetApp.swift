@@ -10,9 +10,34 @@ import WebKit
 let port = 4518
 let base = "http://127.0.0.1:\(port)/"
 
-final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDelegate {
+/// The page's space bar doubles as the title bar: clicks on its empty parts drag the window (and a
+/// double-click zooms or minimizes, per the system setting); clicks on its pills and buttons go to the page.
+final class FleetWebView: WKWebView {
+    var band: CGFloat = 52
+    var regions: [NSRect] = []
+    override func mouseDown(with e: NSEvent) {
+        let p = convert(e.locationInWindow, from: nil)
+        let y = isFlipped ? p.y : bounds.height - p.y
+        let pt = NSPoint(x: p.x, y: y)
+        if y <= band && !regions.contains(where: { $0.insetBy(dx: -2, dy: -2).contains(pt) }) {
+            if e.clickCount == 2 {
+                switch UserDefaults.standard.string(forKey: "AppleActionOnDoubleClick") ?? "Maximize" {
+                case "Minimize": window?.performMiniaturize(nil)
+                case "None": break
+                default: window?.performZoom(nil)
+                }
+            } else {
+                window?.performDrag(with: e)
+            }
+            return
+        }
+        super.mouseDown(with: e)
+    }
+}
+
+final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
     var window: NSWindow!
-    var web: WKWebView!
+    var web: FleetWebView!
     var server: Process?
     var tries = 0
 
@@ -21,14 +46,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         if !serverAnswers() { startServer() }
         let cfg = WKWebViewConfiguration()
         cfg.websiteDataStore = .default()
-        web = WKWebView(frame: .zero, configuration: cfg)
+        cfg.userContentController.add(self, name: "fleet")
+        web = FleetWebView(frame: .zero, configuration: cfg)
         web.navigationDelegate = self
         web.uiDelegate = self
         web.setValue(false, forKey: "drawsBackground")  // no white flash before the page paints
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1500, height: 950),
-                          styleMask: [.titled, .closable, .miniaturizable, .resizable],
+                          styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
                           backing: .buffered, defer: false)
         window.title = "Fleet"
+        // One bar, like herdr: no separate title strip; a unified toolbar makes the title bar 52 pt tall
+        // so the traffic lights sit centred in the page's space bar.
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        let toolbar = NSToolbar(identifier: "FleetBar")
+        toolbar.showsBaselineSeparator = false
+        window.toolbar = toolbar
+        window.toolbarStyle = .unified
         window.backgroundColor = NSColor(calibratedRed: 0.078, green: 0.078, blue: 0.086, alpha: 1)
         window.minSize = NSSize(width: 760, height: 520)
         window.contentView = web
@@ -37,6 +71,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         load()
+    }
+
+    func userContentController(_ c: WKUserContentController, didReceive m: WKScriptMessage) {
+        guard let d = m.body as? [String: Any] else { return }
+        if let b = d["band"] as? Double { web.band = CGFloat(b) }
+        if let rs = d["regions"] as? [[Double]] {
+            web.regions = rs.filter { $0.count == 4 }.map { NSRect(x: $0[0], y: $0[1], width: $0[2], height: $0[3]) }
+        }
     }
 
     func load() { web.load(URLRequest(url: URL(string: base + "?native=1")!)) }

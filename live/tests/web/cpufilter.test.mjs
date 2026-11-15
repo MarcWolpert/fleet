@@ -4,7 +4,7 @@
 import {test, before, after} from 'node:test';
 import assert from 'node:assert/strict';
 import {launch, sleep} from './harness.mjs';
-import {fixture, ui, PIDS} from './fixtures.mjs';
+import {fixture, ui, PIDS, CCD1} from './fixtures.mjs';
 
 let browser;
 before(async () => { browser = await launch(); });
@@ -80,6 +80,7 @@ test('it combines with the text filter and with Group by', async () => {
     assert.deepEqual((await panel(p)).pids, [101, 102], 'nginx on CCD 1');
     await clickGroup(p, 'CCD 0');
     assert.deepEqual(await panel(p), {pids: [], chips: [{kind: 'cpu', text: 'Last ran on CCD 0', clear: true}], notes: []}, 'no nginx on CCD 0, and no "not reported" note');
+    assert.equal(await p.eval(`document.querySelector('.dpanel tr.empty').textContent`), 'No process matches CCD 0 + “nginx” right now.');
     await p.eval(`(() => { const i = document.getElementById('pfilter'); i.value = ''; i.dispatchEvent(new Event('input', {bubbles: true})); const s = document.getElementById('pgroup'); s.value = 'user'; s.dispatchEvent(new Event('change', {bubbles: true})); return true; })()`);
     assert.deepEqual(await p.eval(`[...document.querySelectorAll('.dpanel tr.gh [data-gtoggle]')].map(b => b.dataset.gtoggle)`), ['marc', 'root'], 'users with processes on CCD 0');
     await p.click('.dpanel [data-gtoggle="root"]');
@@ -98,12 +99,12 @@ test('the filter belongs to the machine it was made on (same names on another ho
   } finally { await p.close(); }
 });
 
-test('a host that doesn\'t report the last CPU says so instead of listing anything', async () => {
+test('a host that doesn\'t report the last CPU says so, and Details stays unfiltered by it', async () => {
   const p = await open({sel: 'win'});
   try {
     await p.click(tile(2));
-    assert.deepEqual(await panel(p), {pids: [], chips: [{kind: 'cpu', text: 'Last ran on CPU 2', clear: true}],
-      notes: ['Windows doesn’t report which processor a process last ran on, so Details can’t show what ran on CPU 2.']});
+    assert.deepEqual(await panel(p), {pids: ALL_LX.map(x => x + 200), chips: [{kind: 'cpu', text: 'Last ran on CPU 2', clear: true}],
+      notes: ['Windows doesn’t report which processor a process last ran on, so Details isn’t filtered by CPU 2.']});
   } finally { await p.close(); }
 });
 
@@ -117,10 +118,11 @@ test('without a docked Details, a click does what it did before: the selection c
   } finally { await p.close(); }
 });
 
-test('the full Details view is not filtered by a CPU selection', async () => {
-  const p = await browser.page(fixture(), {ui: ui({view: 'details', cpuSel: {mid: 'lx', cpus: [4]}})});
+test('the full Details view follows the selection too, and its title names it', async () => {
+  const p = await browser.page(fixture(), {ui: ui({view: 'details', cpuSel: {mid: 'lx', cpus: CCD1}})});
   try {
-    await p.waitFor(`document.querySelectorAll('.ptbl tbody tr').length`);
-    assert.deepEqual(await p.eval(`({pids: ${PIDS}, chips: document.querySelectorAll('[data-fchip]').length})`), {pids: ALL_LX, chips: 0});
+    await p.waitFor(`PROCS.machine === 'lx' && document.querySelector('.ptbl')`);
+    assert.deepEqual(await p.eval(`({pids: ${PIDS}, chips: [...document.querySelectorAll('[data-fchip]')].map(c => c.textContent), title: document.querySelector('.hero h1').textContent})`),
+      {pids: [105, 106, 103, 101, 102, 111, 110], chips: ['Last ran on CCD 1'], title: 'Details · lab-linux · CCD 1 (CPUs 4–7, 12–15)'});
   } finally { await p.close(); }
 });

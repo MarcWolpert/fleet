@@ -112,11 +112,31 @@ test('Windows reports GPUs per process (not the last CPU): the GPU filter works 
   } finally { await p.close(); }
 });
 
-test('a host that doesn\'t report GPUs per process says so instead of listing anything', async () => {
+test('a host that doesn\'t report GPUs per process says so, and Details stays unfiltered by it', async () => {
   const p = await open({sel: 'mac'});
   try {
     await p.click('[data-gsel="gpu0"]');
-    assert.deepEqual(await state(p), {pids: [], chips: ['gpu: On GPU 0'], notes: ['macOS doesn’t report which GPU a process uses, so Details can’t show what runs on GPU 0.'],
+    assert.deepEqual(await state(p), {pids: ALL_LX.map(x => x + 300), chips: ['gpu: On GPU 0'], notes: ['macOS doesn’t report which GPU a process uses, so Details isn’t filtered by GPU 0.'],
       bar: ['gpu: GPU 0 ×'], clearAll: false, marked: ['gpu']});
+    assert.equal(await p.eval(`document.querySelector('#dfbar [data-barchip="gpu"]').classList.contains('na')`), true, 'the bar shows it as not applied');
+  } finally { await p.close(); }
+});
+
+test('disks (their Each disk view) combine with the CPU filter the same way', async () => {
+  const p = await open({cpuSel: {mid: 'lx', cpus: CCD1}, diskSel: {mid: 'lx', names: ['nvme0n1']}});
+  try {
+    assert.deepEqual(await state(p), {pids: [103, 101, 111], chips: ['cpu: Last ran on CCD 1', 'disk: I/O on nvme0n1'], notes: [],
+      bar: ['cpu: CCD 1 ×', 'disk: nvme0n1 ×'], clearAll: true, marked: ['cpu', 'disk']});
+    await p.click('#dfbar [data-dfclear="disk"]');
+    assert.deepEqual((await state(p)).pids, CCD1_PIDS);
+  } finally { await p.close(); }
+});
+
+test('the full Details view is filtered too, and the bar says so', async () => {
+  const p = await open({detailsDocked: false, view: 'details', gpuSel: {mid: 'lx', keys: ['gpu1']}});
+  try {
+    await p.waitFor(`PROCS.machine === 'lx' && document.querySelector('.ptbl')`);
+    assert.deepEqual(await state(p), {pids: [105, 106], chips: [], notes: [], bar: ['gpu: GPU 1 ×'], clearAll: false, marked: ['gpu']});
+    assert.deepEqual(await p.eval(`[...document.querySelectorAll('[data-fchip]')].map(c => c.textContent)`), ['On GPU 1']);
   } finally { await p.close(); }
 });
