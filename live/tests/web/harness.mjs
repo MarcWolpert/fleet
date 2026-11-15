@@ -107,8 +107,9 @@ export async function launch(){
 }
 
 /* ---------- pages ---------- */
-async function openPage(cdp, fx, {ui = null, width = 1500, height = 950, fonts = false} = {}){
-  const server = await startServer(fx);
+// url: drive a running Fleet Live (e.g. an isolated instance) instead of a fixture server.
+async function openPage(cdp, fx, {ui = null, width = 1500, height = 950, fonts = false, url = null} = {}){
+  const server = url ? {url, close: async () => {}} : await startServer(fx);
   const {targetId} = await cdp.send('Target.createTarget', {url: 'about:blank'});
   const {sessionId: s} = await cdp.send('Target.attachToTarget', {targetId, flatten: true});
   const send = (m, p) => cdp.send(m, p, s);
