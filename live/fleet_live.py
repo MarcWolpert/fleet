@@ -15,6 +15,7 @@ Usage: python3 fleet_live.py [--port 4518] [--config PATH] [--open]
 import argparse, base64, collections, ctypes, ctypes.util, glob, http.server, json, os, platform, plistlib, shlex
 import re, shutil, subprocess, sys, threading, time, tomllib, urllib.parse, webbrowser, zlib
 
+VERSION = "0.1.0"
 HERE = os.path.dirname(os.path.abspath(__file__))
 H = 60
 METRICS = ("cpu", "mem", "gpu", "disk", "net")
@@ -1561,7 +1562,8 @@ def open_app_window(url):
     for c in cands:
         if os.path.exists(c) or shutil.which(c):
             prof = os.path.join(os.path.expanduser("~"), ".cache", "fleet-live", "browser")
-            subprocess.Popen([c, "--app=" + url, "--user-data-dir=" + prof, "--window-size=1500,950"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            extra = ["--class=fleet-live"] if platform.system() == "Linux" else []  # groups the window under fleet.desktop
+            subprocess.Popen([c, "--app=" + url, "--user-data-dir=" + prof, "--window-size=1500,950"] + extra, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             return
     webbrowser.open(url)
 
