@@ -27,6 +27,8 @@ const IC = {
   info:'<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5M12 8h.01"/>',
   pin:'<path d="M9 3.5h6l-1 5 3 3v1.5H7V11.5l3-3z"/><path d="M12 13v7.5"/>',
   x:'<path d="M6 6l12 12M18 6L6 18"/>',
+  plus:'<path d="M12 5v14M5 12h14"/>',
+  search:'<circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/>',
   net:'<circle cx="12" cy="5.5" r="2.5"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/><path d="M12 8v4M12 12l-5 4.5M12 12l5 4.5"/>',
   nic:'<rect x="3" y="7" width="18" height="10" rx="1.5"/><path d="M7 17v2.5M11 17v2.5M15 17v2.5M7 10.5h4"/>',
   bridge:'<path d="M3 15c4-6 14-6 18 0"/><path d="M3 15v4M21 15v4M8 11.5V19M16 11.5V19M12 10.5V19"/>'
@@ -201,7 +203,67 @@ function renderSpaces(){
     + `<button type="button" data-space="${esc(p.key)}" aria-pressed="${S.space===p.key}" style="display:flex;align-items:center;gap:10px;min-width:0;height:100%">`
     + `<span class="tile ${p.tcol ? '' : p.tile}" ${p.tcol ? `style="background:color-mix(in srgb, ${p.tcol} 22%, transparent);color:${p.tcol}"` : ''}>${icon(p.tile)}</span><span class="nm">${esc(p.name)}</span>`
     + `<span class="mini" data-mini="${esc(p.key)}" aria-hidden="true">${p.gone ? '' : miniBar(p.key)}</span><span class="pc" data-pc="${esc(p.key)}">${p.gone ? 'gone' : pillPct(p.key)}</span></button>`
-    + (p.pinned ? `<button type="button" class="unpin" data-unpin="${esc(p.key)}" aria-label="Unpin ${esc(p.name)}" title="Unpin">${icon('x', 2.4)}</button>` : '') + `</div>`).join('');
+    + (p.pinned ? `<button type="button" class="unpin" data-unpin="${esc(p.key)}" aria-label="Unpin ${esc(p.name)}" title="Unpin">${icon('x', 2.4)}</button>` : '') + `</div>`).join('')
+    + `<button type="button" class="addpin" data-addpin="1" aria-haspopup="dialog" aria-expanded="${PICK.open}" aria-label="Pin a grouping to the space bar" title="Pin a grouping">${icon('plus', 2)}</button>`;
+}
+
+/* ---------- + picker: pin any grouping ---------- */
+const PICK = {open:false, q:''};
+function kindLabel(n){
+  if (n.kind === 'machine') return n.parent ? 'VM' : 'machine';
+  if (n.kind === 'group') return 'group';
+  if (n.kind === 'project') return 'Compose project';
+  if (n.kind === 'service') return 'service';
+  if (n.kind === 'base') return 'Base system';
+  return n.kind;
+}
+function pickCandidates(){
+  const out = [];
+  (function w(list, d, path){ list.forEach(n => {
+    if (n.kind === 'cron' || n.kind === 'cronfolder') return;
+    out.push({n, d, path});
+    w(n.children, d + 1, path.concat(n.name));
+  }); })(roots, 0, []);
+  return out;
+}
+function renderPickerList(){
+  const box = $('picklist'); if (!box) return;
+  const a = document.activeElement, refocus = a && box.contains(a) && a.dataset ? a.dataset.pin : null;
+  const q = PICK.q.trim().toLowerCase();
+  let list = pickCandidates();
+  if (q) list = list.filter(x => [x.n.name, kindLabel(x.n), x.n.os || '', (x.n.meta && x.n.meta.image) || '', x.path.join(' ')].join(' ').toLowerCase().includes(q));
+  const shown = list.slice(0, 400);
+  box.innerHTML = shown.length ? shown.map(({n, d, path}) => {
+    const on = PINS.includes(n.id);
+    const where = q && path.length ? `<span class="pw">${esc(path.join(' › '))}</span>` : '';
+    return `<button type="button" class="prow${on ? ' on' : ''}" data-pin="${esc(n.id)}" aria-pressed="${on}" style="padding-left:${10 + (q ? 0 : d * 16)}px">`
+      + `<span class="ico" style="color:${n.kind === 'machine' ? 'var(--ink-2)' : colOf(n)}">${icon(iconOf(n))}</span>`
+      + `<span class="pn"><span>${esc(n.name)}</span>${where}</span><span class="pk">${esc(kindLabel(n))}${n.children.length && n.kind !== 'base' ? ' · ' + n.children.length : ''}</span>`
+      + `<span class="pp">${icon('pin')}${on ? 'Pinned' : 'Pin'}</span></button>`;
+  }).join('') + (list.length > shown.length ? `<div class="more">${list.length - shown.length} more; type to narrow it down.</div>` : '')
+    : `<div class="more">Nothing matches “${esc(PICK.q)}”.</div>`;
+  if (refocus){ const e = box.querySelector(`[data-pin="${CSS.escape(refocus)}"]`); if (e) e.focus({preventScroll:true}); }
+}
+function openPicker(){
+  PICK.open = true;
+  const p = $('picker'), btn = document.querySelector('[data-addpin]');
+  p.innerHTML = `<div class="pick-h">${icon('search')}<input type="search" id="pickq" placeholder="Search machines, VMs, projects, containers…" value="${esc(PICK.q)}" aria-label="Search groupings" autocomplete="off"></div><div class="picklist" id="picklist" role="list"></div><div class="pick-f">Pinned groupings appear in the space bar. <b>All machines</b> is always there.</div>`;
+  p.hidden = false;
+  const r = btn ? btn.getBoundingClientRect() : {left:16, bottom:56};
+  const w = Math.min(420, innerWidth - 24);
+  p.style.width = w + 'px';
+  p.style.left = Math.max(12, Math.min(r.left, innerWidth - w - 12)) + 'px';
+  p.style.top = (r.bottom + 8) + 'px';
+  renderPickerList();
+  if (btn) btn.setAttribute('aria-expanded', 'true');
+  $('pickq').focus();
+}
+function closePicker(refocus){
+  if (!PICK.open) return;
+  PICK.open = false;
+  $('picker').hidden = true;
+  const btn = document.querySelector('[data-addpin]');
+  if (btn){ btn.setAttribute('aria-expanded', 'false'); if (refocus) btn.focus(); }
 }
 function updateSpaces(){
   document.querySelectorAll('[data-mini]').forEach(e => { if (e.dataset.mini === 'fleet' || nodes[e.dataset.mini]) e.innerHTML = miniBar(e.dataset.mini); });
@@ -682,9 +744,9 @@ document.addEventListener('mouseleave', () => { S.hover = null; refreshTip(); })
 /* ---------- actions ---------- */
 async function setPins(pins){
   PINS = pins;
-  renderSpaces(); renderTree(); renderMain();
+  renderSpaces(); renderTree(); renderMain(); renderPickerList();
   try { const r = await fetch('/api/pins', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(pins)}); const d = await r.json(); PINS = d.pins || pins; } catch (e) {}
-  renderSpaces();
+  renderSpaces(); renderPickerList();
 }
 function togglePin(id){ setPins(PINS.includes(id) ? PINS.filter(x => x !== id) : PINS.concat([id])); }
 function goSpace(id){ S.space = id; S.sel = id; if (S.tree === 'network') S.tree = 'machines'; save(); renderAll(); $('main').scrollTop = 0; refreshNow(); }
@@ -698,6 +760,8 @@ function select(id){
   save(); renderAll(); refreshNow();
 }
 document.addEventListener('click', e => {
+  const ap = e.target.closest('[data-addpin]'); if (ap){ PICK.open ? closePicker(false) : openPicker(); return; }
+  if (PICK.open && !$('picker').contains(e.target)) closePicker(false);
   const up = e.target.closest('[data-unpin]'); if (up){ e.stopPropagation(); togglePin(up.dataset.unpin); if (S.space === up.dataset.unpin) goSpace('fleet'); return; }
   const pn = e.target.closest('[data-pin]'); if (pn){ e.stopPropagation(); togglePin(pn.dataset.pin); return; }
   const tg = e.target.closest('[data-toggle]');
@@ -712,7 +776,14 @@ document.addEventListener('click', e => {
   const cv = e.target.closest('[data-cpuview]'); if (cv){ S.cpuView = cv.dataset.cpuview; save(); renderMain(); refreshNow(); return; }
   const mo = e.target.closest('[data-mode]'); if (mo){ S.mode = mo.dataset.mode; save(); renderMain(); return; }
 });
-document.addEventListener('input', e => { if (e.target.id === 'pfilter'){ S.filter = e.target.value; save(); renderMain(); } });
+document.addEventListener('input', e => {
+  if (e.target.id === 'pfilter'){ S.filter = e.target.value; save(); renderMain(); }
+  if (e.target.id === 'pickq'){ PICK.q = e.target.value; renderPickerList(); }
+});
+$('picker').addEventListener('keydown', e => {
+  if (e.key === 'Escape'){ e.preventDefault(); closePicker(true); }
+  if (e.key === 'Enter' && e.target.id === 'pickq'){ const first = $('picklist').querySelector('[data-pin]'); if (first){ e.preventDefault(); togglePin(first.dataset.pin); } }
+});
 document.addEventListener('change', e => { if (e.target.id === 'pgroup'){ S.group = e.target.value; save(); renderMain(); } });
 
 /* ---------- polling ---------- */
@@ -743,3 +814,17 @@ async function refreshNow(){
 renderToolbar();
 refreshNow();
 setInterval(refreshNow, 2000);
+
+/* ---------- reload the window when the app's own files change ---------- */
+(function(){
+  let sig = null;
+  async function check(){
+    try {
+      const hs = await Promise.all(['/', '/app.js'].map(u => fetch(u, {method:'HEAD', cache:'no-store'}).then(r => (r.headers.get('last-modified') || '') + (r.headers.get('content-length') || ''))));
+      const s = hs.join('|');
+      if (sig !== null && s !== sig && !PICK.open && !(document.activeElement && document.activeElement.id === 'pfilter')){ save(); location.reload(); return; }
+      sig = s;
+    } catch (e) {}
+  }
+  setInterval(check, 1500); check();
+})();
