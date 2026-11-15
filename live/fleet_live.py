@@ -403,7 +403,7 @@ class Machine:
         for k in ("lcpus", "topo", "gpus", "nvidia", "videoNames", "gproc", "procs", "ifs", "wsl", "containers", "dstats", "tasks"):
             r[k] = aslist(r.get(k))
         for a in r["ifs"]:
-            a["addrs"] = aslist(a.get("addrs"))
+            a["addrs"] = [x for x in aslist(a.get("addrs")) if isinstance(x, str) and x]  # an empty list arrives as {}
         for tk in r["tasks"]:
             tk["triggers"] = aslist(tk.get("triggers"))
         t = r["t"]
