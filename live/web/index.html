@@ -448,6 +448,28 @@ html.native .setbtn{height:32px}
 .kcell .ks{position:absolute;left:10px;right:10px;top:41px;font-size:11px;color:var(--ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .kcell .kr{position:absolute;right:8px;bottom:6px;display:flex;gap:8px;font:600 10.5px/1 var(--mono);text-shadow:0 1px 2px #000}
 .kcell .kr i{font-style:normal}.kcell .rd{color:#8fc1ff}.kcell .wr{color:#ffab7a}
+.kcell.down{opacity:.55}
+/* Hero: name and facts on the left (wrapping there), stats and actions on the right */
+.hero{display:grid;grid-template-columns:auto minmax(0,1fr) auto auto;column-gap:16px;row-gap:10px;align-items:center}
+.hero>div:nth-child(2){min-width:0}
+.hero .hero-stats{margin-left:0;flex-wrap:nowrap}
+.hero>.btn{margin-left:0!important}
+@media (max-width:900px){.hero{grid-template-columns:auto minmax(0,1fr)}.hero .hero-stats,.hero>.btn{grid-column:1 / -1;justify-self:start}}
+/* Tiles: text in its own rows, the graph in its own band below: nothing sits on the line */
+.lcell,.gcell,.kcell{display:flex;flex-direction:column;gap:3px;padding:7px 9px 0}
+.lcell svg,.gcell svg,.kcell svg{position:static;display:block;width:calc(100% + 18px);margin:auto -9px 0;flex:none}
+.lcell{height:78px}.lcell svg{height:30px}
+.gcell{height:150px}.gcell svg{height:62px}
+.kcell{height:146px}.kcell svg{height:44px}
+.trow{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+.lcell .lt,.lcell .lv,.lcell .lm,.gcell .gk,.gcell .gv,.gcell .gn,.gcell .gm,.kcell .kn,.kcell .kb,.kcell .km,.kcell .ks,.kcell .kr{position:static}
+.lcell{gap:1px}
+.lcell .lt{font:500 10.5px/1.2 var(--mono);color:var(--ink-2)}
+.lcell .lv{font:600 11.5px/1.2 var(--mono);color:var(--ink)}
+.lcell .lm{font:500 10px/1.2 var(--mono);color:var(--ink-3)}
+.lcell svg{height:32px}
+.kcell .km,.kcell .ks,.gcell .gn,.gcell .gm{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.kcell .kr{display:flex;gap:10px;font:600 11px/1.2 var(--mono);text-shadow:none}
 .empty-pins{display:flex;flex-direction:column;align-items:center;text-align:center;gap:8px;padding:28px 18px;color:var(--ink-3);font-size:12.5px;line-height:1.5}
 .empty-pins svg{width:22px;height:22px;color:var(--ink-3)}
 .empty-pins b{color:var(--ink-2);font-size:13px}

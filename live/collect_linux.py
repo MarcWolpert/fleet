@@ -295,6 +295,34 @@ def disk_info(procs, containers):
     return disks, pdisks, cdisks
 
 
+# ---- Network: which interface each process talks through, and its TCP bytes (from ss -ti) ----
+def net_users(ifaddr):
+    users, cur = {}, None
+    for line in run(["ss", "-tinpH", "state", "established"], timeout=8).splitlines():
+        if line[:1] not in (" ", "\t"):
+            addrs = [x for x in line.split() if ":" in x and not x.startswith("users:")]
+            ifn = ""
+            if addrs:
+                ip = addrs[0].rsplit(":", 1)[0].strip("[]")
+                if "%" in ip:
+                    ip, ifn = ip.split("%", 1)
+                ifn = ifn or ifaddr.get(ip.replace("::ffff:", ""), "")
+            pids = re.findall(r"pid=(\d+)", line)
+            cur = pids
+            for pid in pids:
+                u = users.setdefault(pid, {"ifs": [], "b": 0})
+                if ifn and ifn not in u["ifs"]:
+                    u["ifs"].append(ifn)
+        elif cur:
+            sent = re.search(r"bytes_(?:sent|acked):(\d+)", line)
+            got = re.search(r"bytes_received:(\d+)", line)
+            b = (int(sent.group(1)) if sent else 0) + (int(got.group(1)) if got else 0)
+            for pid in cur:
+                users[pid]["b"] += b
+            cur = None
+    return users
+
+
 def snapshot():
     global out
     out = {"t": time.time(), "hz": HZ, "ncpu": os.cpu_count(), "host": os.uname()[1], "kernel": os.uname()[2]}
@@ -368,8 +396,11 @@ def snapshot():
         ifs[name] = {"rx": rx, "tx": tx, "phys": os.path.exists(base + "/device"), "master": master,
                      "bridge": os.path.exists(base + "/bridge"), "state": rd(base + "/operstate").strip(),
                      "speed": rd(base + "/speed").strip(), "addrs": []}
+    ifaddr = {}
     try:
         for a in json.loads(run(["ip", "-j", "addr"]) or "[]"):
+            for x in a.get("addr_info", []):
+                ifaddr[x.get("local", "")] = a.get("ifname", "")
             if a.get("ifname") in ifs:
                 ifs[a["ifname"]]["addrs"] = ["%s/%s" % (x["local"], x["prefixlen"]) for x in a.get("addr_info", []) if x.get("family") == "inet"]
     except Exception:
@@ -437,6 +468,10 @@ def snapshot():
                            "file": labels.get("com.docker.compose.project.config_files", ""),
                            "networks": c.get("Networks", ""), "rx": rx, "tx": tx})
     out["containers"] = containers
+    try:
+        out["pnet"] = net_users(ifaddr)
+    except Exception:
+        out["pnet"] = {}
     try:
         out["disks"], out["pdisks"], out["cdisks"] = disk_info(procs, containers)
     except Exception:

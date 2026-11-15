@@ -140,3 +140,14 @@ test('the full Details view is filtered too, and the bar says so', async () => {
     assert.deepEqual(await p.eval(`[...document.querySelectorAll('[data-fchip]')].map(c => c.textContent)`), ['On GPU 1']);
   } finally { await p.close(); }
 });
+
+test('interfaces (their Each interface view) combine with the CPU filter too', async () => {
+  const p = await open({cpuSel: {mid: 'lx', cpus: CCD1}, ifSel: {mid: 'lx', names: ['eth0']}});
+  try {
+    assert.deepEqual(await state(p), {pids: [105, 101, 102], chips: ['cpu: Last ran on CCD 1', 'net: Traffic via eth0'], notes: [],
+      bar: ['cpu: CCD 1 ×', 'net: eth0 ×'], clearAll: true, marked: ['cpu', 'net']});
+    await p.click('#dfbar [data-dfclear="all"]');
+    assert.deepEqual(await state(p), {pids: ALL_LX, chips: [], notes: [], bar: null, clearAll: false, marked: []});
+    assert.deepEqual(await p.eval(`[S.cpuSel, S.ifSel]`), [null, null]);
+  } finally { await p.close(); }
+});

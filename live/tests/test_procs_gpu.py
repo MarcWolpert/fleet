@@ -93,7 +93,7 @@ class ApiProcs(unittest.TestCase):
         out = api_procs(v)
         self.assertIs(out.get("gpu_procs"), True)
         self.assertEqual({p[0]: (p[12], on(p)) for p in out["procs"]}, {104: (2, [0]), 105: (3, []), 106: (1, []), 109: (0, [0]), 110: (3, [])})
-        self.assertEqual({len(p) for p in out["procs"]}, {15}, "p[14] (disks) follows p[13]")
+        self.assertEqual({len(p) for p in out["procs"]}, {17}, "p[14] disks, p[15] interfaces and p[16] network follow p[13]")
 
     def test_a_host_that_reports_no_gpus_per_process_says_so(self):
         # macOS readings (derive_generic) have 13-field rows and no flag.
