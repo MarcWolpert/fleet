@@ -275,6 +275,12 @@ main{flex:1;min-width:0;overflow:auto;background:var(--win)}
 .fchip button:hover{background:#ffffff1a;color:var(--ink)}
 .fchip button svg{width:11px;height:11px}
 .dpanel .note{margin-bottom:12px}
+.dfbar{display:inline-flex;align-items:center;flex-wrap:wrap;gap:6px}
+.dfbar[hidden]{display:none}
+.dfbar .dflabel{font-size:12px;font-weight:500;color:var(--ink-3);margin-right:2px}
+.dfall{font-size:12px;font-weight:500;color:var(--accent);padding:4px 7px;border-radius:7px}
+.dfall:hover{background:var(--hover)}
+.seg button.filtered::after{content:"";display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--accent);margin-left:6px;vertical-align:2px}
 .ptbl tr:hover td{background:#ffffff06}
 .heat{display:inline-block;min-width:44px}
 .pscroll{overflow:auto;max-height:calc(100vh - 230px);border:1px solid var(--line);border-radius:10px}
@@ -455,6 +461,7 @@ html.native .lights{display:none}
   </header>
   <div class="toolbar">
     <nav class="crumbs" id="crumbs" aria-label="Path"></nav>
+    <div class="dfbar" id="dfbar" role="group" aria-label="Details is filtered to" hidden></div>
     <div class="seg" id="metrics" role="group" aria-label="View"></div>
     <span class="conn" id="conn" hidden>reconnecting…</span>
     <span class="badge" id="live"><i></i>live</span>

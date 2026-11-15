@@ -302,6 +302,7 @@ function renderToolbar(){
   $('metrics').innerHTML = METRICS.map(m => `<button type="button" data-metric="${m.id}" aria-pressed="${S.view === 'overview' && S.metric===m.id}">${m.label}</button>`).join('')
     + `<span class="sep-pill" aria-hidden="true"></span><button type="button" data-details="1" draggable="true" aria-pressed="${S.view === 'details' || !!S.detailsDocked}" title="Click to open; drag onto the right side to dock it">Details${S.detailsDocked ? ' · docked' : ''}</button>`;
   document.querySelectorAll('[data-tree]').forEach(b => b.setAttribute('aria-pressed', String(S.tree === b.dataset.tree)));
+  renderFilterBar();
 }
 
 /* ---------- machine tree ---------- */
@@ -729,22 +730,56 @@ function cpuGroupNames(mid){
 }
 const STATE = {R:'running', S:'sleeping', D:'disk wait', Z:'zombie', T:'stopped', t:'traced', I:'idle', U:'waiting', X:'dead'};
 function stateLabel(s){ return s ? (STATE[s[0]] || s) : ''; }
-// The docked Details follows the processors selected (Logical processors) on its own machine.
-function detailsFilter(m){ return {cpus:cpuSel(m)}; }
+// The docked Details follows the processors (CPU → Logical processors) and GPUs (GPU → Each GPU)
+// selected on its own machine; the two combine with AND.
+function detailsFilter(m){ return {cpus:cpuSel(m), gpus:gpuSel(m)}; }
+function gpuSelLabel(m, keys){ return keys.map(k => 'GPU ' + m.gpus.findIndex(g => g.key === k)).join(' + '); }
+// What filters the Details panel on screen right now (null when it isn't docked or nothing does).
+function dockedFilter(){
+  if (!S.detailsDocked || S.view === 'details' || S.tree === 'network') return null;
+  const n = S.sel === 'fleet' ? null : nodes[S.sel]; if (!n) return null;
+  const m = nodes[procMachineFor(n)]; if (!m) return null;
+  const f = detailsFilter(m);
+  return f.cpus.length || f.gpus.length ? Object.assign({m}, f) : null;
+}
+// The filter bar left of the view pills, and a mark on the CPU and GPU pills while they filter Details.
+let lastBarHTML = null;
+function renderFilterBar(){
+  const bar = $('dfbar'); if (!bar) return;
+  const f = dockedFilter(), chips = [];
+  if (f && f.cpus.length) chips.push({k:'cpu', label:cpuSelLabel(f.m, f.cpus), why:'that last ran on'});
+  if (f && f.gpus.length) chips.push({k:'gpu', label:gpuSelLabel(f.m, f.gpus), why:'with a context on'});
+  const html = chips.length ? `<span class="dflabel">Filter</span>` + chips.map(c => `<span class="fchip" data-barchip="${c.k}" title="Details on ${esc(f.m.name)} lists only processes ${c.why} ${esc(c.label)}"><span>${esc(c.label)}</span><button type="button" data-dfclear="${c.k}" aria-label="Clear the ${esc(c.label)} filter">${icon('x', 2.4)}</button></span>`).join('')
+    + (chips.length > 1 ? `<button type="button" class="dfall" data-dfclear="all">Clear all</button>` : '') : '';
+  if (html !== lastBarHTML){ bar.innerHTML = html; lastBarHTML = html; }
+  bar.hidden = !chips.length;
+  ['cpu', 'gpu'].forEach(k => {
+    const b = document.querySelector(`#metrics [data-metric="${k}"]`), c = chips.find(x => x.k === k); if (!b) return;
+    b.classList.toggle('filtered', !!c);
+    if (c) b.title = `Details is filtered to processes ${c.why} ${c.label}`; else b.removeAttribute('title');
+  });
+}
 function cpuSelLabel(m, cpus){
   const whole = (m.groups || []).filter(g => g.cpus.length && g.cpus.every(c => cpus.includes(c)));
   const inWhole = new Set(whole.flatMap(g => g.cpus));
   if (whole.length && cpus.every(c => inWhole.has(c))) return whole.map(g => g.name).join(' + ');
   return (cpus.length === 1 ? 'CPU ' : 'CPUs ') + cpuRanges(cpus);
 }
-function filterChips(m, f, all){
-  if (!f.cpus.length) return '';
-  const label = cpuSelLabel(m, f.cpus), named = !/^CPUs? /.test(label);
-  const tipText = `Details lists only the processes that last ran on ${label}${named ? ' (' + (f.cpus.length === 1 ? 'CPU ' : 'CPUs ') + cpuRanges(f.cpus) + ')' : ''} at the latest reading. Processes move between processors, so this is where each one ran last, not where it always runs.`;
-  const chip = `<span class="fchip" data-fchip="cpu" title="${esc(tipText)}"><span>Last ran on ${esc(label)}</span><button type="button" data-dfclear="cpu" aria-label="Clear the filter: last ran on ${esc(label)}">${icon('x', 2.4)}</button></span>`;
-  const unreported = all && all.length && !all.some(p => p[12] >= 0)
-    ? noteHTML(`${esc(m.os.split(' ')[0] || 'This OS')} doesn’t report which processor a process last ran on, so Details can’t show what ran on ${esc(label)}.`) : '';
-  return `<div class="dfchips" role="group" aria-label="Details is filtered">${chip}</div>${unreported}`;
+function filterChips(m, f, all, gpuProcs){
+  if (!f.cpus.length && !f.gpus.length) return '';
+  const os = esc(m.os.split(' ')[0] || 'This OS'), chips = [], notes = [];
+  const chip = (k, text, tipText) => `<span class="fchip" data-fchip="${k}" title="${esc(tipText)}"><span>${esc(text)}</span><button type="button" data-dfclear="${k}" aria-label="Clear the filter: ${esc(text)}">${icon('x', 2.4)}</button></span>`;
+  if (f.cpus.length){
+    const label = cpuSelLabel(m, f.cpus), named = !/^CPUs? /.test(label);
+    chips.push(chip('cpu', 'Last ran on ' + label, `Details lists only the processes that last ran on ${label}${named ? ' (' + (f.cpus.length === 1 ? 'CPU ' : 'CPUs ') + cpuRanges(f.cpus) + ')' : ''} at the latest reading. Processes move between processors, so this is where each one ran last, not where it always runs.`));
+    if (all && all.length && !all.some(p => p[12] >= 0)) notes.push(noteHTML(`${os} doesn’t report which processor a process last ran on, so Details can’t show what ran on ${esc(label)}.`));
+  }
+  if (f.gpus.length){
+    const label = gpuSelLabel(m, f.gpus), names = f.gpus.map(k => { const g = m.gpus.find(x => x.key === k); return g ? g.name : ''; }).filter(Boolean).join(', ');
+    chips.push(chip('gpu', 'On ' + label, `Details lists only the processes that have a context on ${label}${names ? ' (' + names + ')' : ''} at the latest reading, busy or idle.`));
+    if (all && gpuProcs === false) notes.push(noteHTML(`${os} doesn’t report which GPU a process uses, so Details can’t show what runs on ${esc(label)}.`));
+  }
+  return `<div class="dfchips" role="group" aria-label="Details is filtered">${chips.join('')}</div>${notes.join('')}`;
 }
 // Details groups are collapsed unless opened; open ones are kept per Group-by mode.
 function groupOpen(mode, g){ return !!(S.gopen && S.gopen[mode] && S.gopen[mode].includes(g)); }
@@ -759,8 +794,9 @@ function detailsView(n, docked){
   let list = all ? (scopeAll ? all : all.filter(p => nodes[p[10]] && within(nodes[p[10]], n.id))) : [];
   const q = S.filter.trim().toLowerCase();
   if (q) list = list.filter(p => String(p[0]) === q || (p[1] || '').toLowerCase().includes(q) || (p[9] || '').toLowerCase().includes(q) || (p[2] || '').toLowerCase().includes(q));
-  const f = docked && m ? detailsFilter(m) : {cpus:[]};
+  const f = docked && m ? detailsFilter(m) : {cpus:[], gpus:[]};
   if (f.cpus.length) list = list.filter(p => f.cpus.includes(p[12]));
+  if (f.gpus.length) list = list.filter(p => (p[13] || []).some(i => f.gpus.includes('gpu' + i)));
   const ownerName = id => nodes[id] ? nodes[id].name : '';
   const groupOf = p => p[12] >= 0 ? (gnames[p[12]] || 'CPU ' + p[12]) : 'not reported by this OS';
   const COLS = [
@@ -815,7 +851,7 @@ function detailsView(n, docked){
     : `<div class="hero"><span class="tile" style="background:#ffffff10;color:var(--ink-2)">${icon('chip')}</span><div><h1>Details · ${esc(n.name)}</h1><div class="facts"><span>${all ? list.length + ' processes' : 'loading…'}</span><span>on ${esc(m ? m.name : '')}</span>${hasGroups ? `<span>CPU groups: ${esc(m.groups.map(g => g.name).join(', '))}</span>` : ''}</div></div><button type="button" class="btn" data-dock="1" style="margin-left:auto" title="Or drag the Details pill onto the right side">${icon('layers')}Dock to the right</button></div>`;
   const tools = `<div class="dtools"><input type="search" id="pfilter" placeholder="Filter by name, PID, user or command" value="${esc(S.filter)}" aria-label="Filter processes"><label>Group by <select id="pgroup"><option value="none"${S.group==='none'?' selected':''}>Nothing</option><option value="cpugroup"${S.group==='cpugroup'?' selected':''}>CPU group (CCD, P-/E-cores)</option><option value="owner"${S.group==='owner'?' selected':''}>Where it runs (tree node)</option><option value="user"${S.group==='user'?' selected':''}>User</option><option value="state"${S.group==='state'?' selected':''}>Status</option></select></label>${groupBy ? `<span class="gall"><button type="button" class="btn" data-gall="open">Expand all</button><button type="button" class="btn" data-gall="close">Collapse all</button></span>` : ''}</div>`;
   const thead = `<tr>${COLS.map(c => `<th class="${c.l ? 'l' : ''}" ${c.k === S.sort.k ? `aria-sort="${dir < 0 ? 'descending' : 'ascending'}"` : ''}><button type="button" data-sort="${c.k}">${c.label}${c.k === S.sort.k ? (dir < 0 ? ' ↓' : ' ↑') : ''}</button></th>`).join('')}</tr>`;
-  return head + groupNote + `<section class="card">${tools}${docked && m ? filterChips(m, f, all) : ''}<div class="pscroll"><table class="ptbl"><thead>${thead}</thead><tbody>${body}</tbody></table>${more ? `<div class="more">${more}</div>` : ''}</div></section>`;
+  return head + groupNote + `<section class="card">${tools}${docked && m ? filterChips(m, f, all, PROCS.machine === mid ? PROCS.gpuProcs : null) : ''}<div class="pscroll"><table class="ptbl"><thead>${thead}</thead><tbody>${body}</tbody></table>${more ? `<div class="more">${more}</div>` : ''}</div></section>`;
 }
 
 /* ---------- network detail ---------- */
@@ -838,6 +874,7 @@ function netView(){
 /* ---------- main ---------- */
 let lastMainHTML = '';
 function renderMain(){
+  renderFilterBar();
   const main = $('main');
   const a = document.activeElement;
   let refocus = null, selStart = null;
@@ -975,7 +1012,7 @@ document.addEventListener('click', e => {
   if (e.target.closest('[data-dock]')){ dockDetails(); return; }
   if (e.target.closest('[data-undock]')){ S.detailsDocked = false; S.view = 'details'; save(); renderAll(); return; }
   if (e.target.closest('[data-closedock]')){ S.detailsDocked = false; save(); renderAll(); return; }
-  const dc = e.target.closest('[data-dfclear]'); if (dc){ if (dc.dataset.dfclear === 'cpu') S.cpuSel = null; save(); renderMain(); return; }
+  const dc = e.target.closest('[data-dfclear]'); if (dc){ const k = dc.dataset.dfclear; if (k === 'cpu' || k === 'all') S.cpuSel = null; if (k === 'gpu' || k === 'all') S.gpuSel = null; save(); renderMain(); return; }
   const gt = e.target.closest('[data-gtoggle]');
   if (gt){ const g = gt.dataset.gtoggle, cur = (S.gopen && S.gopen[S.group]) || []; setGroupsOpen(S.group, cur.includes(g) ? cur.filter(x => x !== g) : cur.concat([g])); return; }
   const ga = e.target.closest('[data-gall]');
@@ -1025,8 +1062,8 @@ async function refreshNow(){
     if (S.sel !== 'fleet' && !nodes[S.sel]) { /* keep selection; it may come back */ }
     const n = S.sel === 'fleet' ? null : nodes[S.sel];
     const jobs = [];
-    if ((S.view === 'details' || (S.detailsDocked && n && S.tree !== 'network')) && (n || roots[0])){ const mid = procMachineFor(n || roots[0]); if (mid) jobs.push(fetch('/api/procs?machine=' + encodeURIComponent(mid), {cache:'no-store'}).then(r => r.json()).then(d => { PROCS = {machine:mid, list:d.procs || []}; })); }
-    if (S.view !== 'details' && n && n.kind === 'machine' && S.metric === 'cpu' && S.cpuView === 'logical' && cpuSel(n).length && n.status === 'ok') jobs.push(fetch('/api/procs?machine=' + encodeURIComponent(n.id), {cache:'no-store'}).then(r => r.json()).then(d => { PROCS = {machine:n.id, list:d.procs || []}; }));
+    if ((S.view === 'details' || (S.detailsDocked && n && S.tree !== 'network')) && (n || roots[0])){ const mid = procMachineFor(n || roots[0]); if (mid) jobs.push(fetch('/api/procs?machine=' + encodeURIComponent(mid), {cache:'no-store'}).then(r => r.json()).then(d => { PROCS = {machine:mid, list:d.procs || [], gpuProcs:!!d.gpu_procs}; })); }
+    if (S.view !== 'details' && n && n.kind === 'machine' && S.metric === 'cpu' && S.cpuView === 'logical' && cpuSel(n).length && n.status === 'ok') jobs.push(fetch('/api/procs?machine=' + encodeURIComponent(n.id), {cache:'no-store'}).then(r => r.json()).then(d => { PROCS = {machine:n.id, list:d.procs || [], gpuProcs:!!d.gpu_procs}; }));
     if (S.view !== 'details' && n && n.kind === 'machine' && S.metric === 'cpu' && S.cpuView === 'logical') jobs.push(fetch('/api/cpus?machine=' + encodeURIComponent(n.id), {cache:'no-store'}).then(r => r.json()).then(d => { CPUS[n.id] = d; }));
     if (S.tree === 'network') jobs.push(fetch('/api/net', {cache:'no-store'}).then(r => r.json()).then(d => { NET = d; }));
     await Promise.all(jobs.map(p => p.catch(() => null)));

@@ -62,12 +62,23 @@ function findChrome(){
 }
 
 class CDP {
-  constructor(ws){ this.ws = ws; this.id = 0; this.wait = new Map(); this.subs = []; ws.onmessage = m => this.recv(JSON.parse(m.data)); }
+  constructor(ws){
+    this.ws = ws; this.id = 0; this.wait = new Map(); this.subs = [];
+    ws.onmessage = m => this.recv(JSON.parse(m.data));
+    ws.onclose = () => { this.wait.forEach(({no}) => no(new Error('the browser went away'))); this.wait.clear(); };
+  }
   recv(msg){
     if (msg.id && this.wait.has(msg.id)){ const {ok, no} = this.wait.get(msg.id); this.wait.delete(msg.id); msg.error ? no(new Error(msg.error.message)) : ok(msg.result); return; }
     this.subs.forEach(s => { if (s.method === msg.method && s.session === msg.sessionId) s.fn(msg.params); });
   }
-  send(method, params = {}, sessionId){ const id = ++this.id; this.ws.send(JSON.stringify({id, method, params, sessionId})); return new Promise((ok, no) => this.wait.set(id, {ok, no})); }
+  send(method, params = {}, sessionId){
+    if (this.ws.readyState !== WebSocket.OPEN) return Promise.reject(new Error('the browser went away'));
+    const id = ++this.id; this.ws.send(JSON.stringify({id, method, params, sessionId}));
+    return new Promise((ok, no) => {
+      const t = setTimeout(() => { this.wait.delete(id); no(new Error(method + ' got no answer in 20 s')); }, 20000);
+      this.wait.set(id, {ok: v => { clearTimeout(t); ok(v); }, no: e => { clearTimeout(t); no(e); }});
+    });
+  }
   on(method, session, fn){ const s = {method, session, fn}; this.subs.push(s); return () => { this.subs = this.subs.filter(x => x !== s); }; }
 }
 
