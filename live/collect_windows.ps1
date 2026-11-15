@@ -7,7 +7,7 @@
 # tasks and adapter addresses refresh every 10th line.
 $ErrorActionPreference = 'SilentlyContinue'; $ProgressPreference = 'SilentlyContinue'
 if (-not $FleetInterval) { $FleetInterval = 3 }
-$loop = 0; $taskCache = @(); $addrCache = @{}; $cmdCache = @{}; $diskInfo = @{}
+$loop = 0; $taskCache = @(); $addrCache = @{}; $cmdCache = @{}; $diskInfo = @{}; $pnetCache = @{}
 # Stop when Fleet goes away. Fleet keeps our stdin open and never writes to it, so the pending read
 # completes (EOF) the moment the SSH session ends for any reason; also stop if our parent shell is
 # gone, and after 6 hours in any case (Fleet reconnects).
@@ -97,6 +97,10 @@ $o.disks = @(foreach ($k in $pd.Keys) {
      rot = $(if ($di) { $di.media -eq 'HDD' } else { $false }); read = [double]$pd[$k]['disk read bytes/sec']; write = [double]$pd[$k]['disk write bytes/sec']
      busy = [math]::Max(0, 100 - [double]$pd[$k]['% idle time']) }
 })
+if ($loop % 3 -eq 0) { $ipIf = @{}; foreach ($ia in Get-NetIPAddress) { $ipIf[[string]$ia.IPAddress] = [string]$ia.InterfaceAlias }
+  $pn = @{}; foreach ($tc in Get-NetTCPConnection -State Established) { $ifn = $ipIf[[string]$tc.LocalAddress]; if ($ifn) { $k = [string]$tc.OwningProcess; if (-not $pn.ContainsKey($k)) { $pn[$k] = @{} }; $pn[$k][$ifn] = 1 } }
+  $pnetCache = @{}; foreach ($k in $pn.Keys) { $pnetCache[$k] = @($pn[$k].Keys) } }
+$o.pnet = $pnetCache
 $o.ifs = @(Get-NetAdapter | ForEach-Object {
   $st = Get-NetAdapterStatistics -Name $_.Name
   @{ name = $_.Name; desc = $_.InterfaceDescription; status = [string]$_.Status; speed = [string]$_.LinkSpeed; virtual = [bool]$_.Virtual

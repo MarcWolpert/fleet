@@ -316,6 +316,7 @@ class Machine:
         # Processes: per-process rates; owner = container, VM, timer unit or base.
         gpus, pid_gpu = self.linux_gpus(r, t)
         pdisks = r.get("pdisks") or {}
+        pnet = r.get("pnet") or {}
         disks = self.linux_disks(r, t)
         gpu_by_pid = {pid: sum(v.values()) for pid, v in pid_gpu.items()}
         cont_gk = {}
@@ -331,7 +332,9 @@ class Machine:
             g = gpu_by_pid.get(pid, 0.0)
             if cid and pid in pid_gpu:
                 cont_gk.setdefault(cid, set()).update("gpu%d" % i for i, v in pid_gpu[pid].items() if v > 0)
-            row = [pid, ppid, comm, user, state, c, rss / GB, d, g, threads, cmd, "", lastcpu, sorted(pid_gpu.get(pid, {})), list(pdisks.get(str(pid), []))]
+            pn = pnet.get(str(pid)) or {}
+            row = [pid, ppid, comm, user, state, c, rss / GB, d, g, threads, cmd, "", lastcpu, sorted(pid_gpu.get(pid, {})), list(pdisks.get(str(pid), [])),
+                   list(pn.get("ifs", [])), self.rate("pn.%d" % pid, pn.get("b", 0), t) / MB if pn else 0.0]
             procs.append(row)
             by_pid[pid] = row
             u = [c, rss / GB, g, d, 0.0]
@@ -390,11 +393,28 @@ class Machine:
             for dn, tot in acc.items():
                 if self.rate("cd.%s.%s" % (cid, dn), tot, t) > 0:
                     active.setdefault(cid, set()).add(dn)
+        # Containers talk through their Docker networks' bridges (or a macvlan parent); VMs through their taps.
+        nets = {n["name"]: n for n in r.get("dockernets", [])}
+        def bridge_of(name):
+            n = nets.get(name)
+            if not n:
+                return ""
+            if n.get("driver") == "bridge":
+                return "docker0" if name == "bridge" else "br-" + n.get("id", "")[:12]
+            return name if name in r["ifs"] else ""
+        c_ifs = {c["id"]: [b for b in (bridge_of(x) for x in c.get("networks", "").split(",") if x) if b] for c in containers}
+        vm_ifs = {}
+        for v in r.get("vms", []):
+            vm_ifs[v["name"]] = sorted({i["if"] for i in v["ifs"]} | {i["source"] for i in v["ifs"] if i.get("source") in r["ifs"]})
+        r_vm = {p[0]: p[10] for p in r["procs"] if p[10]}
         for row in procs:
-            p = by_pid.get(row[0])
             cid = r_cid.get(row[0], "")
             if cid in active:
                 row[14] = sorted(set(row[14]) | active[cid])
+            if cid in c_ifs:
+                row[15] = sorted(set(row[15]) | set(c_ifs[cid]))
+            if row[0] in r_vm:
+                row[15] = sorted(set(row[15]) | set(vm_ifs.get(r_vm[row[0]], [])))
         owner = {}
         for p in r["procs"]:
             if p[9]:
@@ -532,7 +552,8 @@ class Machine:
             c = self.rate("wp.%d" % pid, c_secs, t)  # cumulative CPU seconds -> cores
             io = max(0.0, io)
             g = sum(gpu_by_pid.get(pid, {}).values())
-            row = [pid, ppid, name, "", "", c, ws / GB, io / MB, g, threads, cmd, "base", -1, sorted(gpu_by_pid.get(pid, {})), []]
+            row = [pid, ppid, name, "", "", c, ws / GB, io / MB, g, threads, cmd, "base", -1, sorted(gpu_by_pid.get(pid, {})), [],
+                   aslist((r.get("pnet") or {}).get(str(pid))), -1.0]
             if name.lower() in ("vmmem", "vmmemwsl"):
                 row[11] = "vm:WSL"
                 for i, v in enumerate((c, ws / GB, g, io / MB)):
@@ -785,6 +806,11 @@ class MacCollector:
             m = re.match(r"^(\S+):", line)
             if m:
                 cur_if = m.group(1)
+            m6 = re.search(r"inet6 ([0-9a-f:]+)(?:%\S+)? prefixlen (\d+)", line)
+            if m6:
+                for x in ifs:
+                    if x["name"] == cur_if:
+                        x.setdefault("addrs6", []).append(m6.group(1))
             m = re.search(r"inet (\d+\.\d+\.\d+\.\d+) netmask (0x[0-9a-f]+)", line)
             if m:
                 bits = bin(int(m.group(2), 16)).count("1")
@@ -794,6 +820,25 @@ class MacCollector:
         utils = [float(x) for x in re.findall(r'"Device Utilization %"=(\d+)', run(["ioreg", "-r", "-d", "1", "-w", "0", "-c", "IOAccelerator"]))]
         gpus = [{"name": gi["name"], "mem": gi["mem"], "util": utils[i] if i < len(utils) else 0.0} for i, gi in enumerate(self.gpu_info)]
         gpu = sum(g["util"] for g in gpus)
+        # Network per process: nettop has each process's bytes in/out; lsof says which local address
+        # (and so which interface) its connections use. (netstat prints nothing when run from Python.)
+        ip_if = {a.split("/")[0]: x["name"] for x in ifs for a in x["addrs"] + x.get("addrs6", [])}
+        mac_net = {}
+        for line in run(["nettop", "-P", "-L", "1", "-x", "-J", "bytes_in,bytes_out"], timeout=10).splitlines()[1:]:
+            f = line.split(",")
+            if len(f) >= 3:
+                _name, _, pid = f[0].rpartition(".")
+                if pid.isdigit() and f[1].isdigit() and f[2].isdigit():
+                    mac_net.setdefault(int(pid), {"ifs": set(), "b": 0})["b"] = int(f[1]) + int(f[2])
+        cur_pid = None
+        for line in run(["lsof", "-nP", "-iTCP", "-sTCP:ESTABLISHED", "-F", "pn"], timeout=10).splitlines():
+            if line.startswith("p"):
+                cur_pid = int(line[1:]) if line[1:].isdigit() else None
+            elif line.startswith("n") and cur_pid:
+                ip = line[1:].split("->")[0].rsplit(":", 1)[0].strip("[]")
+                ifn = ip_if.get(ip)
+                if ifn:
+                    mac_net.setdefault(cur_pid, {"ifs": set(), "b": 0})["ifs"].add(ifn)
         # Processes: CPU from cumulative cpu time deltas.
         procs = []
         args = {}
@@ -809,7 +854,9 @@ class MacCollector:
             pid = int(f[0])
             secs = parse_cputime(f[5])
             c = self.rate("p%d" % pid, secs, t)
-            procs.append([pid, int(f[1]), os.path.basename(f[6]), f[2], f[3], c, int(f[4]) * 1024 / GB, 0.0, 0.0, 0, args.get(pid, f[6]), "base", -1, [], []])
+            pn = mac_net.get(pid) or {}
+            procs.append([pid, int(f[1]), os.path.basename(f[6]), f[2], f[3], c, int(f[4]) * 1024 / GB, 0.0, 0.0, 0, args.get(pid, f[6]), "base", -1, [], [],
+                          sorted(pn.get("ifs", ())), self.rate("pn%d" % pid, pn.get("b", 0), t) / MB if pn else 0.0])
         if len(self.prev) > 20000:
             self.prev = {k: v for k, v in self.prev.items() if v[1] >= t - 30}
         # VMs: Virtualization.framework, QEMU and Parallels processes (Docker Desktop's VM is not a VM here).
@@ -1129,7 +1176,8 @@ class Fleet:
             else:
                 node = mid + "/base"
             out.append([p[0], p[2], p[3], p[4], round(p[5], 4), round(p[6], 5), round(p[7], 4), round(p[8], 2), p[9], p[10], node, p[1],
-                        p[12] if len(p) > 12 else -1, p[13] if len(p) > 13 else [], p[14] if len(p) > 14 else []])
+                        p[12] if len(p) > 12 else -1, p[13] if len(p) > 13 else [], p[14] if len(p) > 14 else [],
+                        p[15] if len(p) > 15 else [], round(p[16], 4) if len(p) > 16 else -1])
         return {"procs": out, "t": view["t"]}
 
     def api_cpus(self, mid):
@@ -1143,6 +1191,30 @@ class Fleet:
         return {"model": view.get("cpu_model", ""), "groups": view.get("groups", []),
                 "cpus": [{"n": c["n"], "mhz": c.get("mhz", 0), "core": c.get("core", ""), "pct": c["pct"],
                           "h": HIST.get("%s/__cpu/%d" % (mid, c["n"]), 1)[0]} for c in view.get("lcpus", [])]}
+
+    def api_ifs(self, mid):
+        m = self.machines.get(mid)
+        if not m:
+            return {"ifs": []}
+        with m.lock:
+            view = m.view
+        if not view:
+            return {"ifs": []}
+        vms = {}
+        for v in view.get("vms", []):
+            for i in v.get("ifs", []):
+                vms[i["if"]] = v["name"]
+        nets = {("docker0" if n["name"] == "bridge" else "br-" + n.get("id", "")[:12]): n["name"] for n in view.get("dockernets", []) if n.get("driver") == "bridge"}
+        nets.update({n["name"]: n["name"] for n in view.get("dockernets", []) if n.get("driver") in ("macvlan", "ipvlan")})
+        out = []
+        for x in view.get("ifs", []):
+            if x["kind"] == "loopback" or x["name"].startswith("veth") or x["name"] == "lo":
+                continue
+            hrx, htx = HIST.get("%s/__if/%s" % (mid, x["name"]), 2)
+            members = [y["name"] for y in view.get("ifs", []) if y.get("master") == x["name"]]
+            out.append(dict(x, hrx=hrx, htx=htx, vm=vms.get(x["name"], ""), dnet=nets.get(x["name"], ""),
+                            members=len([y for y in members if not y.startswith("veth")]), containers=len([y for y in members if y.startswith("veth")])))
+        return {"ifs": out, "per_process": True}
 
     def api_disks(self, mid):
         m = self.machines.get(mid)
@@ -1548,6 +1620,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return self.send_json(self.fleet.api_cpus(q.get("machine", [""])[0]))
         if u.path == "/api/net":
             return self.send_json(self.fleet.api_net())
+        if u.path == "/api/ifs":
+            return self.send_json(self.fleet.api_ifs(q.get("machine", [""])[0]))
         if u.path == "/api/disks":
             return self.send_json(self.fleet.api_disks(q.get("machine", [""])[0]))
         return super().do_GET()
