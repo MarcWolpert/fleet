@@ -22,6 +22,7 @@ METRICS = ("cpu", "mem", "gpu", "disk", "net")
 CONFIG_PATH = os.path.expanduser("~/.config/fleet/machines.toml")
 LAST_CLIENT = [0.0]   # when a Fleet window last asked for data
 PINS_PATH = os.path.expanduser("~/.config/fleet/pins.json")
+TILEPINS_PATH = os.path.expanduser("~/.config/fleet/tilepins.json")  # pinned tiles and CPU groups, per machine
 PINS_LOCK = threading.Lock()
 
 
@@ -32,6 +33,24 @@ def load_pins():
         return [p for p in pins if isinstance(p, str)][:40]
     except Exception:
         return []
+
+
+def load_tilepins():
+    try:
+        with open(TILEPINS_PATH) as f:
+            d = json.load(f)
+        return {str(k)[:200]: [str(x)[:200] for x in v][:200] for k, v in d.items() if isinstance(v, list)} if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def save_tilepins(d):
+    with PINS_LOCK:
+        os.makedirs(os.path.dirname(TILEPINS_PATH), exist_ok=True)
+        tmp = TILEPINS_PATH + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(d, f, indent=1)
+        os.replace(tmp, TILEPINS_PATH)
 
 
 def save_pins(pins):
@@ -1148,7 +1167,7 @@ class Fleet:
             if s:
                 machines.append(strip_procs(s))
         return {"t": time.time(), "interval": self.interval, "window_s": self.interval * H, "machines": machines,
-                "pins": load_pins()}
+                "pins": load_pins(), "tilepins": load_tilepins()}
 
     def find_machine(self, mid):
         return self.machines.get(mid)
@@ -1660,6 +1679,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 return self.send_json({"ok": True, "terminal": used, "title": title})
             except Exception as e:
                 return self.send_json({"ok": False, "error": str(e)[:300]})
+        if u.path == "/api/tilepins":
+            d = self.read_json()
+            if not isinstance(d, dict) or len(d) > 500 or not all(isinstance(v, list) and len(v) <= 200 for v in d.values()):
+                self.send_error(400)
+                return
+            save_tilepins({str(k)[:200]: [str(x)[:200] for x in v] for k, v in d.items() if v})
+            return self.send_json({"tilepins": load_tilepins()})
         if u.path == "/api/retry":
             d = self.read_json() or {}
             m = self.fleet.machines.get(str(d.get("machine", "")))

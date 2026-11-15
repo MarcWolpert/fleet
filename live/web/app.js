@@ -66,6 +66,7 @@ if (S.tree === 'pins'){ S.tree = 'machines'; S.pinsOnly = true; }  // pins-only 
 function save(){ try { const {hover, mx, my, ...keep} = S; localStorage.setItem('fleet-live-ui', JSON.stringify(keep)); } catch (e) {} }
 
 /* ---------- model ---------- */
+let TPINS = {};
 let DATA = null, PINS = [], WINDOW = 180, INTERVAL = 3, CPUS = {}, PROCS = {machine:null, list:[]}, NET = null, DISKS = {}, IFS = {};
 const nodes = {}, roots = [];
 const zero = () => new Array(H).fill(0);
@@ -543,20 +544,24 @@ function cpuSelCard(m){
 function ifToggle(){ return `<div class="seg" role="group" aria-label="Network graph"><button type="button" data-ifview="type" aria-pressed="${S.ifView!=='each'}">By type</button><button type="button" data-ifview="each" aria-pressed="${S.ifView==='each'}">Each interface</button></div>`; }
 function ifSel(m){ return S.ifSel && S.ifSel.mid === m.id ? S.ifSel.names : []; }
 function ifKind(x){ return x.vm ? 'VM tap · ' + x.vm : x.dnet ? 'Docker network · ' + x.dnet : x.kind === 'bridge' ? 'bridge' + (x.members ? ' · ' + x.members + ' member' + (x.members > 1 ? 's' : '') : '') + (x.containers ? ' · ' + x.containers + ' container' + (x.containers > 1 ? 's' : '') : '') : x.kind === 'physical' ? 'physical' : x.desc || x.kind; }
-function speedText(sp){ return /^\d+$/.test(String(sp)) && +sp > 0 ? (+sp >= 1000 ? (+sp / 1000) + ' Gb/s' : sp + ' Mb/s') : (sp && sp !== '-1' ? String(sp) : ''); }
+function speedText(sp){
+  if (/^\d+$/.test(String(sp))) return +sp > 0 ? (+sp >= 1000 ? (+sp / 1000) + ' Gb/s' : sp + ' Mb/s') : '';
+  const m = /^([\d.]+)\s*([GMK])bps$/i.exec(String(sp || ''));  // Windows: "10 Gbps"
+  return m ? (+m[1] > 0 ? m[1] + ' ' + m[2].toUpperCase() + 'b/s' : '') : (sp && sp !== '-1' ? String(sp) : '');
+}
 function ifEachCard(m){
   const D = IFS[m.id], sel = ifSel(m);
-  const head = `<div class="card-h"><h2>Each interface</h2><span class="sub">${D ? D.ifs.length + ' interfaces · click one to see what uses it' : 'loading…'}</span><span class="grow"></span>${ifToggle()}</div>`;
+  const head = `<div class="card-h"><h2>Each interface</h2><span class="sub">${D ? D.ifs.length + ' interfaces · click one to see what uses it' : 'loading…'}</span><span class="grow"></span>${sortMenu('net')}${ifToggle()}</div>`;
   if (!D) return `<section class="card">${head}</section>`;
   const order = {physical:0, bridge:1, virtual:2};
-  const tiles = D.ifs.slice().sort((a, b) => (order[a.kind] ?? 3) - (order[b.kind] ?? 3) || COLL.compare(a.name, b.name)).map(x => {
+  const tiles = D.ifs.slice().sort((a, b) => pinFirst('net', m.id, x => x.name)(a, b) || bySort('net')(a, b)).map(x => {
     const on = sel.includes(x.name), tot = x.hrx.map((v, i) => v + x.htx[i]), max = Math.max(0.001, ...tot) * 1.15;
     const pts = a => a.map((v, i) => `${(i/(H-1)*100).toFixed(1)},${(64 - v/max*58).toFixed(1)}`).join(' ');
     const down = x.state && /down|disconnected/i.test(x.state);
-    return `<button type="button" class="kcell${on ? ' sel' : ''}${down ? ' down' : ''}" data-isel="${esc(x.name)}" aria-pressed="${on}" aria-label="${esc(x.name)}, ${esc(ifKind(x))}">`
-      + `<span class="trow"><span class="kn">${esc(x.name)}</span><span class="kb">${esc(speedText(x.speed) || (down ? 'down' : ''))}</span></span>`
+    return `<div class="kcell${on ? ' sel' : ''}${down ? ' down' : ''}${tpinned('net', m.id, x.name) ? ' pinned' : ''}"><button type="button" class="tsel" data-isel="${esc(x.name)}" aria-pressed="${on}" aria-label="${esc(x.name)}, ${esc(ifKind(x))}"></button>`
+      + `<span class="trow"><span class="kn">${esc(x.name)}${tpinBtn('net', m.id, x.name)}</span><span class="kb">${down ? 'down' : esc(speedText(x.speed))}</span></span>`
       + `<span class="km">${esc(ifKind(x))}</span><span class="ks">${esc((x.addrs || []).slice(0, 2).join(' · ') || (x.master ? 'in ' + x.master : ''))}</span>`
-      + `<span class="kr"><i class="rd">↓ ${rateText(x.rx)}</i><i class="wr">↑ ${rateText(x.tx)}</i></span><svg viewBox="0 0 100 64" preserveAspectRatio="none" aria-hidden="true"><path d="M0,64L${pts(tot).split(' ').join('L')}L100,64Z" fill="var(--t-container)" fill-opacity=".25"/><polyline points="${pts(x.hrx)}" fill="none" stroke="var(--t-compose)" stroke-width="1.5" vector-effect="non-scaling-stroke"/><polyline points="${pts(x.htx)}" fill="none" stroke="var(--t-vm)" stroke-width="1.5" vector-effect="non-scaling-stroke"/></svg></button>`;
+      + `<span class="kr"><i class="rd">↓ ${rateText(x.rx)}</i><i class="wr">↑ ${rateText(x.tx)}</i></span><svg viewBox="0 0 100 64" preserveAspectRatio="none" aria-hidden="true"><path d="M0,64L${pts(tot).split(' ').join('L')}L100,64Z" fill="var(--t-container)" fill-opacity=".25"/><polyline points="${pts(x.hrx)}" fill="none" stroke="var(--t-compose)" stroke-width="1.5" vector-effect="non-scaling-stroke"/><polyline points="${pts(x.htx)}" fill="none" stroke="var(--t-vm)" stroke-width="1.5" vector-effect="non-scaling-stroke"/></svg></div>`;
   }).join('');
   return `<section class="card">${head}<div class="kgrid">${tiles}</div></section>`;
 }
@@ -578,21 +583,55 @@ function ifSelCard(m){
   }
   return card.replace(/<\/section>$/, `<h3 class="cpuproc">Using ${xs.length === 1 ? 'this interface' : 'these interfaces'}</h3>${list}</section>`);
 }
+// Pinned tiles (CPUs, CPU groups, GPUs, disks, interfaces) go first; stored by the server so they survive restarts.
+let tpinBusy = false;
+function tpinned(kind, mid, key){ return (TPINS[kind + '|' + mid] || []).includes(String(key)); }
+function tpinBtn(kind, mid, key, label){ const on = tpinned(kind, mid, key); return `<button type="button" class="tpin${on ? ' on' : ''}" data-tpin="${esc(kind + '|' + mid + '|' + key)}" aria-pressed="${on}" aria-label="${on ? 'Unpin' : 'Pin'} ${esc(label || key)} to the top" title="${on ? 'Unpin' : 'Pin to the top'}">${icon('pin')}</button>`; }
+const TILE_SORTS = {
+  net:[['kind', 'Kind'], ['name', 'Name'], ['traffic', 'Total traffic'], ['down', 'Download'], ['up', 'Upload'], ['speed', 'Speed']],
+  disk:[['name', 'Name'], ['busy', 'Busy'], ['read', 'Read'], ['write', 'Write'], ['total', 'Total'], ['size', 'Size']],
+  gpu:[['index', 'Index'], ['usage', 'Usage']],
+  cpu:[['number', 'Number'], ['usage', 'Usage'], ['clock', 'Clock']]
+};
+function tileSort(kind){ const v = (S.tileSort || {})[kind]; return TILE_SORTS[kind].some(o => o[0] === v) ? v : TILE_SORTS[kind][0][0]; }
+function sortMenu(kind){ const v = tileSort(kind); return `<label class="sortsel">Sort <select data-tilesort="${kind}" aria-label="Sort tiles by">${TILE_SORTS[kind].map(([k, l]) => `<option value="${k}"${k === v ? ' selected' : ''}>${l}</option>`).join('')}</select></label>`; }
+function bySort(kind){
+  const by = tileSort(kind), num = x => +x || 0, name = (a, b) => COLL.compare(String(a.name), String(b.name));
+  const order = {physical:0, bridge:1, virtual:2};
+  const f = {
+    net:{kind:(a, b) => (order[a.kind] ?? 3) - (order[b.kind] ?? 3) || name(a, b), name, traffic:(a, b) => (b.rx + b.tx) - (a.rx + a.tx) || name(a, b),
+         down:(a, b) => b.rx - a.rx || name(a, b), up:(a, b) => b.tx - a.tx || name(a, b), speed:(a, b) => num(b.speed) - num(a.speed) || name(a, b)},
+    disk:{name, busy:(a, b) => b.busy - a.busy || name(a, b), read:(a, b) => b.read - a.read || name(a, b), write:(a, b) => b.write - a.write || name(a, b),
+          total:(a, b) => (b.read + b.write) - (a.read + a.write) || name(a, b), size:(a, b) => b.size - a.size || name(a, b)},
+    gpu:{index:(a, b) => a[1] - b[1], usage:(a, b) => b[2] - a[2] || a[1] - b[1]},
+    cpu:{number:(a, b) => a.n - b.n, usage:(a, b) => b.pct - a.pct || a.n - b.n, clock:(a, b) => (b.mhz || 0) - (a.mhz || 0) || a.n - b.n}
+  };
+  return f[kind][by];
+}
+function pinFirst(kind, mid, keyOf){ return (a, b) => (tpinned(kind, mid, keyOf(b)) ? 1 : 0) - (tpinned(kind, mid, keyOf(a)) ? 1 : 0); }
+async function toggleTilePin(spec){
+  const [kind, mid, ...rest] = spec.split('|'), key = rest.join('|'), k = kind + '|' + mid;
+  const list = (TPINS[k] || []).slice(), i = list.indexOf(key);
+  if (i >= 0) list.splice(i, 1); else list.push(key);
+  TPINS = Object.assign({}, TPINS, {[k]:list}); tpinBusy = true; lastMainHTML = ''; renderMain();
+  try { const d = await api('/api/tilepins', TPINS); TPINS = d.tilepins || TPINS; } catch (e) { toast('Couldn’t save that pin'); }
+  tpinBusy = false;
+}
 function diskToggle(){ return `<div class="seg" role="group" aria-label="Disk graph"><button type="button" data-diskview="type" aria-pressed="${S.diskView!=='each'}">By type</button><button type="button" data-diskview="each" aria-pressed="${S.diskView==='each'}">Each disk</button></div>`; }
 function diskSel(m){ return S.diskSel && S.diskSel.mid === m.id ? S.diskSel.names : []; }
 function bytesText(b){ return b >= 1e12 ? (b / 1e12).toFixed(b >= 1e13 ? 0 : 1) + ' TB' : b >= 1e9 ? Math.round(b / 1e9) + ' GB' : b ? Math.round(b / 1e6) + ' MB' : ''; }
 function diskLabel(d){ return [d.role, d.model].filter(Boolean).join(' · ') || d.name; }
 function diskEachCard(m){
   const D = DISKS[m.id], sel = diskSel(m);
-  const head = `<div class="card-h"><h2>Each disk</h2><span class="sub">${D ? D.disks.length + ' disks · click one to see what uses it' : 'loading…'}</span><span class="grow"></span>${diskToggle()}</div>`;
+  const head = `<div class="card-h"><h2>Each disk</h2><span class="sub">${D ? D.disks.length + ' disks · click one to see what uses it' : 'loading…'}</span><span class="grow"></span>${sortMenu('disk')}${diskToggle()}</div>`;
   if (!D) return `<section class="card">${head}</section>`;
-  const tiles = D.disks.slice().sort((a, b) => COLL.compare(a.name, b.name)).map(d => {
+  const tiles = D.disks.slice().sort((a, b) => pinFirst('disk', m.id, x => x.name)(a, b) || bySort('disk')(a, b)).map(d => {
     const on = sel.includes(d.name), tot = d.hr.map((v, i) => v + d.hw[i]), max = Math.max(1, ...tot) * 1.15;
     const pts = a => a.map((v, i) => `${(i/(H-1)*100).toFixed(1)},${(64 - v/max*58).toFixed(1)}`).join(' ');
-    return `<button type="button" class="kcell${on ? ' sel' : ''}" data-dsel="${esc(d.name)}" aria-pressed="${on}" aria-label="${esc(d.name)}, ${esc(diskLabel(d))}">`
-      + `<span class="trow"><span class="kn">${esc(d.name)}</span><span class="kb">${d.busy >= 0 ? pct(d.busy) + ' busy' : ''}</span></span>`
+    return `<div class="kcell${on ? ' sel' : ''}${tpinned('disk', m.id, d.name) ? ' pinned' : ''}"><button type="button" class="tsel" data-dsel="${esc(d.name)}" aria-pressed="${on}" aria-label="${esc(d.name)}, ${esc(diskLabel(d))}"></button>`
+      + `<span class="trow"><span class="kn">${esc(d.name)}${tpinBtn('disk', m.id, d.name)}</span><span class="kb">${d.busy >= 0 ? pct(d.busy) + ' busy' : ''}</span></span>`
       + `<span class="km">${esc(diskLabel(d))}</span><span class="ks">${[bytesText(d.size), d.rot ? 'HDD' : 'SSD'].concat(d.mounts.slice(0, 2)).filter(Boolean).map(esc).join(' · ')}</span>`
-      + `<span class="kr"><i class="rd">↓ ${rateText(d.read)}</i><i class="wr">↑ ${rateText(d.write)}</i></span><svg viewBox="0 0 100 64" preserveAspectRatio="none" aria-hidden="true"><path d="M0,64L${pts(tot).split(' ').join('L')}L100,64Z" fill="var(--t-compose)" fill-opacity=".28"/><polyline points="${pts(d.hr)}" fill="none" stroke="var(--t-compose)" stroke-width="1.5" vector-effect="non-scaling-stroke"/><polyline points="${pts(d.hw)}" fill="none" stroke="var(--t-vm)" stroke-width="1.5" vector-effect="non-scaling-stroke"/></svg></button>`;
+      + `<span class="kr"><i class="rd">↓ ${rateText(d.read)}</i><i class="wr">↑ ${rateText(d.write)}</i></span><svg viewBox="0 0 100 64" preserveAspectRatio="none" aria-hidden="true"><path d="M0,64L${pts(tot).split(' ').join('L')}L100,64Z" fill="var(--t-compose)" fill-opacity=".28"/><polyline points="${pts(d.hr)}" fill="none" stroke="var(--t-compose)" stroke-width="1.5" vector-effect="non-scaling-stroke"/><polyline points="${pts(d.hw)}" fill="none" stroke="var(--t-vm)" stroke-width="1.5" vector-effect="non-scaling-stroke"/></svg></div>`;
   }).join('');
   return `<section class="card">${head}<div class="kgrid">${tiles}</div></section>`;
 }
@@ -620,14 +659,14 @@ function gpuSel(m){ return S.gpuSel && S.gpuSel.mid === m.id ? S.gpuSel.keys.fil
 function gpuHist(m, key){ return (m.gseries && m.gseries[key]) || zero(); }
 function gpuEachCard(m){
   const sel = gpuSel(m);
-  const cells = m.gpus.map((g, gi) => {
+  const cells = m.gpus.map((g, gi) => [g, gi, gpuHist(m, g.key)[H-1]]).sort((a, b) => pinFirst('gpu', m.id, x => x[0].key)(a, b) || bySort('gpu')(a, b)).map(([g, gi]) => {
     const h = gpuHist(m, g.key), now = h[H-1], on = sel.includes(g.key);
     const pts = h.map((v, i) => `${(i/(H-1)*100).toFixed(1)},${(80 - Math.min(v, 100)/100*74).toFixed(1)}`);
-    return `<button type="button" class="gcell${on ? ' sel' : ''}" data-gsel="${esc(g.key)}" aria-pressed="${on}" aria-label="GPU ${gi}, ${esc(g.name)}, ${Math.round(now)}%">`
-      + `<span class="trow"><span class="gk">GPU ${gi}</span><span class="gv">${pct(now)}</span></span><span class="gn">${esc(g.name)}</span><span class="gm">${esc(g.mem || '')}${g.host ? ' · on host ' + esc(g.host.replace('gpu', 'GPU ')) : ''}</span>`
-      + `<svg viewBox="0 0 100 80" preserveAspectRatio="none" aria-hidden="true"><path d="M0,80L${pts.join('L')}L100,80Z" fill="var(--accent-bg)" fill-opacity=".35"/><polyline points="${pts.join(' ')}" fill="none" stroke="var(--accent)" stroke-width="1.6" vector-effect="non-scaling-stroke"/></svg></button>`;
+    return `<div class="gcell${on ? ' sel' : ''}${tpinned('gpu', m.id, g.key) ? ' pinned' : ''}"><button type="button" class="tsel" data-gsel="${esc(g.key)}" aria-pressed="${on}" aria-label="GPU ${gi}, ${esc(g.name)}, ${Math.round(now)}%"></button>`
+      + `<span class="trow"><span class="gk">GPU ${gi}${tpinBtn('gpu', m.id, g.key, 'GPU ' + gi)}</span><span class="gv">${pct(now)}</span></span><span class="gn">${esc(g.name)}</span><span class="gm">${esc(g.mem || '')}${g.host ? ' · on host ' + esc(g.host.replace('gpu', 'GPU ')) : ''}</span>`
+      + `<svg viewBox="0 0 100 80" preserveAspectRatio="none" aria-hidden="true"><path d="M0,80L${pts.join('L')}L100,80Z" fill="var(--accent-bg)" fill-opacity=".35"/><polyline points="${pts.join(' ')}" fill="none" stroke="var(--accent)" stroke-width="1.6" vector-effect="non-scaling-stroke"/></svg></div>`;
   }).join('');
-  return `<section class="card"><div class="card-h"><h2>Each GPU</h2><span class="sub">${m.gpus.length} GPU${m.gpus.length > 1 ? 's' : ''} · click one to see what runs on it</span><span class="grow"></span>${gpuToggle()}</div><div class="ggrid">${cells}</div></section>`;
+  return `<section class="card"><div class="card-h"><h2>Each GPU</h2><span class="sub">${m.gpus.length} GPU${m.gpus.length > 1 ? 's' : ''} · click one to see what runs on it</span><span class="grow"></span>${m.gpus.length > 1 ? sortMenu('gpu') : ''}${gpuToggle()}</div><div class="ggrid">${cells}</div></section>`;
 }
 function gpuSelCard(m){
   if (!m.gpus.length) return '';
@@ -650,21 +689,21 @@ function gpuSelCard(m){
 function cpuToggle(){ return `<div class="seg" role="group" aria-label="CPU graph"><button type="button" data-cpuview="type" aria-pressed="${S.cpuView==='type'}">By type</button><button type="button" data-cpuview="logical" aria-pressed="${S.cpuView==='logical'}">Logical processors</button></div>`; }
 function logicalCard(m){
   const d = CPUS[m.id];
-  const head = `<div class="card-h"><h2>Logical processors</h2><span class="sub">${esc(m.cpu_model || '')}${d ? ' · ' + d.cpus.length + ' processors' : ''}</span><span class="grow"></span>${cpuToggle()}</div>`;
+  const head = `<div class="card-h"><h2>Logical processors</h2><span class="sub">${esc(m.cpu_model || '')}${d ? ' · ' + d.cpus.length + ' processors' : ''}</span><span class="grow"></span>${sortMenu('cpu')}${cpuToggle()}</div>`;
   if (!d || !d.cpus) return `<section class="card">${head}<div class="sub">Loading…</div></section>`;
   const byN = {}; d.cpus.forEach(c => { byN[c.n] = c; });
   const sel = cpuSel(m);
-  const groups = (d.groups && d.groups.length ? d.groups : [{name:'All processors', cpus:d.cpus.map(c => c.n)}]);
+  const groups = (d.groups && d.groups.length ? d.groups : [{name:'All processors', cpus:d.cpus.map(c => c.n)}]).map((g, i) => [g, i]).sort((a, b) => pinFirst('cpugroup', m.id, x => x[0].name)(a, b) || a[1] - b[1]).map(x => x[0]);
   const html = groups.map(g => {
     const cs = g.cpus.map(n => byN[n]).filter(Boolean);
     const avg = cs.reduce((s, c) => s + c.pct, 0) / (cs.length || 1);
-    const cells = cs.map(c => {
+    const cells = cs.slice().sort((a, b) => pinFirst('cpu', m.id, c => c.n)(a, b) || bySort('cpu')(a, b)).map(c => {
       const max = 100, pts = c.h.map((v, i) => `${(i/(H-1)*100).toFixed(1)},${(56 - Math.min(v, max)/max*52).toFixed(1)}`);
       const on = sel.includes(c.n);
-      return `<button type="button" class="lcell${on ? ' sel' : ''}" data-lcpu="${c.n}" aria-pressed="${on}" aria-label="CPU ${c.n}, ${Math.round(c.pct)}%" data-tip="lcpu|${esc(m.id)}|${c.n}"><span class="trow"><span class="lt">CPU ${c.n}</span><span class="lv">${Math.round(c.pct)}%</span></span><span class="lm">${c.mhz ? (c.mhz/1000).toFixed(2) + ' GHz' : '&nbsp;'}</span><svg viewBox="0 0 100 56" preserveAspectRatio="none" aria-hidden="true"><path d="M0,56L${pts.join('L')}L100,56Z" fill="var(--accent-bg)" fill-opacity=".35"/><polyline points="${pts.join(' ')}" fill="none" stroke="var(--accent)" stroke-width="1.4" vector-effect="non-scaling-stroke"/></svg></button>`;
+      return `<div class="lcell${on ? ' sel' : ''}${tpinned('cpu', m.id, c.n) ? ' pinned' : ''}"><button type="button" class="tsel" data-lcpu="${c.n}" aria-pressed="${on}" aria-label="CPU ${c.n}, ${Math.round(c.pct)}%" data-tip="lcpu|${esc(m.id)}|${c.n}"></button><span class="trow"><span class="lt">CPU ${c.n}${tpinBtn('cpu', m.id, c.n, 'CPU ' + c.n)}</span><span class="lv">${Math.round(c.pct)}%</span></span><span class="lm">${c.mhz ? (c.mhz/1000).toFixed(2) + ' GHz' : '&nbsp;'}</span><svg viewBox="0 0 100 56" preserveAspectRatio="none" aria-hidden="true"><path d="M0,56L${pts.join('L')}L100,56Z" fill="var(--accent-bg)" fill-opacity=".35"/><polyline points="${pts.join(' ')}" fill="none" stroke="var(--accent)" stroke-width="1.4" vector-effect="non-scaling-stroke"/></svg></div>`;
     }).join('');
     const gsel = cs.length && cs.every(c => sel.includes(c.n));
-    return `<div><div class="lgh"><button type="button" class="lgbtn${gsel ? ' sel' : ''}" data-lgroup="${esc(g.cpus.join(','))}" aria-pressed="${gsel}" title="Show this group on its own">${esc(g.name)}</button><span>${cs.length} processors</span><span>average ${pct(avg)}</span></div><div class="lgrid">${cells}</div></div>`;
+    return `<div><div class="lgh"><button type="button" class="lgbtn${gsel ? ' sel' : ''}" data-lgroup="${esc(g.cpus.join(','))}" aria-pressed="${gsel}" title="Show this group on its own">${esc(g.name)}</button>${tpinBtn('cpugroup', m.id, g.name)}<span>${cs.length} processors</span><span>average ${pct(avg)}</span></div><div class="lgrid">${cells}</div></div>`;
   }).join('');
   return `<section class="card">${head}<div class="lgroups">${html}</div></section>`;
 }
@@ -1106,6 +1145,7 @@ function select(id){
   save(); renderAll(); refreshNow();
 }
 document.addEventListener('click', e => {
+  const tp = e.target.closest('[data-tpin]'); if (tp){ e.stopPropagation(); toggleTilePin(tp.dataset.tpin); return; }
   const ap = e.target.closest('[data-addpin]'); if (ap){ PICK.open ? closePicker(false) : openPicker(); return; }
   const st = e.target.closest('[data-settings]'); if (st){ openSettings(); return; }
   const tm = e.target.closest('[data-terminal]'); if (tm){ const n = nodes[tm.dataset.terminal]; api('/api/terminal', {node:tm.dataset.terminal}).then(r => toast(r.ok ? `Opened ${r.title} in ${r.terminal}` : (r.error || 'Couldn’t open a terminal'))).catch(() => toast('Couldn’t reach Fleet')); return; }
@@ -1171,7 +1211,10 @@ $('picker').addEventListener('keydown', e => {
   if (e.key === 'Escape'){ e.preventDefault(); closePicker(true); }
   if (e.key === 'Enter' && e.target.id === 'pickq'){ const first = $('picklist').querySelector('[data-pin]'); if (first){ e.preventDefault(); togglePin(first.dataset.pin); } }
 });
-document.addEventListener('change', e => { if (e.target.id === 'pgroup'){ S.group = e.target.value; save(); renderMain(); } });
+document.addEventListener('change', e => {
+  if (e.target.id === 'pgroup'){ S.group = e.target.value; save(); renderMain(); }
+  if (e.target.dataset && e.target.dataset.tilesort){ S.tileSort = Object.assign({}, S.tileSort, {[e.target.dataset.tilesort]:e.target.value}); save(); lastMainHTML = ''; renderMain(); }
+});
 document.addEventListener('toggle', e => { if (e.target.classList && e.target.classList.contains('state-raw')){ S.rawOpen = e.target.open; } }, true);
 
 /* ---------- polling ---------- */
@@ -1182,7 +1225,7 @@ async function refreshNow(){
   try {
     const r = await fetch('/api/fleet', {cache:'no-store'});
     DATA = await r.json();
-    INTERVAL = DATA.interval || 3; WINDOW = DATA.window_s || INTERVAL * H; PINS = DATA.pins || [];
+    INTERVAL = DATA.interval || 3; WINDOW = DATA.window_s || INTERVAL * H; PINS = DATA.pins || []; if (!tpinBusy) TPINS = DATA.tilepins || {};
     build(DATA);
     if (S.sel !== 'fleet' && !nodes[S.sel]) { /* keep selection; it may come back */ }
     const n = S.sel === 'fleet' ? null : nodes[S.sel];
