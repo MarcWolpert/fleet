@@ -834,7 +834,7 @@ class Fleet:
         cfg = m.cfg
         mid = m.id
         spec = {"id": mid, "name": m.name, "tile": cfg.get("tile", "vm" if cfg.get("vm_on") else "terminal"), "status": status,
-                "error": error, "os": cfg.get("os_label", ""), "agent": "local" if cfg.get("kind") == "local" else "ssh " + cfg.get("ssh", ""),
+                "error": error, "os": cfg.get("os_label") or {"windows": "Windows", "linux": "Linux"}.get(cfg.get("os", ""), ""), "agent": "local" if cfg.get("kind") == "local" else "ssh " + cfg.get("ssh", ""),
                 "cronLabel": "Cron jobs", "gpus": [], "cap": [1, 1, 0, 1, 1], "procs": [], "baseCron": [], "compose": [], "containers": [], "vms": []}
         if view is None:
             if vm_hostside is not None:
