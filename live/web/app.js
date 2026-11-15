@@ -222,8 +222,8 @@ function pickCandidates(){
   (function w(list, d, path){ list.forEach(n => {
     if (n.kind === 'cron' || n.kind === 'cronfolder') return;
     out.push({n, d, path});
-    w(n.children, d + 1, path.concat(n.name));
-  }); })(roots, 0, []);
+    w(orderedKids(n), d + 1, path.concat(n.name));
+  }); })(sortedRoots(), 0, []);
   return out;
 }
 function renderPickerList(){
@@ -295,11 +295,17 @@ function rowVal(n){
   if (n.kind === 'machine' && n.status !== 'ok' && n.status !== 'hostonly') return statusText(n);
   return pct(n.kind === 'machine' && !n.parent ? cur(n, S.metric) / capOf(n, S.metric) * 100 : shareOfHost(n, S.metric));
 }
-function treeRoots(){ return S.space === 'fleet' ? roots : (nodes[S.space] ? [nodes[S.space]] : roots); }
+// Tree order: alphabetical (case-insensitive, natural numbers), pinned items first.
+// A machine's own groups (Base system, Compose, Containers, VMs) keep their fixed order.
+const COLL = new Intl.Collator(undefined, {numeric:true, sensitivity:'base'});
+function cmpNodes(a, b){ const pa = PINS.includes(a.id), pb = PINS.includes(b.id); if (pa !== pb) return pa ? -1 : 1; return COLL.compare(a.name, b.name); }
+function orderedKids(n){ return n.kind === 'machine' ? n.children : n.children.slice().sort(cmpNodes); }
+function sortedRoots(){ return roots.slice().sort(cmpNodes); }
+function treeRoots(){ return S.space === 'fleet' ? sortedRoots() : (nodes[S.space] ? [nodes[S.space]] : sortedRoots()); }
 function renderTree(){
   if (S.tree === 'network') return renderNetTree();
   const rows = [];
-  (function walkRows(list, d){ list.forEach(n => { rows.push({n, d}); if (n.children.length && isOpen(n)) walkRows(n.children, d + 1); }); })(treeRoots(), 0);
+  (function walkRows(list, d){ list.forEach(n => { rows.push({n, d}); if (n.children.length && isOpen(n)) walkRows(orderedKids(n), d + 1); }); })(treeRoots(), 0);
   $('tree').innerHTML = rows.map(({n, d}) => {
     const kids = n.children.length > 0, open = kids && isOpen(n);
     const count = (n.kind === 'group' || n.kind === 'cronfolder' || n.kind === 'project') ? `<span class="count">${n.children.length}</span>` : '';
@@ -353,10 +359,11 @@ function buildNet(){
         n.children.push(mkn('net:c:' + m.id + ':' + c.name, {name:c.name, kind:'ncontainer', rx:c.net, tx:0, dnet:n.dnet}));
       });
     });
-    const order = {physical:0, bridge:1, virtual:2};
-    mn.children.sort((a, b) => (order[a.ifkind] ?? 3) - (order[b.ifkind] ?? 3) || (b.rx + b.tx) - (a.rx + a.tx));
+    mn.children.sort((a, b) => COLL.compare(a.name, b.name));
+    Object.values(ifn).forEach(x => x.children.sort((a, b) => COLL.compare(a.name, b.name)));
     root.rx += mn.rx; root.tx += mn.tx;
   });
+  root.children.sort((a, b) => COLL.compare(a.name, b.name));
   return [root];
 }
 function netOpen(n){ return S.open[n.id] !== undefined ? S.open[n.id] : (n.kind === 'tailnet' || (n.kind === 'nmachine' && n.status === 'ok' && n.children.length < 12)); }
@@ -442,7 +449,7 @@ function tableCard(title, sub, list){
   return `<section class="card"><div class="card-h"><h2>${title}</h2><span class="sub">${sub}</span></div><div class="scroll-x"><table class="tbl"><thead><tr><th>Name</th>${METRICS.map(m => `<th>${m.label}</th>`).join('')}<th>Share of host · ${mlabel(S.metric)}</th></tr></thead><tbody>${rows}</tbody></table></div></section>`;
 }
 function cronTableCard(folder, title){
-  const rows = folder.children.map(n => `<tr><td><button type="button" class="namebtn" data-select="${esc(n.id)}"><span class="ico" style="color:var(--ink-3)">${icon('clock')}</span>${esc(n.name)}</button></td><td class="l"><code>${esc(n.job.sched)}</code>${n.job.human && n.job.human !== n.job.sched ? ' · ' + esc(n.job.human) : ''}</td><td class="l"><span class="pill${n.running?' on':''}"><i></i>${n.running ? 'running' : esc(n.job.state || 'idle')}</span></td>`
+  const rows = orderedKids(folder).map(n => `<tr><td><button type="button" class="namebtn" data-select="${esc(n.id)}"><span class="ico" style="color:var(--ink-3)">${icon('clock')}</span>${esc(n.name)}</button></td><td class="l"><code>${esc(n.job.sched)}</code>${n.job.human && n.job.human !== n.job.sched ? ' · ' + esc(n.job.human) : ''}</td><td class="l"><span class="pill${n.running?' on':''}"><i></i>${n.running ? 'running' : esc(n.job.state || 'idle')}</span></td>`
     + METRICS.map(m => `<td>${!n.running ? '—' : m.id === 'gpu' ? gpuCell(n) : fmt(cur(n, m.id), m.id)}</td>`).join('') + `<td class="l">${esc(n.job.last || '')}</td></tr>`).join('');
   return `<section class="card"><div class="card-h"><h2>${title}</h2><span class="sub">usage shows while a job runs</span></div><div class="scroll-x"><table class="tbl"><thead><tr><th>Job</th><th style="text-align:left">Schedule</th><th style="text-align:left">Status</th>${METRICS.map(m => `<th>${m.label}</th>`).join('')}<th style="text-align:left">Last / next</th></tr></thead><tbody>${rows}</tbody></table></div></section>`;
 }
@@ -486,7 +493,7 @@ function fleetView(){
   const stat = m => ({k:mlabel(m), v:pct(sumv(c.bt(m)) / c.cap(m) * 100), s:`${fmt(sumv(c.bt(m)), m)} of ${capText(c.cap(m), m)}`});
   const series = typeSeries(i => c.bt(S.metric, i));
   const fleetUsed = sumv(c.bt(S.metric));
-  const mrows = roots.map(r => {
+  const mrows = sortedRoots().map(r => {
     const bt = byType(r, S.metric), used = sumv(bt), cap = capOf(r, S.metric);
     const den = S.mode === 'cap' ? cap : (used || 1);
     const off = r.status !== 'ok';
@@ -507,7 +514,7 @@ function machineView(m){
   if (host && ok) stats.push({k:'of host ' + mlabel(S.metric), v:pct(shareOfHost(m, S.metric)), s:esc(host.name)});
   const series = typeSeries(i => byType(m, S.metric, i));
   const list = [];
-  m.children.forEach(c => { list.push({n:c, d:0}); if (c.kind === 'group') c.children.forEach(cc => list.push({n:cc, d:1})); });
+  m.children.forEach(c => { list.push({n:c, d:0}); if (c.kind === 'group') orderedKids(c).forEach(cc => list.push({n:cc, d:1})); });
   const facts = [m.os, m.cpu_model, m.ncpu ? `${m.ncpu} logical CPUs` : '', capOf(m, 'mem') > 1 ? `${Math.round(capOf(m, 'mem'))} GB RAM` : ''].concat(m.gpus.map((g, i) => `GPU ${i}: ${g.name}`), [m.agent, m.uptime ? `up ${m.uptime}` : '', host ? `VM on ${host.name}` : '']).filter(Boolean);
   const pinned = PINS.includes(m.id);
   const head = `<div class="hero">${heroMachineTile(m)}<div><h1>${esc(m.name)} <i class="sdot ${m.status}" style="display:inline-block;vertical-align:middle"></i></h1><div class="facts">${facts.map(f => `<span>${esc(f)}</span>`).join('')}</div></div>${heroStats(stats)}<button type="button" class="btn${pinned ? ' on' : ''}" data-pin="${esc(m.id)}" aria-pressed="${pinned}">${icon('pin')}${pinned ? 'Pinned' : 'Pin as space'}</button></div>`;
@@ -528,7 +535,7 @@ function groupView(n){
   const kindLabel = n.kind === 'project' ? `Compose project · ${n.children.length} services` : `${n.name} · ${n.children.length}`;
   const ranks = kids.slice(0, 40).map(k => { const v = cur(k, S.metric); return `<button type="button" class="namebtn" data-select="${esc(k.id)}"><span class="ico" style="color:${colOf(k)}">${icon(iconOf(k))}</span>${esc(k.name)}</button><div class="track"><div class="bar" style="width:${(v/max*100).toFixed(2)}%;background:${TCOL[n.type]}" data-tip="child|${esc(k.id)}|${S.metric}"></div></div><div class="tot">${pct(v/capOf(host, S.metric)*100)}<small>${fmt(v, S.metric)} · ${pct(v/(total||1)*100)} of ${esc(n.name)}</small></div>`; }).join('');
   const list = [];
-  n.children.forEach(c => { list.push({n:c, d:0}); if (c.kind === 'project') c.children.forEach(cc => list.push({n:cc, d:1})); });
+  orderedKids(n).forEach(c => { list.push({n:c, d:0}); if (c.kind === 'project') orderedKids(c).forEach(cc => list.push({n:cc, d:1})); });
   const series = [{label:n.name, color:TCOL[n.type], data:n.series[S.metric]}];
   const facts = [kindLabel, `on ${host.name}`].concat(n.meta && n.meta.file ? [n.meta.file] : []).concat([`${cronCount(n)} scheduled jobs`]);
   const pinned = PINS.includes(n.id);
