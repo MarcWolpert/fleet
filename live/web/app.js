@@ -28,6 +28,15 @@ const IC = {
   pin:'<path d="M9 3.5h6l-1 5 3 3v1.5H7V11.5l3-3z"/><path d="M12 13v7.5"/>',
   x:'<path d="M6 6l12 12M18 6L6 18"/>',
   plus:'<path d="M12 5v14M5 12h14"/>',
+  gear:'<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
+  key:'<circle cx="8" cy="15" r="4"/><path d="M10.8 12.2L19 4M15.5 7.5l2.5 2.5M18 5l2 2"/>',
+  lock:'<rect x="5" y="11" width="14" height="9.5" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>',
+  wifi:'<path d="M2.5 9a14 14 0 0 1 19 0M5.5 12.5a9.5 9.5 0 0 1 13 0M8.8 16a4.8 4.8 0 0 1 6.4 0"/><path d="M12 19.5h.01"/>',
+  power:'<path d="M12 3.5v8"/><path d="M6.3 7a8 8 0 1 0 11.4 0"/>',
+  search2:'<circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5M8.5 11h5"/>',
+  refresh:'<path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4.5V11h-6.5"/>',
+  check:'<path d="M5 12.5l4.5 4.5L19 7.5"/>',
+  trash:'<path d="M4.5 7h15M10 11v6M14 11v6M6.5 7l1 12.5a2 2 0 0 0 2 1.8h5a2 2 0 0 0 2-1.8l1-12.5M9.5 7V4.5h5V7"/>',
   search:'<circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/>',
   net:'<circle cx="12" cy="5.5" r="2.5"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/><path d="M12 8v4M12 12l-5 4.5M12 12l5 4.5"/>',
   nic:'<rect x="3" y="7" width="18" height="10" rx="1.5"/><path d="M7 17v2.5M11 17v2.5M15 17v2.5M7 10.5h4"/>',
@@ -67,7 +76,8 @@ function machineFrom(s, isVm){
   const cap = (s.cap || [1,1,0,1,1]).slice(); cap[MI.gpu] = 100 * gpus.length;
   const m = mk(s.id, {name:s.name, kind:'machine', type:isVm ? 'vm' : 'machine', cap, gpus, gmap:Object.fromEntries(gpus.map(g => [g.key, g.host || null])),
     os:s.os || '', tile:s.tile || 'vm', agent:s.agent || '', uptime:s.uptime || '', note:s.note, status:s.status || 'ok', error:s.error || '',
-    cronLabel:s.cronLabel || 'Cron jobs', cpu_model:s.cpu_model || '', ncpu:s.ncpu || cap[0], groups:s.groups || [], hostside:s.hostside});
+    cronLabel:s.cronLabel || 'Cron jobs', cpu_model:s.cpu_model || '', ncpu:s.ncpu || cap[0], groups:s.groups || [], hostside:s.hostside,
+    ssh:s.ssh || '', hasData:s.has_data !== false || s.status === 'hostonly', lastOk:s.last_ok || 0});
   const gks = g => (g || []).filter(k => gpus.some(x => x.key === k));
   const b = attach(m, leaf(s.base.id, 'Base system', 'base', 'base', s.base.h));
   b.gk = gks(s.base.g);
@@ -129,7 +139,7 @@ function byType(m, metric, i){ const o = {base:0, compose:0, container:0, vm:0};
 function ctxOf(key){
   if (key === 'fleet') return {name:'All machines',
     bt:(metric, i) => { const o = {base:0, compose:0, container:0, vm:0}; roots.forEach(r => { const b = byType(r, metric, i); for (const k in o) o[k] += b[k]; }); return o; },
-    cap:metric => roots.filter(r => r.status === 'ok').reduce((s, r) => s + capOf(r, metric), 0)};
+    cap:metric => roots.filter(r => hasData(r)).reduce((s, r) => s + capOf(r, metric), 0)};
   const m = nodes[key];
   return {name:m.name, bt:(metric, i) => byType(m, metric, i), cap:metric => capOf(m, metric)};
 }
@@ -176,14 +186,22 @@ function legendHTML(withFree){ return `<div class="legend">${TYPES.map(t => `<sp
 function modeSeg(){ return `<div class="seg" role="group" aria-label="Show percentages of"><button type="button" data-mode="cap" aria-pressed="${S.mode==='cap'}">of capacity</button><button type="button" data-mode="used" aria-pressed="${S.mode==='used'}">of what’s in use</button></div>`; }
 function noteHTML(html, cls){ return `<div class="${cls || 'note'}">${icon('info')}<div>${html}</div></div>`; }
 function heroStats(list){ return `<div class="hero-stats">${list.map(s => `<div class="hs"><div class="k">${s.k}</div><div class="v">${s.v}</div><div class="s">${s.s}</div></div>`).join('')}</div>`; }
-function statusText(n){ return n.status === 'ok' ? 'live' : n.status === 'off' ? 'off' : n.status === 'hostonly' ? 'seen from host' : n.status === 'connecting' ? 'connecting' : 'offline'; }
+// A machine with data keeps showing it while it reconnects ("stale"); only a machine that never
+// reported gets the offline card. Status changes never swap the layout.
+function isLive(n){ return n.status === 'ok'; }
+function hasData(n){ return n.kind !== 'machine' || n.hasData || n.status === 'ok' || n.status === 'hostonly'; }
+function isStale(n){ return n.kind === 'machine' && n.status !== 'ok' && n.status !== 'hostonly' && n.hasData; }
+function staleFor(n){ return n.lastOk ? Math.max(0, Date.now() / 1000 - n.lastOk) : 0; }
+function statusClass(n){ return isLive(n) ? 'ok' : n.status === 'hostonly' ? 'hostonly' : isStale(n) ? 'stale' : n.status === 'off' ? 'off' : n.status === 'connecting' ? 'connecting' : 'offline'; }
+function statusText(n){ return n.status === 'ok' ? 'live' : n.status === 'off' ? 'off' : n.status === 'hostonly' ? 'seen from host' : isStale(n) ? 'reconnecting' : n.status === 'connecting' ? 'connecting' : 'offline'; }
+function stalePill(n){ return isStale(n) ? `<span class="spill" title="Showing the last reading until ${esc(n.name)} answers again">reconnecting · ${ago(staleFor(n)).replace(' ago', '')}</span>` : ''; }
 function pinBtn(id){ const on = PINS.includes(id); return `<button type="button" class="pinbtn${on ? ' on' : ''}" data-pin="${esc(id)}" aria-pressed="${on}" aria-label="${on ? 'Unpin' : 'Pin'} ${esc(nodes[id] ? nodes[id].name : id)} as a space" title="${on ? 'Unpin from the space bar' : 'Pin to the space bar'}">${icon('pin')}</button>`; }
 
 /* ---------- spaces (All machines + pins) ---------- */
 function pillPct(key){
   if (key === 'fleet'){ const c = ctxOf('fleet'); return pct(sumv(c.bt(S.metric)) / c.cap(S.metric) * 100); }
   const n = nodes[key]; if (!n) return '';
-  if (n.kind === 'machine' && n.status !== 'ok' && n.status !== 'hostonly') return statusText(n);
+  if (n.kind === 'machine' && !hasData(n)) return statusText(n);
   return pct(n.kind === 'machine' && !n.parent ? cur(n, S.metric) / capOf(n, S.metric) * 100 : shareOfHost(n, S.metric));
 }
 function miniBar(key){
@@ -292,7 +310,7 @@ function isOpen(n){
   return n.kind === 'group' && n.type === 'vm';
 }
 function rowVal(n){
-  if (n.kind === 'machine' && n.status !== 'ok' && n.status !== 'hostonly') return statusText(n);
+  if (n.kind === 'machine' && !hasData(n)) return statusText(n);
   return pct(n.kind === 'machine' && !n.parent ? cur(n, S.metric) / capOf(n, S.metric) * 100 : shareOfHost(n, S.metric));
 }
 // Tree order: alphabetical (case-insensitive, natural numbers), pinned items first.
@@ -301,7 +319,10 @@ const COLL = new Intl.Collator(undefined, {numeric:true, sensitivity:'base'});
 function cmpNodes(a, b){ const pa = PINS.includes(a.id), pb = PINS.includes(b.id); if (pa !== pb) return pa ? -1 : 1; return COLL.compare(a.name, b.name); }
 function orderedKids(n){ return n.kind === 'machine' ? n.children : n.children.slice().sort(cmpNodes); }
 function sortedRoots(){ return roots.slice().sort(cmpNodes); }
-function treeRoots(){ return S.space === 'fleet' ? sortedRoots() : (nodes[S.space] ? [nodes[S.space]] : sortedRoots()); }
+function treeRoots(){
+  if (S.tree === 'pins') return PINS.map(id => nodes[id]).filter(Boolean).sort((a, b) => COLL.compare(a.name, b.name));
+  return S.space === 'fleet' ? sortedRoots() : (nodes[S.space] ? [nodes[S.space]] : sortedRoots());
+}
 function renderTree(){
   if (S.tree === 'network') return renderNetTree();
   const rows = [];
@@ -309,19 +330,20 @@ function renderTree(){
   $('tree').innerHTML = rows.map(({n, d}) => {
     const kids = n.children.length > 0, open = kids && isOpen(n);
     const count = (n.kind === 'group' || n.kind === 'cronfolder' || n.kind === 'project') ? `<span class="count">${n.children.length}</span>` : '';
-    const dot = n.kind === 'cron' ? `<i class="dot${n.running?' on':''}" data-dot="${esc(n.id)}" title="running now"></i>` : n.kind === 'machine' ? `<i class="sdot ${n.status}" title="${statusText(n)}"></i>` : '';
+    const dot = n.kind === 'cron' ? `<i class="dot${n.running?' on':''}" data-dot="${esc(n.id)}" title="running now"></i>` : n.kind === 'machine' ? `<i class="sdot ${statusClass(n)}" data-sdot="${esc(n.id)}" title="${statusText(n)}"></i>` : '';
     const gw = S.metric === 'gpu' && n.parent && hostOf(n).gpus.length > 1 ? whichGpu(n) : '';
     const gtag = gw ? `<span class="gtag" title="${esc(whichGpuLong(n))}">${gw}</span>` : '';
-    const st = n.kind === 'machine' ? ' ' + n.status : '';
+    const st = n.kind === 'machine' ? ' ' + statusClass(n) : '';
     const pin = (n.kind === 'machine' || n.kind === 'project' || n.kind === 'service' || n.kind === 'container' || n.kind === 'group') ? pinBtn(n.id) : '<span style="width:22px;flex:none"></span>';
     return `<div class="row ${n.kind}${st}${S.sel===n.id?' sel':''}" style="--d:${d}" role="treeitem" aria-level="${d+1}" ${kids?`aria-expanded="${open}"`:''} aria-selected="${S.sel===n.id}" data-select="${esc(n.id)}">`
       + `<button type="button" class="chev${open?' open':''}${kids?'':' leaf'}" ${kids?`data-toggle="${esc(n.id)}" aria-label="${open?'Collapse':'Expand'} ${esc(n.name)}"`:'tabindex="-1" aria-hidden="true"'}>${icon('chev', 2.4)}</button>`
       + `<span class="ico" style="color:${n.kind==='cronfolder'||n.kind==='cron'?'var(--ink-3)':colOf(n)}">${icon(iconOf(n))}</span>`
       + `<button type="button" class="nm" data-select="${esc(n.id)}">${esc(n.name)}</button>${count}${gtag}${dot}${pin}`
       + `<svg class="spark" data-spark="${esc(n.id)}" viewBox="0 0 60 16" preserveAspectRatio="none" aria-hidden="true"><polyline points="${sparkPts(n.series[S.metric], 60, 16)}" fill="none" stroke="${n.kind==='machine'&&!n.parent?'var(--accent)':colOf(n)}" stroke-width="1.5" vector-effect="non-scaling-stroke" stroke-linejoin="round"/></svg>`
-      + `<span class="val${n.kind === 'machine' && n.status !== 'ok' ? ' dim' : ''}" data-val="${esc(n.id)}" title="share of host ${mlabel(S.metric)}">${rowVal(n)}</span></div>`;
+      + `<span class="val${n.kind === 'machine' && !isLive(n) ? ' dim' : ''}" data-val="${esc(n.id)}" title="share of host ${mlabel(S.metric)}">${rowVal(n)}</span></div>`;
   }).join('');
-  $('tree-title').textContent = S.space === 'fleet' ? 'All machines' : (nodes[S.space] ? nodes[S.space].name : 'Machines');
+  if (S.tree === 'pins' && !rows.length) $('tree').innerHTML = `<div class="empty-pins">${icon('pin')}<b>Nothing pinned yet</b><span>Pin a machine, VM, project or container with the pin on its row, or with <b>+</b> in the top bar.</span></div>`;
+  $('tree-title').textContent = S.tree === 'pins' ? 'Pinned' : S.space === 'fleet' ? 'All machines' : (nodes[S.space] ? nodes[S.space].name : 'Machines');
   $('tree-col').textContent = '% of host · ' + mlabel(S.metric);
   $('side-note').innerHTML = '';
 }
@@ -330,6 +352,8 @@ function updateTree(){
   document.querySelectorAll('[data-val]').forEach(e => { const n = nodes[e.dataset.val]; if (n) e.textContent = rowVal(n); });
   document.querySelectorAll('[data-spark]').forEach(e => { const n = nodes[e.dataset.spark]; if (n) e.firstElementChild.setAttribute('points', sparkPts(n.series[S.metric], 60, 16)); });
   document.querySelectorAll('[data-dot]').forEach(e => { const n = nodes[e.dataset.dot]; if (n) e.classList.toggle('on', !!n.running); });
+  document.querySelectorAll('[data-sdot]').forEach(e => { const n = nodes[e.dataset.sdot]; if (n){ e.className = 'sdot ' + statusClass(n); e.title = statusText(n); } });
+  document.querySelectorAll('[data-val]').forEach(e => { const n = nodes[e.dataset.val]; if (n && n.kind === 'machine') e.classList.toggle('dim', !isLive(n)); });
 }
 
 /* ---------- network tree ---------- */
@@ -489,16 +513,16 @@ function heroMachineTile(m){ return `<span class="tile ${m.tile}">${icon(m.tile)
 
 function fleetView(){
   const c = ctxOf('fleet'), nVm = Object.values(nodes).filter(n => n.kind === 'machine' && n.parent).length;
-  const live = roots.filter(r => r.status === 'ok').length;
+  const live = roots.filter(r => isLive(r)).length;
   const stat = m => ({k:mlabel(m), v:pct(sumv(c.bt(m)) / c.cap(m) * 100), s:`${fmt(sumv(c.bt(m)), m)} of ${capText(c.cap(m), m)}`});
   const series = typeSeries(i => c.bt(S.metric, i));
   const fleetUsed = sumv(c.bt(S.metric));
   const mrows = sortedRoots().map(r => {
     const bt = byType(r, S.metric), used = sumv(bt), cap = capOf(r, S.metric);
     const den = S.mode === 'cap' ? cap : (used || 1);
-    const off = r.status !== 'ok';
-    const bar = off ? `<div class="sbar empty">${esc(statusText(r))}${r.error ? ' · ' + esc(r.error.slice(0, 90)) : ''}</div>` : cap ? `<div class="sbar">${TYPES.filter(t => bt[t.id] > 0).map(t => `<span class="s" style="width:${Math.min(100, bt[t.id]/den*100).toFixed(3)}%;background:${TCOL[t.id]}" data-tip="seg|${esc(r.id)}|${S.metric}|${t.id}"></span>`).join('')}</div>` : `<div class="sbar empty">no ${mlabel(S.metric)}</div>`;
-    return `<div class="mrow"><button type="button" class="mbtn" data-select="${esc(r.id)}"><span class="tile ${r.tile}">${icon(r.tile)}</span><span>${esc(r.name)}</span></button>${bar}<div class="tot">${!off && cap ? pct(used/cap*100) + ' used' : '—'}<small>${off ? '' : pct(used/(fleetUsed||1)*100) + ' of fleet ' + mlabel(S.metric)}</small></div></div>`;
+    const off = !hasData(r);
+    const bar = off ? `<div class="sbar empty">${esc(diagnose(r).title)}</div>` : cap ? `<div class="sbar">${TYPES.filter(t => bt[t.id] > 0).map(t => `<span class="s" style="width:${Math.min(100, bt[t.id]/den*100).toFixed(3)}%;background:${TCOL[t.id]}" data-tip="seg|${esc(r.id)}|${S.metric}|${t.id}"></span>`).join('')}</div>` : `<div class="sbar empty">no ${mlabel(S.metric)}</div>`;
+    return `<div class="mrow"><button type="button" class="mbtn" data-select="${esc(r.id)}"><span class="tile ${r.tile}">${icon(r.tile)}</span><span>${esc(r.name)}</span><i class="sdot ${statusClass(r)}" title="${statusText(r)}"></i></button>${bar}<div class="tot">${!off && cap ? pct(used/cap*100) + ' used' : '—'}<small>${off ? '' : pct(used/(fleetUsed||1)*100) + ' of fleet ' + mlabel(S.metric)}</small></div></div>`;
   }).join('');
   return `<div class="hero"><span class="tile fleet">${icon('fleet')}</span><div><h1>All machines</h1><div class="facts"><span>${live} of ${roots.length} machines live</span><span>${nVm} VMs</span><span>${cronCount({children:roots})} scheduled jobs</span><span>${c.cap('cpu')} cores</span><span>${Math.round(c.cap('mem'))} GB RAM</span></div></div>${heroStats([stat('cpu'), stat('mem'), stat('gpu')])}</div>`
     + `<div class="grid2">${whereCard('fleet', 'Where your fleet’s usage goes')}${graphCard(`Fleet ${mlabel(S.metric)}`, 'live machines, by type', series, graphMax(c.cap(S.metric), series, S.metric), S.metric)}</div>`
@@ -507,7 +531,8 @@ function fleetView(){
 
 function machineView(m){
   const host = m.parent ? hostOf(m) : null;
-  const ok = m.status === 'ok' || m.status === 'hostonly';
+  if (!hasData(m)) return offlineView(m);
+  const ok = true;
   const stat = k => ({k:mlabel(k), v:capOf(m, k) ? pct(cur(m, k)/capOf(m, k)*100) : '—', s:capOf(m, k) ? `${fmt(cur(m, k), k)} of ${capText(capOf(m, k), k)}` : `no ${mlabel(k)}`});
   const stats = ok ? [stat('cpu'), stat('mem'), stat('gpu')] : [];
   if (ok && m.gpus.length > 1) stats[2] = {k:'GPU', v:pct(cur(m, 'gpu') / m.gpus.length), s:m.gpus.map((g, i) => `GPU${i} ${pct(sumv(gpuBt(m, g.key)))}`).join(' · ')};
@@ -517,16 +542,54 @@ function machineView(m){
   m.children.forEach(c => { list.push({n:c, d:0}); if (c.kind === 'group') orderedKids(c).forEach(cc => list.push({n:cc, d:1})); });
   const facts = [m.os, m.cpu_model, m.ncpu ? `${m.ncpu} logical CPUs` : '', capOf(m, 'mem') > 1 ? `${Math.round(capOf(m, 'mem'))} GB RAM` : ''].concat(m.gpus.map((g, i) => `GPU ${i}: ${g.name}`), [m.agent, m.uptime ? `up ${m.uptime}` : '', host ? `VM on ${host.name}` : '']).filter(Boolean);
   const pinned = PINS.includes(m.id);
-  const head = `<div class="hero">${heroMachineTile(m)}<div><h1>${esc(m.name)} <i class="sdot ${m.status}" style="display:inline-block;vertical-align:middle"></i></h1><div class="facts">${facts.map(f => `<span>${esc(f)}</span>`).join('')}</div></div>${heroStats(stats)}<button type="button" class="btn${pinned ? ' on' : ''}" data-pin="${esc(m.id)}" aria-pressed="${pinned}">${icon('pin')}${pinned ? 'Pinned' : 'Pin as space'}</button></div>`;
+  const head = `<div class="hero">${heroMachineTile(m)}<div><h1>${esc(m.name)} <i class="sdot ${statusClass(m)}" style="display:inline-block;vertical-align:middle"></i>${stalePill(m)}${termBtn(m)}</h1><div class="facts">${facts.map(f => `<span>${esc(f)}</span>`).join('')}</div></div>${heroStats(stats)}<button type="button" class="btn${pinned ? ' on' : ''}" data-pin="${esc(m.id)}" aria-pressed="${pinned}">${icon('pin')}${pinned ? 'Pinned' : 'Pin as space'}</button></div>`;
   let out = head;
-  if (m.status === 'hostonly') out += noteHTML(`<b>Seen from its host.</b> ${esc(m.error || '')}`, 'warn');
-  else if (!ok) return out + noteHTML(`<b>${esc(statusText(m))}.</b> ${esc(m.error || 'No reading yet.')}`, 'warn');
+  if (m.status === 'hostonly') out += noteHTML(`<b>Seen from its host.</b> ${esc(m.name)} can’t be reached directly, so this is what ${esc(host ? host.name : 'its host')} sees of it. <button type="button" class="linkbtn" data-retry="${esc(m.id)}">Retry</button>`);
   if (m.note) out += noteHTML(`<b>${esc(m.note.label)}</b> ${esc(m.note.text)}`);
   const cpuHead = S.metric === 'cpu' ? cpuToggle() : '';
   const graph = S.metric === 'cpu' && S.cpuView === 'logical' ? '' : graphCard(mlabel(S.metric), S.metric === 'gpu' && m.gpus.length > 1 ? `all ${m.gpus.length} GPUs, by type` : 'by type, stacked', series, graphMax(capOf(m, S.metric), series, S.metric), S.metric, cpuHead);
   out += `<div class="grid2">${whereCard(m.id, m.parent ? 'Where this VM’s usage goes' : 'Where this machine’s usage goes')}${graph || logicalCard(m)}</div>`;
   if (graph === '' ) {} // logical shown inline
   return out + gpuCard(m) + tableCard('Inside ' + esc(m.name), 'live', list);
+}
+
+function diagnose(m){
+  const e = (m.error || '').toLowerCase(), host = esc(m.ssh || m.name), name = esc(m.name);
+  const retry = 'Press <b>Retry now</b>.';
+  if (m.status === 'off') return {kind:'off', ic:'power', title:`${name} is turned off`, text:'Its host reports this VM as not running. Start it there and Fleet picks it up within a few seconds.', steps:[]};
+  if (m.status === 'connecting' && !e) return {kind:'wait', ic:'refresh', title:`Connecting to ${name}…`, text:'Waiting for its first reading.', steps:[]};
+  if (/host key verification failed|remote host identification has changed/.test(e)) return {kind:'key', ic:'key', title:`Fleet can’t confirm this is really ${name}`,
+    text:`SSH has no trusted host key for <code>${host}</code> yet, so it refused to connect. That’s SSH protecting you from an impostor; trusting the key once fixes it.`,
+    steps:[`Open Terminal and run <code>ssh ${host}</code>.`, 'Check the fingerprint, type <b>yes</b> to trust it, then log out.', retry]};
+  if (/permission denied|authentication failed|too many authentication failures/.test(e)) return {kind:'auth', ic:'lock', title:`${name} didn’t accept the login`,
+    text:`The machine answered, but turned down the user or key Fleet used for <code>${host}</code>.`,
+    steps:['Check the user in <b>Settings</b> (it looks like <code>user@host</code>).', `Authorize your SSH key there: <code>ssh-copy-id ${host}</code> for Linux; on Windows add it to the user’s <code>.ssh\\authorized_keys</code>, or <code>administrators_authorized_keys</code> for admin accounts.`, retry]};
+  if (/could not resolve|name or service not known|nodename nor servname/.test(e)) return {kind:'dns', ic:'search2', title:`Fleet can’t find ${host}`,
+    text:'That name doesn’t resolve to an address from this computer.', steps:['Check the spelling in <b>Settings</b>.', 'If it’s a Tailscale name, check that MagicDNS is on and the machine is on your tailnet.', retry]};
+  if (/connection refused/.test(e)) return {kind:'down', ic:'wifi', title:`${name} is up, but SSH isn’t answering`,
+    text:`Something answered at <code>${host}</code>, but nothing is listening for SSH on that port.`, steps:['Start the SSH server there (OpenSSH Server on Windows, <code>sshd</code> on Linux).', 'If it uses another port, set <code>Port</code> for this host in <code>~/.ssh/config</code>.', retry]};
+  if (/timed out|no route|unreachable|connection closed|broken pipe|connection reset/.test(e)) return {kind:'down', ic:'wifi', title:`${name} isn’t answering`,
+    text:`Nothing came back from <code>${host}</code>. It may be asleep or off, off your tailnet, or SSH may be on another port.`, steps:['Check that it’s on and connected to Tailscale.', 'If SSH uses another port, set it in <code>~/.ssh/config</code>.', retry]};
+  if (/python3/.test(e)) return {kind:'py', ic:'terminal', title:`${name} needs Python 3`,
+    text:'Fleet reads Linux machines with a small read-only Python script and installs nothing, but it needs <code>python3</code> there.', steps:['Install Python 3 on that machine, e.g. <code>sudo apt install python3</code>.', retry]};
+  return {kind:'other', ic:'info', title:`Fleet can’t reach ${name}`, text:'The connection ended before the first reading.', steps:['Check the details below, or the machine’s entry in <b>Settings</b>.', retry]};
+}
+function termBtn(n){
+  const ok = n.kind === 'machine' ? (n.agent === 'local' || !!n.ssh) : (n.kind === 'service' || n.kind === 'container');
+  if (!ok) return '';
+  const label = n.kind === 'machine' ? 'Open terminal' : 'Open shell';
+  return `<button type="button" class="termbtn" data-terminal="${esc(n.id)}" title="${n.kind === 'machine' ? (n.agent === 'local' ? 'A new shell on this computer' : 'ssh ' + esc(n.ssh)) : 'A shell inside this container'}">${icon('terminal')}${label}</button>`;
+}
+function offlineView(m){
+  const d = diagnose(m), host = m.parent ? hostOf(m) : null;
+  const facts = [m.os, m.ssh ? 'ssh ' + m.ssh : '', host ? `VM on ${host.name}` : ''].filter(Boolean);
+  const pinned = PINS.includes(m.id);
+  return `<div class="hero">${heroMachineTile(m)}<div><h1>${esc(m.name)} <span class="spill ${d.kind}">${esc(statusText(m))}</span>${termBtn(m)}</h1><div class="facts">${facts.map(f => `<span>${esc(f)}</span>`).join('')}</div></div><button type="button" class="btn${pinned ? ' on' : ''}" data-pin="${esc(m.id)}" aria-pressed="${pinned}" style="margin-left:auto">${icon('pin')}${pinned ? 'Pinned' : 'Pin as space'}</button></div>`
+    + `<section class="state"><div class="state-ic ${d.kind}">${icon(d.ic)}</div><div class="state-body"><h2>${d.title}</h2><p>${d.text}</p>`
+    + (d.steps.length ? `<ol class="steps">${d.steps.map(x => `<li>${x}</li>`).join('')}</ol>` : '')
+    + `<div class="state-actions">${m.status === 'off' ? '' : `<button type="button" class="btn primary" data-retry="${esc(m.id)}">${icon('refresh')}Retry now</button>`}<button type="button" class="btn" data-settings="1">${icon('gear')}Open Settings</button></div>`
+    + (m.error ? `<details class="state-raw"${S.rawOpen ? ' open' : ''}><summary>Technical details</summary><code>${esc(m.error)}</code><div>${m.lastOk ? 'Last reading ' + ago(staleFor(m)) : 'No reading yet'} · retrying on its own</div></details>` : '')
+    + `</div></section>`;
 }
 
 function groupView(n){
@@ -553,7 +616,7 @@ function leafView(n){
     : `<section class="card"><div class="card-h"><h2>Details</h2></div><dl class="dl"><dt>Image</dt><dd><code>${esc(n.meta.image)}</code></dd>${n.meta.project ? `<dt>Compose project</dt><dd>${esc(n.meta.project)}</dd>` : ''}${n.meta.status ? `<dt>Status</dt><dd>${esc(n.meta.status)}</dd>` : ''}<dt>Host</dt><dd>${esc(host.name)}</dd><dt>GPU</dt><dd>${host.gpus.length ? (whichGpuLong(n) || 'none in use') : 'host has no GPU'}</dd></dl></section>`;
   const series = [{label:n.name, color:colOf(n), data:n.series[S.metric]}];
   const pinned = PINS.includes(n.id);
-  return `<div class="hero"><span class="tile" style="background:color-mix(in srgb, ${colOf(n)} 22%, transparent);color:${colOf(n)}">${icon(iconOf(n))}</span><div><h1>${esc(n.name)}</h1><div class="facts"><span>${n.kind === 'base' ? 'Base system' : n.kind === 'service' ? 'Compose service' : 'Container'}</span><span>on ${esc(host.name)}</span>${cronF ? `<span>${cronF.children.length} ${esc(cronF.name.toLowerCase())}</span>` : ''}</div></div>${n.kind !== 'base' ? `<button type="button" class="btn${pinned ? ' on' : ''}" data-pin="${esc(n.id)}" aria-pressed="${pinned}" style="margin-left:auto">${icon('pin')}${pinned ? 'Pinned' : 'Pin as space'}</button>` : ''}</div>`
+  return `<div class="hero"><span class="tile" style="background:color-mix(in srgb, ${colOf(n)} 22%, transparent);color:${colOf(n)}">${icon(iconOf(n))}</span><div><h1>${esc(n.name)}${n.kind !== 'base' ? termBtn(n) : ''}</h1><div class="facts"><span>${n.kind === 'base' ? 'Base system' : n.kind === 'service' ? 'Compose service' : 'Container'}</span><span>on ${esc(host.name)}</span>${cronF ? `<span>${cronF.children.length} ${esc(cronF.name.toLowerCase())}</span>` : ''}</div></div>${n.kind !== 'base' ? `<button type="button" class="btn${pinned ? ' on' : ''}" data-pin="${esc(n.id)}" aria-pressed="${pinned}" style="margin-left:auto">${icon('pin')}${pinned ? 'Pinned' : 'Pin as space'}</button>` : ''}</div>`
     + `<div class="tiles">${tiles}</div>`
     + (cronF ? cronTableCard(cronF, esc(cronF.name) + ' in ' + esc(n.name)) : '')
     + `<div class="grid2">${graphCard(mlabel(S.metric), cronF ? 'includes its scheduled jobs' : esc(n.name), series, graphMax(0, series, S.metric), S.metric)}${detail}</div>`;
@@ -661,6 +724,7 @@ function netView(){
 }
 
 /* ---------- main ---------- */
+let lastMainHTML = '';
 function renderMain(){
   const main = $('main');
   const a = document.activeElement;
@@ -676,7 +740,10 @@ function renderMain(){
     if (S.view === 'details') html = detailsView(n || (roots[0] || {id:'', name:'—'}));
     else html = !n ? fleetView() : n.kind === 'machine' ? machineView(n) : n.kind === 'cronfolder' ? cronFolderView(n) : n.kind === 'cron' ? cronView(n) : n.hist ? leafView(n) : groupView(n);
   }
-  main.innerHTML = `<div class="wrap">${html}</div>`;
+  const full = `<div class="wrap">${html}</div>`;
+  if (full === lastMainHTML) return;
+  lastMainHTML = full;
+  main.innerHTML = full;
   if (refocus){ const e = main.querySelector(refocus); if (e){ e.focus({preventScroll:true}); if (selStart != null && e.setSelectionRange) try { e.setSelectionRange(selStart, selStart); } catch (x) {} } }
 }
 function renderAll(){ renderSpaces(); renderToolbar(); renderTree(); renderMain(); refreshTip(); }
@@ -749,10 +816,15 @@ document.addEventListener('mousemove', e => {
 document.addEventListener('mouseleave', () => { S.hover = null; refreshTip(); });
 
 /* ---------- actions ---------- */
+async function api(path, body){
+  const r = await fetch(path, {method:'POST', headers:{'Content-Type':'application/json', 'X-Fleet':'1'}, body:JSON.stringify(body)});
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  return r.json();
+}
 async function setPins(pins){
   PINS = pins;
   renderSpaces(); renderTree(); renderMain(); renderPickerList();
-  try { const r = await fetch('/api/pins', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(pins)}); const d = await r.json(); PINS = d.pins || pins; } catch (e) {}
+  try { const d = await api('/api/pins', pins); PINS = d.pins || pins; } catch (e) {}
   renderSpaces(); renderPickerList();
 }
 function togglePin(id){ setPins(PINS.includes(id) ? PINS.filter(x => x !== id) : PINS.concat([id])); }
@@ -768,12 +840,15 @@ function select(id){
 }
 document.addEventListener('click', e => {
   const ap = e.target.closest('[data-addpin]'); if (ap){ PICK.open ? closePicker(false) : openPicker(); return; }
+  const st = e.target.closest('[data-settings]'); if (st){ openSettings(); return; }
+  const tm = e.target.closest('[data-terminal]'); if (tm){ const n = nodes[tm.dataset.terminal]; api('/api/terminal', {node:tm.dataset.terminal}).then(r => toast(r.ok ? `Opened ${r.title} in ${r.terminal}` : (r.error || 'Couldn’t open a terminal'))).catch(() => toast('Couldn’t reach Fleet')); return; }
+  const rt = e.target.closest('[data-retry]'); if (rt){ rt.disabled = true; rt.innerHTML = icon('refresh') + 'Retrying…'; api('/api/retry', {machine:rt.dataset.retry}).catch(() => null); setTimeout(refreshNow, 2500); return; }
   if (PICK.open && !$('picker').contains(e.target)) closePicker(false);
   const up = e.target.closest('[data-unpin]'); if (up){ e.stopPropagation(); togglePin(up.dataset.unpin); if (S.space === up.dataset.unpin) goSpace('fleet'); return; }
   const pn = e.target.closest('[data-pin]'); if (pn){ e.stopPropagation(); togglePin(pn.dataset.pin); return; }
   const tg = e.target.closest('[data-toggle]');
   if (tg){ const id = tg.dataset.toggle; const n = nodes[id] || netNodes[id]; S.open[id] = !(nodes[id] ? isOpen(n) : netOpen(n)); save(); renderTree(); return; }
-  const tr = e.target.closest('[data-tree]'); if (tr){ S.tree = tr.dataset.tree; if (S.tree === 'network') S.view = 'overview'; save(); renderAll(); refreshNow(); return; }
+  const tr = e.target.closest('[data-tree]'); if (tr){ S.tree = tr.dataset.tree; if (S.tree === 'network') S.view = 'overview'; lastMainHTML = ''; save(); renderAll(); refreshNow(); return; }
   const ns = e.target.closest('[data-netsel]'); if (ns){ S.netSel = ns.dataset.netsel; S.tree = 'network'; save(); renderTree(); renderToolbar(); renderMain(); return; }
   const sp = e.target.closest('[data-space]'); if (sp){ goSpace(sp.dataset.space); return; }
   const se = e.target.closest('[data-select]'); if (se){ select(se.dataset.select); return; }
@@ -792,10 +867,11 @@ $('picker').addEventListener('keydown', e => {
   if (e.key === 'Enter' && e.target.id === 'pickq'){ const first = $('picklist').querySelector('[data-pin]'); if (first){ e.preventDefault(); togglePin(first.dataset.pin); } }
 });
 document.addEventListener('change', e => { if (e.target.id === 'pgroup'){ S.group = e.target.value; save(); renderMain(); } });
+document.addEventListener('toggle', e => { if (e.target.classList && e.target.classList.contains('state-raw')){ S.rawOpen = e.target.open; } }, true);
 
 /* ---------- polling ---------- */
-let lastSig = '', busy = false;
-function sigOf(){ return Object.keys(nodes).join('|') + '#' + PINS.join('|') + '#' + roots.map(r => r.status).join(''); }
+let lastSig = '', busy = false, fails = 0;
+function sigOf(){ return Object.keys(nodes).join('|') + '#' + PINS.join('|'); }
 async function refreshNow(){
   if (busy) return; busy = true;
   try {
@@ -810,12 +886,13 @@ async function refreshNow(){
     if (S.view !== 'details' && n && n.kind === 'machine' && S.metric === 'cpu' && S.cpuView === 'logical') jobs.push(fetch('/api/cpus?machine=' + encodeURIComponent(n.id), {cache:'no-store'}).then(r => r.json()).then(d => { CPUS[n.id] = d; }));
     if (S.tree === 'network') jobs.push(fetch('/api/net', {cache:'no-store'}).then(r => r.json()).then(d => { NET = d; }));
     await Promise.all(jobs.map(p => p.catch(() => null)));
-    $('conn').hidden = true; $('live').hidden = false;
+    fails = 0; $('conn').hidden = true; $('live').hidden = false;
     const sig = sigOf();
     if (sig !== lastSig){ lastSig = sig; renderAll(); }
     else { updateSpaces(); updateTree(); renderMain(); refreshTip(); }
   } catch (e) {
-    $('conn').hidden = false; $('live').hidden = true;
+    fails++;
+    if (fails >= 3){ $('conn').hidden = false; $('live').hidden = true; }  // a restart takes a second or two: don't flash
   } finally { busy = false; }
 }
 renderToolbar();
@@ -829,9 +906,117 @@ setInterval(refreshNow, 2000);
     try {
       const hs = await Promise.all(['/', '/app.js'].map(u => fetch(u, {method:'HEAD', cache:'no-store'}).then(r => (r.headers.get('last-modified') || '') + (r.headers.get('content-length') || ''))));
       const s = hs.join('|');
-      if (sig !== null && s !== sig && !PICK.open && !(document.activeElement && document.activeElement.id === 'pfilter')){ save(); location.reload(); return; }
+      if (sig !== null && s !== sig && !PICK.open && !SET.open && !(document.activeElement && document.activeElement.id === 'pfilter')){ save(); location.reload(); return; }
       sig = s;
     } catch (e) {}
   }
   setInterval(check, 1500); check();
 })();
+
+
+/* ---------- Settings ---------- */
+const SET = {open:false, draft:null, path:'', status:{}, errors:[], saving:false, tests:{}, expanded:new Set(), terminals:[], termAuto:''};
+const TILE_NAMES = {laptop:'Laptop', desktop:'Desktop', terminal:'Terminal', server:'Server', globe:'Globe', vm:'VM'};
+async function openSettings(){
+  if (PICK.open) closePicker(false);
+  SET.open = true; SET.errors = []; SET.tests = {}; SET.saving = false;
+  $('sheet').hidden = false;
+  $('sheet').innerHTML = `<div class="sheet" role="dialog" aria-modal="true" aria-labelledby="set-title"><div class="sheet-h"><h2 id="set-title">Settings</h2></div><div class="sheet-b"><p class="sub">Loading…</p></div></div>`;
+  try {
+    const d = await (await fetch('/api/config', {cache:'no-store'})).json();
+    SET.draft = {interval:d.interval, terminal:d.terminal || 'auto', machines:d.machines.map(m => Object.assign({}, m))};
+    SET.path = d.path; SET.status = d.status || {}; SET.terminals = d.terminals || []; SET.termAuto = d.terminal_auto || ''; SET.expanded = new Set();
+    renderSettings();
+  } catch (e) { $('sheet').querySelector('.sheet-b').innerHTML = '<p class="sub">Couldn’t load settings.</p>'; }
+}
+function closeSettings(){ SET.open = false; $('sheet').hidden = true; $('sheet').innerHTML = ''; const b = document.querySelector('[data-settings]'); if (b) b.focus(); }
+function machineCard(m, i){
+  const local = m.kind === 'local';
+  const open = SET.expanded.has(i);
+  const others = SET.draft.machines.filter((x, j) => j !== i && x.id);
+  const st = SET.status[m.id];
+  const stn = st ? {status:st.status, error:st.error, name:m.name, ssh:m.ssh, kind:'machine', hasData:st.status === 'ok'} : null;
+  const t = SET.tests[i];
+  const tile = m.tile || (local ? 'laptop' : 'terminal');
+  const summary = local ? 'This computer' : [m.ssh || 'no SSH destination yet', m.os === 'windows' ? 'Windows' : 'Linux'].join(' · ') + (m.vm_on ? ' · VM' : '');
+  const pill = stn ? `<span class="spill ${stn.status === 'ok' ? 'okp' : ''}">${esc(stn.status === 'ok' ? 'live' : stn.status)}</span>` : '<span class="spill">new</span>';
+  const sel = (field, opts, val) => `<select data-field="${i}:${field}">${opts.map(([v, l]) => `<option value="${esc(v)}"${(val || '') === v ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select>`;
+  const head = `<button type="button" class="mcard-h" data-togglecard="${i}" aria-expanded="${open}"><span class="chev${open ? ' open' : ''}">${icon('chev', 2.4)}</span><span class="tile ${esc(tile)}">${icon(tile)}</span><span class="mtitle"><span class="mlabel" data-label="${i}">${esc(m.name || 'New machine')}</span><span class="msum">${esc(summary)}</span></span>${pill}</button>`;
+  if (!open) return `<div class="mcard" data-card="${i}">${head}</div>`;
+  return `<div class="mcard open" data-card="${i}">${head}<div class="mbody">
+    <div class="mgrid">
+      <label class="wide">Name<input data-field="${i}:name" value="${esc(m.name || '')}" placeholder="What Fleet calls it"></label>
+      ${local ? `<label class="wide">Connection<span class="static">This computer, read directly</span></label>` : `
+      <label class="wide">SSH destination<input data-field="${i}:ssh" value="${esc(m.ssh || '')}" placeholder="user@host, a ~/.ssh/config alias, or a Tailscale name" spellcheck="false" autocapitalize="off"></label>
+      <label>System${sel('os', [['linux', 'Linux'], ['windows', 'Windows']], m.os || 'linux')}</label>`}
+      <label>Icon${sel('tile', Object.entries(TILE_NAMES), tile)}</label>
+      <label>Runs on${sel('vm_on', [['', 'its own hardware']].concat(others.map(x => [x.id, 'a VM on ' + (x.name || x.id)])), m.vm_on || '')}</label>
+    </div>
+    <details class="adv"><summary>Advanced</summary><div class="mgrid">
+      <label>Id<input data-field="${i}:id" value="${esc(m.id || '')}" spellcheck="false"></label>
+      <label>VM name on its host<input data-field="${i}:domain" value="${esc(m.domain || '')}" placeholder="same as the name" spellcheck="false"></label>
+      <label>Tailscale name<input data-field="${i}:tailscale" value="${esc(m.tailscale || '')}" placeholder="for the network tree" spellcheck="false"></label>
+    </div></details>
+    <div class="mtest">${local ? '' : `<button type="button" class="btn" data-testmachine="${i}"${t && t.busy ? ' disabled' : ''}>${icon('refresh')}${t && t.busy ? 'Testing…' : 'Test connection'}</button><span class="tres ${t ? (t.busy ? '' : t.ok ? 'good' : 'bad') : ''}">${t && !t.busy ? (t.ok ? icon('check') + 'Connected' : 'Failed') + (t.output ? ` · <code>${esc(t.output.split('\n').slice(0, 3).join(' · '))}</code>` : '') : stn && stn.status !== 'ok' && st.error ? esc(diagnose(stn).title.replace(/<[^>]+>/g, '')) : ''}</span>`}
+      <button type="button" class="btn danger" data-rmmachine="${i}">${icon('trash')}Remove</button></div>
+  </div></div>`;
+}
+function renderSettings(){
+  const d = SET.draft;
+  $('sheet').innerHTML = `<div class="sheet" role="dialog" aria-modal="true" aria-labelledby="set-title">
+    <div class="sheet-h"><h2 id="set-title">Settings</h2><button type="button" class="iconbtn" data-closesettings="1" aria-label="Close settings">${icon('x', 2.2)}</button></div>
+    <div class="sheet-b">
+      <section><h3>Machines</h3><p class="sub">Fleet reaches each machine over SSH, read-only; nothing is installed on them. Destinations use your <code>~/.ssh/config</code>, keys and Tailscale as they are.</p>
+        <div class="mcards">${d.machines.map(machineCard).join('')}</div>
+        <button type="button" class="btn" data-addmachine="1">${icon('plus', 2)}Add a machine</button></section>
+      <section><h3>Terminal</h3><p class="sub">Used by <b>Open terminal</b> on a machine or container.</p><label class="inline">Open in <select data-field="-1:terminal" aria-label="Terminal app"><option value="auto"${d.terminal === 'auto' ? ' selected' : ''}>Automatic${SET.termAuto ? ' (' + esc(SET.termAuto) + ')' : ''}</option>${SET.terminals.map(([k, l]) => `<option value="${esc(k)}"${d.terminal === k ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select></label></section>
+      <section><h3>Refresh</h3><label class="inline">Read every machine every <input type="number" min="1" max="60" step="1" data-field="-1:interval" value="${esc(d.interval)}" aria-label="Seconds between readings"> seconds</label></section>
+      <p class="sub">Saved to <code>${esc(SET.path)}</code>; the previous version is kept beside it as <code>machines.toml.bak</code>.</p>
+    </div>
+    ${SET.errors.length ? `<div class="sheet-err" role="alert">${SET.errors.map(x => `<div>${esc(x)}</div>`).join('')}</div>` : ''}
+    <div class="sheet-f"><button type="button" class="btn" data-closesettings="1">Cancel</button><button type="button" class="btn primary" data-savesettings="1"${SET.saving ? ' disabled' : ''}>${SET.saving ? 'Saving…' : 'Save'}</button></div>
+  </div>`;
+}
+function slugId(name, taken){ let b = (name || 'machine').toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 32) || 'machine', id = b, n = 2; while (taken.has(id)) id = b + '-' + n++; return id; }
+async function saveSettings(){
+  const d = SET.draft, taken = new Set(d.machines.map(m => m.id).filter(Boolean));
+  d.machines.forEach(m => { if (!m.id){ m.id = slugId(m.name, taken); taken.add(m.id); } });
+  SET.saving = true; SET.errors = []; renderSettings();
+  try {
+    const r = await api('/api/config', {interval:Number(d.interval), terminal:d.terminal || 'auto', machines:d.machines});
+    if (!r.ok){ SET.saving = false; SET.errors = r.errors || ['Couldn’t save.']; renderSettings(); return; }
+    closeSettings(); toast('Saved. Reconnecting to your machines…');
+    setTimeout(refreshNow, 2500);
+  } catch (e) { SET.saving = false; SET.errors = ['Couldn’t reach Fleet to save.']; renderSettings(); }
+}
+function toast(msg){
+  let t = document.getElementById('toast');
+  if (!t){ t = document.createElement('div'); t.id = 'toast'; t.className = 'toast'; t.setAttribute('role', 'status'); document.body.appendChild(t); }
+  t.textContent = msg; t.classList.add('show'); clearTimeout(toast.h); toast.h = setTimeout(() => t.classList.remove('show'), 3200);
+}
+$('sheet').addEventListener('click', async e => {
+  if (e.target === $('sheet') || e.target.closest('[data-closesettings]')){ closeSettings(); return; }
+  if (e.target.closest('[data-savesettings]')){ saveSettings(); return; }
+  const tc = e.target.closest('[data-togglecard]'); if (tc){ const i = +tc.dataset.togglecard; SET.expanded.has(i) ? SET.expanded.delete(i) : SET.expanded.add(i); renderSettings(); const h = $('sheet').querySelector(`[data-togglecard="${i}"]`); if (h) h.focus(); return; }
+  if (e.target.closest('[data-addmachine]')){ SET.draft.machines.push({id:'', name:'', ssh:'', os:'linux', tile:'terminal'}); SET.expanded.add(SET.draft.machines.length - 1); renderSettings(); const c = $('sheet').querySelector(`[data-field="${SET.draft.machines.length - 1}:name"]`); if (c) c.focus(); return; }
+  const rm = e.target.closest('[data-rmmachine]'); if (rm){ const i = +rm.dataset.rmmachine; SET.draft.machines.splice(i, 1); SET.tests = {}; SET.expanded = new Set([...SET.expanded].filter(j => j !== i).map(j => j > i ? j - 1 : j)); renderSettings(); return; }
+  const tb = e.target.closest('[data-testmachine]');
+  if (tb){
+    const i = +tb.dataset.testmachine, m = SET.draft.machines[i];
+    SET.tests[i] = {busy:true}; renderSettings();
+    try { const r = await api('/api/test', {ssh:m.ssh, os:m.os || 'linux'}); SET.tests[i] = {ok:r.ok, output:r.output}; }
+    catch (x) { SET.tests[i] = {ok:false, output:'Fleet didn’t answer.'}; }
+    if (SET.open) renderSettings();
+  }
+});
+function setField(t){
+  const f = t.dataset.field; if (!f || !SET.draft) return;
+  const [i, k] = f.split(':'); const v = t.value;
+  if (i === '-1') SET.draft[k] = v; else SET.draft.machines[+i][k] = v;
+  const card = t.closest('.mcard');
+  if (card && k === 'tile') card.querySelector('.mcard-h .tile').outerHTML = `<span class="tile ${esc(v)}">${icon(v)}</span>`;
+  if (card && k === 'name'){ const l = card.querySelector('.mlabel'); if (l) l.textContent = v || 'New machine'; }
+}
+$('sheet').addEventListener('input', e => setField(e.target));
+$('sheet').addEventListener('change', e => setField(e.target));
+$('sheet').addEventListener('keydown', e => { if (e.key === 'Escape'){ e.preventDefault(); closeSettings(); } });

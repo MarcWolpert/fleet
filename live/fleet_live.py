@@ -12,7 +12,7 @@ connection closes. Nothing is installed on any machine and nothing is changed.
 
 Usage: python3 fleet_live.py [--port 4518] [--config PATH] [--open]
 """
-import argparse, base64, collections, ctypes, ctypes.util, glob, http.server, json, os, platform, plistlib
+import argparse, base64, collections, ctypes, ctypes.util, glob, http.server, json, os, platform, plistlib, shlex
 import re, shutil, subprocess, sys, threading, time, tomllib, urllib.parse, webbrowser, zlib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -173,6 +173,8 @@ class Machine:
         self.disk_peak = 500 * MB
         self.lock = threading.Lock()
         self.proc = None
+        self.last_ok = 0.0          # when the last good reading arrived
+        self.wake = threading.Event()  # Retry now
         self.thread = threading.Thread(target=self.loop, daemon=True, name="fleet-" + self.id)
 
     # One thread per machine; reconnect with backoff.
@@ -187,8 +189,13 @@ class Machine:
                 backoff = 5
             except Exception as e:  # never die; show it
                 self.set_status("offline", "collector error: %s" % e)
-            time.sleep(backoff)
+            self.wake.wait(backoff)
+            self.wake.clear()
             backoff = min(60, backoff * 2)
+
+    def got(self, view):
+        with self.lock:
+            self.view, self.status, self.error, self.last_ok = view, "ok", "", time.time()
 
     def set_status(self, status, error=""):
         with self.lock:
@@ -231,8 +238,7 @@ class Machine:
                 err_tail.append("bad reading: %s" % e)
                 continue
             if view:
-                with self.lock:
-                    self.view, self.status, self.error = view, "ok", ""
+                self.got(view)
         p.wait()
         msg = " ".join(x for x in err_tail if x) or "connection closed (exit %s)" % p.returncode
         self.set_status("offline", msg[:300])
@@ -244,8 +250,7 @@ class Machine:
                 began = time.time()
                 view = self.derive_generic(c.snapshot())
                 if view:
-                    with self.lock:
-                        self.view, self.status, self.error = view, "ok", ""
+                    self.got(view)
                 time.sleep(max(0.3, self.interval - (time.time() - began)))
         elif platform.system() == "Linux":
             env = dict(os.environ)
@@ -254,8 +259,7 @@ class Machine:
             for line in p.stdout:
                 view = self.derive_linux(json.loads(zlib.decompress(base64.b64decode(line.strip()))))
                 if view:
-                    with self.lock:
-                        self.view, self.status, self.error = view, "ok", ""
+                    self.got(view)
         elif platform.system() == "Windows":
             script = "$FleetInterval=%s\n" % self.interval + open(os.path.join(HERE, "collect_windows.ps1"), encoding="utf-8").read()
             enc = base64.b64encode(script.encode("utf-16-le")).decode()
@@ -265,8 +269,7 @@ class Machine:
                 if s.startswith("{"):
                     view = self.derive_windows(json.loads(s))
                     if view:
-                        with self.lock:
-                            self.view, self.status, self.error = view, "ok", ""
+                        self.got(view)
 
     def rate(self, key, value, t):
         """Per-second rate of a cumulative counter since the previous reading."""
@@ -831,6 +834,7 @@ def parse_cputime(s):
 class Fleet:
     def __init__(self, cfg):
         self.cfg = cfg
+        self.config_path = cfg.get("__path", CONFIG_PATH)
         self.interval = float(cfg.get("interval", 3))
         self.machines = collections.OrderedDict()
         for m in cfg.get("machine", []):
@@ -838,6 +842,7 @@ class Fleet:
         self.tick = 0
         self.specs = {}
         self.lock = threading.Lock()
+        load_state(self)  # last readings and history from before a restart: no empty flash
         for m in self.machines.values():
             m.thread.start()
         threading.Thread(target=self.record_loop, daemon=True, name="fleet-record").start()
@@ -859,6 +864,8 @@ class Fleet:
             with self.lock:
                 self.specs = specs
             self.tick += 1
+            if self.tick % 10 == 0:
+                save_state(self)
             time.sleep(max(0.2, self.interval - (time.time() - began)))
 
     def machine_spec(self, m, record, vm_hostside=None, vm_parent=None):
@@ -869,6 +876,9 @@ class Fleet:
         spec = {"id": mid, "name": m.name, "tile": cfg.get("tile", "vm" if cfg.get("vm_on") else "terminal"), "status": status,
                 "error": error, "os": cfg.get("os_label") or {"windows": "Windows", "linux": "Linux"}.get(cfg.get("os", ""), ""), "agent": "local" if cfg.get("kind") == "local" else "ssh " + cfg.get("ssh", ""),
                 "cronLabel": "Cron jobs", "gpus": [], "cap": [1, 1, 0, 1, 1], "procs": [], "baseCron": [], "compose": [], "containers": [], "vms": []}
+        spec["ssh"] = cfg.get("ssh", "")
+        spec["has_data"] = view is not None
+        spec["last_ok"] = m.last_ok
         if view is None:
             if vm_hostside is not None:
                 spec["base"] = {"id": mid + "/base", "h": self.leaf(mid + "/base", vm_hostside["u"], record)}
@@ -905,12 +915,12 @@ class Fleet:
                     nid += "-" + c["id"][:6]
                 cont_ids[c["id"]] = nid
                 proj.setdefault(c["project"], {"id": pid, "name": c["project"], "file": c["file"].split(",")[0], "services": []})["services"].append(
-                    {"id": nid, "name": c["service"] or c["name"], "image": c["image"], "status": c["status"], "g": dflt_g if c["u"][2] else [],
+                    {"id": nid, "name": c["service"] or c["name"], "cname": c["name"], "image": c["image"], "status": c["status"], "g": dflt_g if c["u"][2] else [],
                      "h": self.leaf(nid, c["u"], record)})
             else:
                 nid = "%s/containers/%s" % (mid, slug(c["name"]))
                 cont_ids[c["id"]] = nid
-                loose.append({"id": nid, "name": c["name"], "image": c["image"], "status": c["status"], "g": dflt_g if c["u"][2] else [],
+                loose.append({"id": nid, "name": c["name"], "cname": c["name"], "image": c["image"], "status": c["status"], "g": dflt_g if c["u"][2] else [],
                               "h": self.leaf(nid, c["u"], record)})
         spec["compose"] = list(proj.values())
         spec["containers"] = loose
@@ -1059,6 +1069,266 @@ class Fleet:
         return {"tailnet": tailnet, "machines": machines, "window_s": self.interval * H}
 
 
+# ---------------------------------------------------------------- state that survives restarts
+STATE_PATH = os.path.expanduser("~/.cache/fleet-live/state.json")
+
+
+def save_state(fleet):
+    """Last reading per machine and all history, so a restart shows data at once instead of flashing empty."""
+    try:
+        views = {}
+        for m in fleet.machines.values():
+            with m.lock:
+                if m.view is not None:
+                    views[m.id] = {"view": dict(m.view, procs=[]), "last_ok": m.last_ok}
+        with HIST.lock:
+            hist = {k: [list(q) for q in v] for k, v in HIST.d.items()}
+        os.makedirs(os.path.dirname(STATE_PATH), exist_ok=True)
+        tmp = STATE_PATH + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump({"t": time.time(), "views": views, "hist": hist}, f, separators=(",", ":"))
+        os.replace(tmp, STATE_PATH)
+    except Exception as e:
+        print("could not save state: %s" % e, flush=True)
+
+
+def load_state(fleet):
+    try:
+        with open(STATE_PATH) as f:
+            st = json.load(f)
+    except Exception:
+        return
+    if time.time() - st.get("t", 0) > 6 * 3600:
+        return  # too old to be useful
+    for mid, v in st.get("views", {}).items():
+        m = fleet.machines.get(mid)
+        if m:
+            m.view, m.last_ok, m.status = v["view"], v.get("last_ok", 0.0), "connecting"
+    with HIST.lock:
+        for k, qs in st.get("hist", {}).items():
+            HIST.d[k] = [collections.deque(q[-H:], maxlen=H) for q in qs]
+
+
+def restart_self(fleet, reason):
+    print("%s; restarting" % reason, flush=True)
+    save_state(fleet)
+    stop_collectors(fleet)
+    args = [x for x in sys.argv[1:] if x not in ("--open", "--open-if-unseen")] + ["--open-if-unseen"]
+    os.execv(sys.executable, [sys.executable, os.path.abspath(__file__)] + args)
+
+
+# ---------------------------------------------------------------- settings
+TILES = ("laptop", "desktop", "terminal", "server", "globe", "vm")
+SSH_DEST = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.@:\[\]%-]{0,252}$")   # never starts with "-": no option smuggling
+MACHINE_KEYS = ("id", "name", "kind", "ssh", "os", "tile", "vm_on", "domain", "tailscale")
+
+
+def validate_config(data):
+    """Returns (config, errors). Only the keys Fleet knows are kept."""
+    errors = []
+    try:
+        interval = float(data.get("interval", 3))
+    except Exception:
+        interval = -1
+    if not (1 <= interval <= 60):
+        errors.append("Refresh interval must be between 1 and 60 seconds.")
+    machines, ids = [], set()
+    for i, m in enumerate(data.get("machines") or []):
+        label = "Machine %d" % (i + 1)
+        mm = {k: str(m.get(k, "")).strip() for k in MACHINE_KEYS if str(m.get(k, "")).strip()}
+        if not re.match(r"^[A-Za-z0-9_-]{1,40}$", mm.get("id", "")):
+            errors.append("%s: id must be 1–40 letters, digits, - or _." % label)
+        elif mm["id"] in ids:
+            errors.append("%s: id %s is used twice." % (label, mm["id"]))
+        ids.add(mm.get("id", ""))
+        if not mm.get("name") or len(mm["name"]) > 80:
+            errors.append("%s: give it a name (up to 80 characters)." % label)
+        if mm.get("kind") == "local":
+            mm.pop("ssh", None)
+            mm.pop("os", None)
+        else:
+            mm.pop("kind", None)
+            if not SSH_DEST.match(mm.get("ssh", "")):
+                errors.append("%s: SSH destination must look like host, user@host or a Tailscale name." % (mm.get("name") or label))
+            if mm.get("os") not in ("linux", "windows"):
+                errors.append("%s: choose Linux or Windows." % (mm.get("name") or label))
+        if mm.get("tile") and mm["tile"] not in TILES:
+            mm.pop("tile")
+        for k in ("domain", "tailscale"):
+            if k in mm and not re.match(r"^[A-Za-z0-9_.@:-]{1,120}$", mm[k]):
+                errors.append("%s: %s has characters Fleet can't use." % (mm.get("name") or label, k))
+        machines.append(mm)
+    for mm in machines:
+        if mm.get("vm_on") and (mm["vm_on"] not in ids or mm["vm_on"] == mm.get("id")):
+            errors.append("%s: “runs on” must be another machine in the list." % mm.get("name", "?"))
+    if sum(1 for mm in machines if mm.get("kind") == "local") > 1:
+        errors.append("Only one machine can be this computer.")
+    term = str(data.get("terminal", "auto"))
+    if term != "auto" and term not in [k for k, _ in terminal_choices()[0]]:
+        term = "auto"
+    return {"interval": interval, "terminal": term, "machine": machines}, errors
+
+
+def write_config(path, cfg):
+    lines = ["# Fleet Live machine list. Written by Fleet's Settings (the previous file is kept as machines.toml.bak).",
+             "interval = %s" % (int(cfg["interval"]) if float(cfg["interval"]).is_integer() else cfg["interval"]),
+             "terminal = %s" % json.dumps(cfg.get("terminal", "auto")), ""]
+    for m in cfg["machine"]:
+        lines.append("[[machine]]")
+        for k in MACHINE_KEYS:
+            if m.get(k):
+                lines.append("%s = %s" % (k, json.dumps(m[k], ensure_ascii=False)))
+        lines.append("")
+    if os.path.exists(path):
+        shutil.copy(path, path + ".bak")
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+    with open(tmp, "rb") as f:
+        tomllib.load(f)  # never write a file Fleet can't read back
+    os.replace(tmp, path)
+
+
+def test_connection(dest, os_name):
+    if not SSH_DEST.match(dest or ""):
+        return {"ok": False, "output": "That doesn't look like an SSH destination."}
+    remote = ("powershell -NoProfile -NonInteractive -Command \"'FLEET_OK'; $PSVersionTable.PSVersion.ToString(); (Get-CimInstance Win32_OperatingSystem).Caption\""
+              if os_name == "windows" else "echo FLEET_OK; uname -sr; command -v python3 || echo 'python3: not found'")
+    try:
+        p = subprocess.run(["ssh"] + SSH_MARK + [dest, remote], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=25)
+        out = p.stdout.decode("utf-8", "replace").replace("\r", "").strip()
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "output": "No answer within 25 seconds."}
+    ok = "FLEET_OK" in out and "python3: not found" not in out
+    return {"ok": ok, "output": out.replace("FLEET_OK", "").strip()[:600]}
+
+
+# ---------------------------------------------------------------- open a terminal to a node
+TERMINALS = [  # key, label, macOS app path, bundle id
+    ("ghostty", "Ghostty", "/Applications/Ghostty.app", "com.mitchellh.ghostty"),
+    ("iterm", "iTerm", "/Applications/iTerm.app", "com.googlecode.iterm2"),
+    ("wezterm", "WezTerm", "/Applications/WezTerm.app", "com.github.wez.wezterm"),
+    ("kitty", "kitty", "/Applications/kitty.app", "net.kovidgoyal.kitty"),
+    ("alacritty", "Alacritty", "/Applications/Alacritty.app", "org.alacritty"),
+    ("herdr", "Herdr (new tab)", "/Applications/Herdr.app", ""),
+    ("terminal", "Terminal", "/System/Applications/Utilities/Terminal.app", "com.apple.Terminal"),
+]
+LINUX_TERMINALS = [("x-terminal-emulator", ["-e"]), ("gnome-terminal", ["--"]), ("konsole", ["-e"]), ("kitty", []),
+                   ("alacritty", ["-e"]), ("wezterm", ["start", "--"]), ("xfce4-terminal", ["-x"]), ("xterm", ["-e"])]
+CNAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,200}$")
+
+
+def ssh_link_handler():
+    """The app macOS opens ssh:// links with, if the user picked one."""
+    path = os.path.expanduser("~/Library/Preferences/com.apple.LaunchServices/com.apple.launchservices.secure.plist")
+    try:
+        with open(path, "rb") as f:
+            for h in plistlib.load(f).get("LSHandlers", []):
+                if h.get("LSHandlerURLScheme") == "ssh":
+                    return h.get("LSHandlerRoleAll", "")
+    except Exception:
+        pass
+    return ""
+
+
+def terminal_choices():
+    """[(key, label)] available on this computer, plus which one Automatic picks."""
+    if platform.system() == "Darwin":
+        have = [(k, l) for k, l, app, _ in TERMINALS if os.path.exists(app) and (k != "herdr" or shutil.which("herdr"))]
+        bid = ssh_link_handler()
+        auto = next((k for k, l, app, b in TERMINALS if b and b == bid and os.path.exists(app)), "")
+        if not auto:
+            auto = next((k for k, l in have if k not in ("terminal", "herdr")), "terminal")
+        return have, auto
+    if platform.system() == "Windows":
+        have = [("wt", "Windows Terminal")] if shutil.which("wt") else []
+        return have + [("cmd", "Command Prompt")], (have[0][0] if have else "cmd")
+    env = os.environ.get("TERMINAL", "")
+    have = ([("env", "$TERMINAL (%s)" % env)] if env and shutil.which(env) else []) + [(k, k) for k, _ in LINUX_TERMINALS if shutil.which(k)]
+    return have, (have[0][0] if have else "")
+
+
+def open_terminal(choice, argv, title):
+    """Open a new terminal window (or herdr tab) on this computer running argv; argv None = a local shell."""
+    have, auto = terminal_choices()
+    keys = [k for k, _ in have]
+    term = choice if choice in keys else auto
+    label = dict(have).get(term, term)
+    line = shlex.join(argv) if argv else ""
+    def osa(*lines):
+        subprocess.run(["osascript"] + sum([["-e", l] for l in lines], []), check=True, capture_output=True, timeout=15)
+    def q(x):
+        return x.replace("\\", "\\\\").replace('"', '\\"')
+    if platform.system() == "Darwin":
+        if term == "terminal":
+            osa('tell application "Terminal"', "activate", 'do script "%s"' % q(line), "end tell")
+        elif term == "iterm":
+            osa('tell application "iTerm"', "activate",
+                ('create window with default profile command "%s"' % q(line)) if line else "create window with default profile", "end tell")
+        elif term == "herdr":
+            out = subprocess.run(["herdr", "tab", "create", "--label", title[:40], "--focus"], capture_output=True, text=True, timeout=10).stdout
+            pane = re.search(r'"(?:pane_id|paneId)"\s*:\s*"([^"]+)"', out) or re.search(r'"id"\s*:\s*"([^"]*pane[^"]*)"', out)
+            if not pane:
+                return open_terminal("auto" if auto != "herdr" else "terminal", argv, title)
+            if line:
+                subprocess.run(["herdr", "pane", "run", pane.group(1), line], check=True, capture_output=True, timeout=10)
+        else:
+            app = {"ghostty": "Ghostty", "wezterm": "WezTerm", "kitty": "kitty", "alacritty": "Alacritty"}[term]
+            extra = {"ghostty": ["-e"], "wezterm": ["start", "--"], "kitty": [], "alacritty": ["-e"]}[term] if argv else []
+            subprocess.Popen(["open", "-na", app, "--args"] + extra + (argv or []))
+        return label
+    if platform.system() == "Windows":
+        if term == "wt":
+            subprocess.Popen(["wt", "new-tab", "--title", title] + (argv or ["powershell"]))
+        else:
+            subprocess.Popen(["cmd", "/c", "start", title] + (argv or ["cmd"]))
+        return label
+    if term == "env":
+        subprocess.Popen([os.environ["TERMINAL"], "-e"] + (argv or [os.environ.get("SHELL", "sh")]))
+        return label
+    for k, flag in LINUX_TERMINALS:
+        if k == term:
+            subprocess.Popen([k] + (flag + argv if argv else []))
+            return label
+    raise RuntimeError("No terminal app found. Set $TERMINAL or install one.")
+
+
+def terminal_target(fleet, node_id):
+    """(argv, title) for a node: ssh to a machine, a local shell, or a shell inside a container."""
+    machine = fleet.machines.get(node_id)
+    if machine:
+        if machine.cfg.get("kind") == "local":
+            return None, machine.name
+        dest = machine.cfg.get("ssh", "")
+        if not SSH_DEST.match(dest):
+            raise ValueError("%s has no SSH destination." % machine.name)
+        return ["ssh", dest], machine.name
+    with fleet.lock:
+        specs = fleet.specs
+    for top in specs.values():
+        stack = [(top, None)]
+        while stack:
+            s, _ = stack.pop()
+            items = list(s.get("containers", [])) + [sv for p in s.get("compose", []) for sv in p.get("services", [])]
+            for c in items:
+                if c.get("id") == node_id:
+                    cname = c.get("cname", "")
+                    if not CNAME.match(cname):
+                        raise ValueError("Fleet doesn't know that container's name.")
+                    m = fleet.machines.get(s["id"])
+                    shell = "command -v bash >/dev/null 2>&1 && exec bash || exec sh"
+                    inner = ["docker", "exec", "-it", cname, "sh", "-c", shell]
+                    if m is None or m.cfg.get("kind") == "local":
+                        return inner, cname
+                    dest = m.cfg.get("ssh", "")
+                    if not SSH_DEST.match(dest):
+                        raise ValueError("%s has no SSH destination." % m.name)
+                    remote = "docker exec -it %s sh" % cname if m.cfg.get("os") == "windows" else shlex.join(inner)
+                    return ["ssh", "-t", dest, remote], "%s on %s" % (cname, m.name)
+            stack.extend((v, s) for v in s.get("vms", []))
+    raise ValueError("That isn't something Fleet can open a terminal to.")
+
+
 def find_spec(specs, mid):
     for s in specs.values():
         stack = [s]
@@ -1114,8 +1384,37 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def allowed(self, write=False):
+        """Only this computer's own Fleet window: right Host (no DNS rebinding), and for writes the right
+        Origin plus a custom header (a cross-site form or fetch can't send it without a preflight)."""
+        port = self.server.server_address[1]
+        hosts = {"127.0.0.1:%d" % port, "localhost:%d" % port}
+        if self.headers.get("Host", "") not in hosts:
+            return False
+        if write:
+            origin = self.headers.get("Origin")
+            if origin and origin not in {"http://" + h for h in hosts}:
+                return False
+            if self.headers.get("X-Fleet") != "1":
+                return False
+        return True
+
+    def read_json(self):
+        n = int(self.headers.get("Content-Length") or 0)
+        return json.loads(self.rfile.read(min(n, 1 << 20)) or b"null")
+
     def do_GET(self):
+        if not self.allowed():
+            self.send_error(403)
+            return
         u = urllib.parse.urlparse(self.path)
+        if u.path == "/api/config":
+            f = self.fleet
+            st = {m.id: {"status": m.status, "error": m.error} for m in f.machines.values()}
+            machines = [{k: m.cfg[k] for k in MACHINE_KEYS if k in m.cfg} for m in f.machines.values()]
+            have, auto = terminal_choices()
+            return self.send_json({"path": f.config_path, "interval": f.interval, "machines": machines, "status": st,
+                                   "terminal": f.cfg.get("terminal", "auto"), "terminals": have, "terminal_auto": dict(have).get(auto, auto)})
         q = urllib.parse.parse_qs(u.query)
         if u.path == "/api/fleet":
             LAST_CLIENT[0] = time.time()
@@ -1129,7 +1428,41 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         return super().do_GET()
 
     def do_POST(self):
+        if not self.allowed(write=True):
+            self.send_error(403)
+            return
         u = urllib.parse.urlparse(self.path)
+        if u.path == "/api/config":
+            try:
+                cfg, errors = validate_config(self.read_json() or {})
+            except Exception:
+                cfg, errors = None, ["That wasn't valid settings data."]
+            if errors:
+                return self.send_json({"ok": False, "errors": errors})
+            try:
+                write_config(self.fleet.config_path, cfg)
+            except Exception as e:
+                return self.send_json({"ok": False, "errors": ["Couldn't save: %s" % e]})
+            self.send_json({"ok": True})
+            threading.Thread(target=lambda: (time.sleep(0.4), restart_self(self.fleet, "settings saved")), daemon=True).start()
+            return
+        if u.path == "/api/test":
+            d = self.read_json() or {}
+            return self.send_json(test_connection(str(d.get("ssh", "")), str(d.get("os", "linux"))))
+        if u.path == "/api/terminal":
+            d = self.read_json() or {}
+            try:
+                argv, title = terminal_target(self.fleet, str(d.get("node", "")))
+                used = open_terminal(self.fleet.cfg.get("terminal", "auto"), argv, title)
+                return self.send_json({"ok": True, "terminal": used, "title": title})
+            except Exception as e:
+                return self.send_json({"ok": False, "error": str(e)[:300]})
+        if u.path == "/api/retry":
+            d = self.read_json() or {}
+            m = self.fleet.machines.get(str(d.get("machine", "")))
+            if m:
+                m.wake.set()
+            return self.send_json({"ok": bool(m)})
         if u.path != "/api/pins":
             self.send_error(404)
             return
@@ -1158,12 +1491,14 @@ def main():
         print("wrote a starter config to %s; edit it to list your machines" % a.config)
     with open(a.config, "rb") as f:
         cfg = tomllib.load(f)
+    cfg["__path"] = a.config
     n = reap_leftover_collectors()
     if n:
         print("stopped %d leftover collector session(s) from an earlier run" % n, flush=True)
     Handler.fleet = Fleet(cfg)
     import signal
     def bye(*_):
+        save_state(Handler.fleet)
         stop_collectors(Handler.fleet)
         os._exit(0)
     signal.signal(signal.SIGTERM, bye)
@@ -1212,10 +1547,7 @@ def watch_own_files(url):
                 print("not restarting: %s" % e, flush=True)
                 srv = s2
                 continue
-            print("Fleet changed; restarting", flush=True)
-            stop_collectors(Handler.fleet)
-            args = [x for x in sys.argv[1:] if x not in ("--open", "--open-if-unseen")] + ["--open-if-unseen"]
-            os.execv(sys.executable, [sys.executable, os.path.abspath(__file__)] + args)
+            restart_self(Handler.fleet, "Fleet changed")
         if u2 != ui:
             ui = u2
             threading.Thread(target=reopen_if_unseen, args=(url, time.time()), daemon=True).start()
