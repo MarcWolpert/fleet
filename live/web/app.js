@@ -423,7 +423,7 @@ function renderTree(){
   const entries = groupedWalk(treeRoots(), orderedKids, opened, shown, S.pinsOnly ? 'pins' : 'machines');
   entries.forEach(e => { if (e.n) rows.push(e); });
   if (keep && !rows.length){ $('tree').innerHTML = `<div class="tempty">Nothing in the tree matches “${esc(TF.q)}”.</div>`; return; }
-  $('tree').innerHTML = entries.map(e => e.open ? tgroupOpen(e) : e.close ? '</div>' : treeRow(e)).join('');
+  $('tree').innerHTML = allRow() + entries.map(e => e.open ? tgroupOpen(e) : e.close ? '</div>' : treeRow(e)).join('');
   function treeRow({n, d, pk}){
     const kids = n.children.length > 0, open = kids && opened(n);
     const count = (n.kind === 'group' || n.kind === 'cronfolder' || n.kind === 'project' || n.kind === 'division') ? `<span class="count">${n.children.length}</span>` : '';
@@ -503,6 +503,7 @@ function renderGroupsTree(){
 }
 function updateTree(){
   if (S.tree === 'network') return updateNetTree();
+  updateAllRow();
   document.querySelectorAll('[data-val]').forEach(e => { const n = nodes[e.dataset.val]; if (n) e.textContent = rowVal(n); });
   document.querySelectorAll('[data-spark]').forEach(e => { const n = nodes[e.dataset.spark]; if (n) e.firstElementChild.setAttribute('points', sparkPts(n.series[S.metric], 60, 16)); });
   document.querySelectorAll('[data-dot]').forEach(e => { const n = nodes[e.dataset.dot]; if (n) e.classList.toggle('on', !!n.running); });
@@ -1420,7 +1421,8 @@ function select(id){
   save(); renderAll(); refreshNow();
 }
 document.addEventListener('click', e => {
-  if (e.target === $('tree')){ selectNone(); return; }
+  // empty space in the tree does nothing; the All machines row (or the tailnet's) is the all-up view (#327)
+  if (e.target.closest('[data-allrow]')){ selectNone(); return; }
   // a machine's dot (or Connect on its page) turns its connection off or on; it doesn't select the row
   const cn = e.target.closest('[data-conn]'); if (cn){ e.stopPropagation(); setConnected(cn.dataset.conn, cn.getAttribute('aria-pressed') !== 'true'); return; }
   if (e.target.closest('[data-autoconn]')){ openAutoConn(e.target.closest('[data-autoconn]')); return; }
@@ -3038,3 +3040,23 @@ function openTutorial(tab, opts){
   el.querySelectorAll('[role=tab]')[tab || 0].focus();
 }
 document.addEventListener('click', e => { if (e.target.closest('[data-tutorial]')) openTutorial(0); });
+
+// The All machines row at the top of the machine tree (#327): the all-up view, from a row of its own. In Pins only it
+// reads Pins only and counts the pins (they can be machines, containers or groups, so one share would mislead).
+function allSeries(){ const a = zero(); roots.forEach(r => { const v = r.series[S.metric]; for (let i = 0; i < H; i++) a[i] += v[i]; }); return a; }
+function allRow(){
+  const on = S.sel === 'fleet', pins = S.pinsOnly;
+  return `<div class="allrow${on ? ' sel' : ''}" role="treeitem" aria-level="1" aria-selected="${on}" data-allrow="1">`
+    + `<span class="tdrag" aria-hidden="true"></span><span class="chev leaf" aria-hidden="true"></span>`
+    + `<span class="ico" style="color:var(--ink-2)">${icon(pins ? 'pin' : 'fleet')}</span>`
+    + `<button type="button" class="nm" title="The all-up view">${pins ? 'Pins only' : 'All machines'}</button><span style="width:22px;flex:none"></span>`
+    + (pins ? `<span class="val" data-allval="1">${PINS.filter(k => nodes[k]).length} pinned</span>`
+            : `<svg class="spark" data-allspark="1" viewBox="0 0 60 16" preserveAspectRatio="none" aria-hidden="true"><polyline points="${sparkPts(allSeries(), 60, 16)}" fill="none" stroke="var(--accent)" stroke-width="1.5" vector-effect="non-scaling-stroke" stroke-linejoin="round"/></svg>`
+              + `<span class="val" data-allval="1" title="share of all machines' ${mlabel(S.metric)}">${pillPct('fleet')}</span>`)
+    + `</div>`;
+}
+function updateAllRow(){
+  const v = document.querySelector('[data-allval]'), sp = document.querySelector('[data-allspark]');
+  if (v) v.textContent = S.pinsOnly ? `${PINS.filter(k => nodes[k]).length} pinned` : pillPct('fleet');
+  if (sp) sp.firstElementChild.setAttribute('points', sparkPts(allSeries(), 60, 16));
+}
