@@ -783,6 +783,19 @@ def job_name(cmd):
     return (toks[0] if toks else cmd)[:48]
 
 
+def job_ids(mid, jobs):
+    """Each scheduled job's node id, from what the job is (where it's defined, its schedule, its command, its name), not
+    its place in the list: systemd lists timers by when they fire next, so places change all the time, and a job's
+    history would carry on under another job's id. Exact duplicates (an unduplicated crontab) are numbered."""
+    ids, seen = [], collections.Counter()
+    for j in jobs:
+        key = "\0".join((j.get("src", ""), j.get("sched", ""), j.get("cmd", ""), j.get("name", "")))
+        seen[key] += 1
+        jid = "%s/base/cron/%s-%08x" % (mid, slug(j.get("name", "")), zlib.crc32(key.encode()))
+        ids.append(jid if seen[key] == 1 else "%s-%d" % (jid, seen[key]))
+    return ids
+
+
 def match_job(jobs, comm, cmd):
     for j in jobs:
         if comm and (comm in j["cmd"] or (cmd and cmd.split()[0] in j["cmd"])):
@@ -1266,8 +1279,7 @@ class Fleet:
         # Scheduled jobs under Base system; their usage is a breakdown of Base.
         jsum = [0.0] * 5
         jobs = []
-        for i, j in enumerate(view["jobs"]):
-            jid = "%s/base/cron/%d" % (mid, i)
+        for jid, j in zip(job_ids(mid, view["jobs"]), view["jobs"]):
             for k in range(5):
                 jsum[k] += j["u"][k]
             jobs.append({"id": jid, "name": j["name"], "sched": j["sched"], "human": j.get("human", ""), "cmd": j.get("cmd", ""),
@@ -1320,6 +1332,7 @@ class Fleet:
         if not view or not spec:
             return {"procs": []}
         own = spec.get("procs_owner", {"cont": {}, "vm": {}})
+        jids = job_ids(mid, view.get("jobs", []))   # job:<n> is a place in this view's own job list
         out = []
         for p in view["procs"]:
             o = p[11]
@@ -1328,7 +1341,8 @@ class Fleet:
             elif o.startswith("vm:"):
                 node = own["vm"].get(o[3:], mid + "/base")
             elif o.startswith("job:"):
-                node = "%s/base/cron/%s" % (mid, o[4:])
+                n = int(o[4:])
+                node = jids[n] if n < len(jids) else mid + "/base"
             elif o == "dockervm":
                 node = mid + "/base"
             else:
