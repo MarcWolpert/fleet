@@ -247,7 +247,7 @@ function renderSpaces(){
 /* ---------- + picker: pin any grouping ---------- */
 const PICK = {open:false, q:''};
 function kindLabel(n){
-  if (n.kind === 'division') return 'division';
+  if (n.kind === 'division') return GKIND[n.gkind || 'taskforce'][1];
   if (n.kind === 'machine') return n.parent ? 'VM' : 'machine';
   if (n.kind === 'group') return 'group';
   if (n.kind === 'project') return 'Compose project';
@@ -273,7 +273,7 @@ function renderPickerList(){
   if (q) list = list.filter(x => [x.n.name, kindLabel(x.n), x.n.os || '', (x.n.meta && x.n.meta.image) || '', x.path.join(' ')].join(' ').toLowerCase().includes(q));
   const shown = list.slice(0, 400);
   box.innerHTML = shown.length ? shown.map(({n, d, path, div}, i) => {
-    const sec = divs.length && !q ? (i === 0 ? '<div class="pick-sec">Divisions</div>' : !div && shown[i - 1].div ? '<div class="pick-sec">Machines and what runs on them</div>' : '') : '';
+    const sec = divs.length && !q ? (i === 0 ? '<div class="pick-sec">Groups</div>' : !div && shown[i - 1].div ? '<div class="pick-sec">Machines and what runs on them</div>' : '') : '';
     const on = PINS.includes(n.id);
     const where = q && path.length ? `<span class="pw">${esc(path.join(' › '))}</span>` : '';
     return sec + `<button type="button" class="prow${on ? ' on' : ''}" data-pin="${esc(n.id)}" aria-pressed="${on}" style="padding-left:${10 + (q ? 0 : d * 16)}px">`
@@ -376,7 +376,7 @@ function renderTree(){
     const st = n.kind === 'machine' ? ' ' + statusClass(n) : '';
     const pin = (n.kind === 'machine' || n.kind === 'project' || n.kind === 'service' || n.kind === 'container' || n.kind === 'group' || n.kind === 'division') ? pinBtn(n.id) : '<span style="width:22px;flex:none"></span>';
     return `<div class="row ${n.kind}${st}${S.sel===n.id?' sel':''}" style="--d:${d}" role="treeitem" aria-level="${d+1}" ${kids?`aria-expanded="${open}"`:''} aria-selected="${S.sel===n.id}" data-select="${esc(n.id)}" data-pk="${esc(pk)}">`
-      + `<span class="tdrag" draggable="true" title="Drag into a division" aria-hidden="true">${icon('grip')}</span>`
+      + `<span class="tdrag" draggable="true" title="Drag into a group" aria-hidden="true">${icon('grip')}</span>`
       + `<button type="button" class="chev${open?' open':''}${kids?'':' leaf'}" ${kids?`data-toggle="${esc(n.id)}" aria-label="${open?'Collapse':'Expand'} ${esc(n.name)}"`:'tabindex="-1" aria-hidden="true"'}>${icon('chev', 2.4)}</button>`
       + `<span class="ico" style="color:${n.kind==='cronfolder'||n.kind==='cron'?'var(--ink-3)':colOf(n)}">${icon(iconOf(n))}</span>`
       + `<button type="button" class="nm" data-select="${esc(n.id)}">${esc(n.name)}</button>${count}${gtag}${dot}${pin}`
@@ -446,7 +446,7 @@ function renderNetTree(){
     const sub = n.kind === 'nmachine' ? `<i class="sdot ${n.status}" title="${esc(n.status)}"></i>` : n.vm ? `<span class="count">${esc(n.vm)}</span>` : n.dnet && n.kind === 'if' ? `<span class="count">${esc(n.dnet)}</span>` : '';
     const rate = `<span>↓ ${rateText(n.rx)}</span><span>↑ ${n.kind === 'ncontainer' ? '—' : rateText(n.tx)}</span>`;
     return `<div class="row${S.netSel===n.id?' sel':''}" style="--d:${d}" role="treeitem" aria-level="${d+1}" ${kids?`aria-expanded="${open}"`:''} data-netsel="${esc(n.id)}" data-pk="${esc(pk)}">`
-      + `<span class="tdrag" draggable="true" title="Drag into a division" aria-hidden="true">${icon('grip')}</span>`
+      + `<span class="tdrag" draggable="true" title="Drag into a group" aria-hidden="true">${icon('grip')}</span>`
       + `<button type="button" class="chev${open?' open':''}${kids?'':' leaf'}" ${kids?`data-toggle="${esc(n.id)}" aria-label="${open?'Collapse':'Expand'} ${esc(n.name)}"`:'tabindex="-1" aria-hidden="true"'}>${icon('chev', 2.4)}</button>`
       + `<span class="ico" style="color:var(--ink-2)">${icon(ic)}</span><button type="button" class="nm" data-netsel="${esc(n.id)}">${esc(n.name)}</button>${sub}<span class="nrate">${rate}</span></div>`;
   }
@@ -2142,8 +2142,10 @@ function ctxFor(t){
   if (tgh){
     const box = tgh.closest('.tgroup'), key = box.dataset.tgkey, id = box.dataset.tgroup, g = ((PREFS.tgroups || {})[key] || []).find(x => x.id === id);
     if (!g) return null;
-    return {title:g.name, items:[{label:'Rename', run:() => renameGroup(key, id)}, {label:'Next colour', run:() => updGroup(key, id, x => Object.assign({}, x, {c:(x.c + 1) % TG_COLORS.length}))},
-      {label:'Disband division', run:() => updGroup(key, id, null)}]};
+    const kind = box.dataset.kind || 'taskforce', pinnable = !key.startsWith('network|'), pinned = PINS.includes('div:' + id);
+    return {title:g.name, items:[{label:'Rename', run:() => renameGroup(key, id)},
+      pinnable && {label:pinned ? 'Unpin' : 'Pin as a space', run:() => { buildDivisions(); togglePin('div:' + id); }},
+      {label:'Disband ' + GKIND[kind][1], run:() => updGroup(key, id, null)}]};
   }
   const pr = t.closest('.ptbl tbody tr[data-pid]');
   if (pr){
@@ -2257,23 +2259,24 @@ function groupedWalk(roots, kidsOf, openFn, shownFn, scope){
       const gx = gs.find(x => x.members.includes(n));
       if (!gx) return one(n);
       gx.members.forEach(m => placed.add(m.id));
-      out.push({open:gx.g, key, d}); gx.members.forEach(one); out.push({close:true});
+      out.push({open:gx.g, key, d, kind:groupKind(gx.members)}); gx.members.forEach(one); out.push({close:true});
     });
   })(roots, 0, 'root');
   return out;
 }
-function tgroupOpen({open:g, key, d}){
-  return `<div class="tgroup" data-tgroup="${esc(g.id)}" data-tgkey="${esc(key)}" role="group" aria-label="${esc(g.name)}" style="--gc:${TG_COLORS[(g.c || 0) % TG_COLORS.length]};--d:${d}">`
-    + `<div class="tg-h" title="Right-click to rename, recolour or disband"><i></i><span class="tg-n">${esc(g.name)}</span></div>`;
+function tgroupOpen({open:g, key, d, kind}){
+  const label = GKIND[kind][1], dup = g.name.toLowerCase().startsWith(label);
+  return `<div class="tgroup" data-tgroup="${esc(g.id)}" data-tgkey="${esc(key)}" data-kind="${kind}" role="group" aria-label="${esc(g.name)}, ${label}" style="--gc:var(--g-${kind});--d:${d}">`
+    + `<div class="tg-h" title="Right-click to rename, pin or disband"><i></i><span class="tg-n">${esc(g.name)}</span>${dup ? '' : `<span class="tg-k">${label}</span>`}</div>`;
 }
 function updGroup(key, id, f){
   const all = Object.assign({}, PREFS.tgroups || {});
   all[key] = (all[key] || []).map(g => g.id === id ? (f ? f(g) : null) : g).filter(Boolean);
-  PREFS = Object.assign({}, PREFS, {tgroups:all}); divisionsChanged(); savePrefs('the divisions');
+  PREFS = Object.assign({}, PREFS, {tgroups:all}); divisionsChanged(); savePrefs('the groups');
 }
 function renameGroup(key, id){
   const n = document.querySelector(`#tree .tgroup[data-tgroup="${CSS.escape(id)}"] .tg-n`); if (!n) return;
-  const inp = document.createElement('input'); inp.className = 'tg-name'; inp.value = n.textContent; inp.setAttribute('aria-label', 'Division name');
+  const inp = document.createElement('input'); inp.className = 'tg-name'; inp.value = n.textContent; inp.setAttribute('aria-label', 'Group name');
   n.replaceWith(inp); inp.focus(); inp.select();
   let done = false;
   const commit = ok => { if (done) return; done = true; const v = inp.value.trim().slice(0, 60); if (ok && v) updGroup(key, id, g => Object.assign({}, g, {name:v})); else renderTree(); };
@@ -2305,17 +2308,14 @@ addEventListener('click', e => { if (Date.now() < MQ.until && e.target.closest &
 function finishMarquee(hits){
   if (!hits.length) return;
   const ids = hits.map(r => r.dataset.select || r.dataset.netsel), pks = new Set(hits.map(r => r.dataset.pk));
-  if (pks.size > 1){ toast('Only items at the same level can form a division: draw the box over siblings'); return; }
-  if (hits.length < 2){ toast('Draw the box over two or more items at the same level to make a division'); return; }
+  if (pks.size > 1){ toast('Only items at the same level can form a group: draw the box over siblings'); return; }
+  if (hits.length < 2){ toast('Draw the box over two or more items at the same level to group them'); return; }
   const scope = S.tree === 'network' ? 'network' : S.pinsOnly ? 'pins' : 'machines', key = scope + '|' + [...pks][0];
   const all = Object.assign({}, PREFS.tgroups || {});
   const list = (all[key] || []).map(g => Object.assign({}, g, {ids:g.ids.filter(id => !ids.includes(id))})).filter(g => g.ids.length);
-  const names = new Set(list.map(g => g.name)), cs = new Set(list.map(g => g.c));
-  let k = 1; while (names.has('Division ' + k)) k++;
-  let c = 0; while (cs.has(c) && c < TG_COLORS.length - 1) c++;
-  list.push({id:'g' + Date.now().toString(36), name:'Division ' + k, c, ids});
+  list.push({id:'g' + Date.now().toString(36), name:newGroupName(list, ids), ids});
   all[key] = list;
-  PREFS = Object.assign({}, PREFS, {tgroups:all}); divisionsChanged(); savePrefs('the divisions');
+  PREFS = Object.assign({}, PREFS, {tgroups:all}); divisionsChanged(); savePrefs('the groups');
 }
 
 // Moving items between groups: by the drag handle on every row, or from the row's menu (issue #22).
@@ -2328,13 +2328,10 @@ function moveToGroup(key, id, gid, withId){
   if (gid) list = list.map(g => g.id === gid ? Object.assign({}, g, {ids:g.ids.concat([id])}) : g);
   list = list.filter(g => g.ids.length);
   if (withId){
-    const names = new Set(list.map(g => g.name)), cs = new Set(list.map(g => g.c));
-    let k = 1; while (names.has('Division ' + k)) k++;
-    let c = 0; while (cs.has(c) && c < TG_COLORS.length - 1) c++;
-    list.push({id:'g' + Date.now().toString(36), name:'Division ' + k, c, ids:[withId, id]});
+    list.push({id:'g' + Date.now().toString(36), name:newGroupName(list, [withId, id]), ids:[withId, id]});
   }
   all[key] = list;
-  PREFS = Object.assign({}, PREFS, {tgroups:all}); divisionsChanged(); savePrefs('the divisions');
+  PREFS = Object.assign({}, PREFS, {tgroups:all}); divisionsChanged(); savePrefs('the groups');
 }
 function groupMoveItems(id, pk){
   const key = treeScope() + '|' + pk, gs = (PREFS.tgroups || {})[key] || [], mine = gs.find(g => g.ids.includes(id));
@@ -2361,7 +2358,7 @@ $('tree').addEventListener('drop', e => {
   const {id, pk} = TDRAG, key = treeScope() + '|' + pk;
   TDRAG.id = null;
   const row = e.target.closest && e.target.closest('.row'), box = e.target.closest && e.target.closest('.tgroup');
-  const other = () => toast('Only items at the same level can share a division: drag it among its siblings');
+  const other = () => toast('Only items at the same level can share a group: drag it among its siblings');
   if (row && (row.dataset.select || row.dataset.netsel) !== id){
     if (row.dataset.pk !== pk) return other();
     const g = groupOf(key, row.dataset.select || row.dataset.netsel);
@@ -2384,10 +2381,27 @@ function buildDivisions(){
       const members = g.ids.map(id => nodes[id]).filter(Boolean); if (!members.length) return;
       const types = new Set(members.map(m => m.type));
       const d = {id:'div:' + g.id, name:g.name, kind:'division', type:types.size === 1 ? [...types][0] : 'base', children:members,
-        parent:pk === 'root' ? null : (nodes[pk] || null), color:TG_COLORS[(g.c || 0) % TG_COLORS.length]};
+        parent:pk === 'root' ? null : (nodes[pk] || null), gkind:groupKind(members)};
+      d.color = `var(--g-${d.gkind})`;
       d.series = sumSeries(members); d.gseries = members.reduce((t, c) => addG(t, c.gseries), {});
       nodes[d.id] = d;
     });
   }
 }
 function divisionsChanged(){ buildDivisions(); renderSpaces(); renderTree(); if (PICK.open) renderPickerList(); }
+
+// What a group is called comes from what's in it (#25): machines make a fleet, VMs a flotilla, containers a
+// division, cron jobs a section, Docker Compose projects or services a squadron; anything mixed, a task force.
+const GKIND = {fleet:['Fleet', 'fleet'], flotilla:['Flotilla', 'flotilla'], division:['Division', 'division'], section:['Section', 'section'],
+  squadron:['Squadron', 'squadron'], taskforce:['Task force', 'task force']};
+function groupKind(ms){
+  const k = n => n.kind === 'machine' ? (n.parent ? 'flotilla' : 'fleet') : n.kind === 'container' || n.kind === 'ncontainer' ? 'division'
+    : n.kind === 'cron' || n.kind === 'cronfolder' ? 'section' : n.kind === 'project' || n.kind === 'service' ? 'squadron' : n.kind === 'nmachine' ? 'fleet' : 'taskforce';
+  const ks = new Set((ms || []).map(k));
+  return ks.size === 1 ? [...ks][0] : 'taskforce';
+}
+function newGroupName(list, ids){
+  const word = GKIND[groupKind(ids.map(id => nodes[id] || netNodes[id]).filter(Boolean))][0], names = new Set(list.map(g => g.name));
+  let k = 1; while (names.has(word + ' ' + k)) k++;
+  return word + ' ' + k;
+}

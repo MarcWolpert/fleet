@@ -10,7 +10,7 @@ before(async () => { browser = await launch(); });
 after(async () => { await browser.close(); });
 
 const ROW = id => `document.querySelector('#tree .row[data-select="${id}"]')`;
-const GROUPS = `[...document.querySelectorAll('#tree .tgroup')].map(g => ({name: g.querySelector('.tg-h').textContent.trim(), rows: [...g.querySelectorAll('.row')].map(r => r.dataset.select || r.dataset.netsel)}))`;
+const GROUPS = `[...document.querySelectorAll('#tree .tgroup')].map(g => ({name: g.querySelector('.tg-n').textContent.trim(), rows: [...g.querySelectorAll('.row')].map(r => r.dataset.select || r.dataset.netsel)}))`;
 // drag a row's handle and drop it on an element (or on the tree's empty space)
 const dnd = (p, id, target) => p.eval(`(() => { const h = ${ROW(id)}.querySelector('.tdrag'), t = ${target}; const dt = new DataTransfer(); const r = t.getBoundingClientRect(); const o = {bubbles: true, cancelable: true, dataTransfer: dt, clientX: r.left + 30, clientY: r.top + Math.min(8, r.height / 2)}; h.dispatchEvent(new DragEvent('dragstart', o)); t.dispatchEvent(new DragEvent('dragenter', o)); t.dispatchEvent(new DragEvent('dragover', o)); t.dispatchEvent(new DragEvent('drop', o)); h.dispatchEvent(new DragEvent('dragend', o)); return true; })()`);
 const CLOSED = {lx: false, lx2: false, mac: false, win: false};
@@ -45,7 +45,7 @@ test('dropping on empty space takes it out of its group; on an ungrouped sibling
     assert.deepEqual(await p.eval(GROUPS), [{name: 'Linux', rows: ['lx']}]);
     await dnd(p, 'win', ROW('mac'));
     await p.waitFor(`${GROUPS}.length === 2`);
-    assert.deepEqual(await p.eval(GROUPS), [{name: 'Linux', rows: ['lx']}, {name: 'Division 1', rows: ['mac', 'win']}]);
+    assert.deepEqual(await p.eval(GROUPS), [{name: 'Linux', rows: ['lx']}, {name: 'Fleet 1', rows: ['mac', 'win']}]);
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
 });

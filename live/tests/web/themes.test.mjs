@@ -15,7 +15,7 @@ after(async () => { await browser.close(); });
 
 // themes.js on its own, as the page loads it
 const ctx = {}; vm.createContext(ctx);
-vm.runInContext(fs.readFileSync(path.join(WEB, 'themes.js'), 'utf8') + '\n;globalThis.T = {FLEET_THEMES, THEME_KEYS, themeTokens, themeContrast, readThemeFile};', ctx);
+vm.runInContext(fs.readFileSync(path.join(WEB, 'themes.js'), 'utf8') + '\n;globalThis.T = {FLEET_THEMES, THEME_KEYS, themeTokens, themeContrast, readThemeFile, themeOklab: typeof themeOklab === "function" ? themeOklab : null};', ctx);
 // (values from the vm's realm, as plain data, so deepEqual compares contents)
 const plain = x => JSON.parse(JSON.stringify(x));
 const {FLEET_THEMES, THEME_KEYS, themeContrast} = ctx.T;
@@ -140,4 +140,18 @@ test('Import theme adds the theme, applies it, saves it, and it can be removed a
     assert.deepEqual([lastPrefs(fx).theme, lastPrefs(fx).themes], ['fleet', []]);
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
+});
+
+test('every theme gives the six kinds of group six distinct colours (#25)', () => {
+  const KINDS = ['g-fleet', 'g-flotilla', 'g-division', 'g-section', 'g-squadron', 'g-taskforce'];
+  assert.ok(ctx.T.themeOklab, 'themeOklab');
+  for (const th of FLEET_THEMES){
+    const v = themeTokens(th).vars, lab = KINDS.map(k => ctx.T.themeOklab(v[k]));
+    assert.equal(v['g-flotilla'], v['t-vm'], th.name);
+    assert.equal(v['g-division'], v['t-container'], th.name);
+    assert.equal(v['g-squadron'], v['t-compose'], th.name);
+    let worst = 99, pair = '';
+    for (let i = 0; i < 6; i++) for (let j = i + 1; j < 6; j++){ const d = Math.hypot(lab[i][0] - lab[j][0], lab[i][1] - lab[j][1], lab[i][2] - lab[j][2]) * 100; if (d < worst){ worst = d; pair = KINDS[i] + '/' + KINDS[j]; } }
+    assert.ok(worst >= 10, `${th.name}: ${pair} only ΔE ${worst.toFixed(1)} apart`);
+  }
 });

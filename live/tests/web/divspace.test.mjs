@@ -25,7 +25,7 @@ test('the + picker lists divisions first, and pins one to the space bar', async 
     await p.waitFor(`document.querySelector('#picklist [data-pin]')`);
     const first = await p.eval(`[...document.querySelectorAll('#picklist [data-pin]')].slice(0, 2).map(b => b.dataset.pin)`);
     assert.deepEqual(first, ['div:g1', 'div:g2']);
-    assert.match(await p.eval(`document.querySelector('#picklist').textContent`), /Divisions/);
+    assert.match(await p.eval(`document.querySelector('#picklist').textContent`), /Groups/);
     await p.eval(`(() => { document.querySelector('#picklist [data-pin="div:g1"]').click(); return true; })()`);
     await p.waitFor(`document.querySelector('#spaces [data-space="div:g1"]')`);
     assert.deepEqual(JSON.parse(fx.posts.filter(x => x.path === '/api/pins').pop().body), ['div:g1']);

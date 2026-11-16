@@ -10,7 +10,9 @@
 // Every token a theme sets (each is a CSS custom property, --<name>, on <html>).
 const THEME_KEYS = ['chrome', 'chrome-2', 'chrome-hover', 'chrome-act', 'win', 'side', 'card', 'card-2', 'pop', 'panel', 'press', 'edge',
   'hover', 'sel', 'line', 'line-2', 'track', 'ink', 'ink-2', 'ink-3', 'accent', 'accent-bg', 'on-accent', 'run', 'warn', 'stale',
-  't-base', 't-compose', 't-container', 't-vm', 'rd', 'wr'];
+  't-base', 't-compose', 't-container', 't-vm', 'rd', 'wr', 'g-fleet', 'g-flotilla', 'g-division', 'g-section', 'g-squadron', 'g-taskforce'];
+// The six kinds of tree group (fleet, flotilla, division, section, squadron, task force), one colour each.
+const GROUP_KEYS = ['g-fleet', 'g-flotilla', 'g-division', 'g-section', 'g-squadron', 'g-taskforce'];
 // The four kinds of workload, in the order they stack in every bar.
 const SERIES_KEYS = ['t-base', 't-compose', 't-container', 't-vm'];
 
@@ -21,7 +23,8 @@ const FLEET_THEMES = [
     card:'#29292e', 'card-2':'#313137', pop:'#18181b', panel:'#1a1a1d', press:'#3a3a41', edge:'#000000', hover:'#ffffff0d', sel:'#3584e430',
     line:'#ffffff14', 'line-2':'#ffffff24', track:'#ffffff10', ink:'#f3f3f5', 'ink-2':'#c6c6cd', 'ink-3':'#9e9ea7', accent:'#78aeed',
     'accent-bg':'#3584e4', 'on-accent':'#ffffff', run:'#33d17a', warn:'#ffa66b', stale:'#f6d32d',
-    't-base':'#8a8984', 't-compose':'#3987e5', 't-container':'#199e70', 't-vm':'#d95926', rd:'#8fc1ff', wr:'#ffab7a'}),
+    't-base':'#8a8984', 't-compose':'#3987e5', 't-container':'#199e70', 't-vm':'#d95926', rd:'#8fc1ff', wr:'#ffab7a',
+    'g-fleet':'#923c8d', 'g-flotilla':'#d95926', 'g-division':'#199e70', 'g-section':'#e185d9', 'g-squadron':'#3987e5', 'g-taskforce':'#c9a913'}),
   TH('monokai-dimmed', 'Monokai Dimmed', true, {chrome:'#1a1a1a', win:'#1e1e1e', side:'#272727', card:'#2d2d2d', 'card-2':'#353535', press:'#454545',
     ink:'#c5c8c6', 'ink-3':'#9a9b99', accent:'#7ba2cf', 'accent-bg':'#3655b5', run:'#9aa83a', warn:'#d7873f', stale:'#d0b344',
     't-base':'#b96a83', 't-compose':'#6597d3', 't-container':'#82900a', 't-vm':'#9752e2'}),
@@ -108,6 +111,23 @@ function themeFlat(c, over){ const x = themeHex(c), y = themeHex(over), a = x[3]
 function themeLum(c){ const x = themeHex(c).slice(0, 3).map(v => { v /= 255; return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }); return 0.2126 * x[0] + 0.7152 * x[1] + 0.0722 * x[2]; }
 function themeContrast(a, b){ const x = themeLum(a), y = themeLum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); }
 // move c toward `to` in small steps until it reads at `min`:1 against `bg`
+// OKLab (x100 distances are the dataviz validator's ΔE) and back, for picking distinct group colours
+function themeOklab(c){
+  const x = themeHex(c).slice(0, 3).map(v => { v /= 255; return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); });
+  const l = Math.cbrt(0.4122214708 * x[0] + 0.5363325363 * x[1] + 0.0514459929 * x[2]), m = Math.cbrt(0.2119034982 * x[0] + 0.6806995451 * x[1] + 0.1073969566 * x[2]),
+    s = Math.cbrt(0.0883024619 * x[0] + 0.2817188376 * x[1] + 0.6299787005 * x[2]);
+  return [0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s, 1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s, 0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s];
+}
+function themeFromOklch(L, C, h){
+  for (let c = C; c >= 0; c -= 0.005){
+    const a = c * Math.cos(h * Math.PI / 180), b = c * Math.sin(h * Math.PI / 180);
+    const l = Math.pow(L + 0.3963377774 * a + 0.2158037573 * b, 3), m = Math.pow(L - 0.1055613458 * a - 0.0638541728 * b, 3), s = Math.pow(L - 0.0894841775 * a - 1.2914855480 * b, 3);
+    const rgb = [4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s, -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s, -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s];
+    if (rgb.every(v => v >= -0.0005 && v <= 1.0005)) return themeToHex(...rgb.map(v => { v = Math.min(1, Math.max(0, v)); return (v <= 0.0031308 ? 12.92 * v : 1.055 * Math.pow(v, 1 / 2.4) - 0.055) * 255; }));
+  }
+  return themeToHex(L * 255, L * 255, L * 255);
+}
+const themeDE = (p, q) => Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2]) * 100;
 function themeEnsure(c, bg, min, to){ let x = c; for (let t = 0.1; themeContrast(x, bg) < min && t <= 1.0001; t += 0.1) x = themeMix(c, to, t); return x; }
 
 /* ---------- a theme → its tokens ---------- */
@@ -155,6 +175,25 @@ function themeTokens(th){
   for (const k of ['run', 'warn', 'stale']) d(k, THEME_FALLBACK[k]);
   for (const k of ['run', 'warn', 'stale']) c[k] = themeEnsure(c[k], c.card, 3, c.ink);
   for (const k of SERIES_KEYS) d(k, THEME_FALLBACK[k]);
+  // groups: a flotilla, division or squadron outline matches its members' icons (the VM, container and Compose
+  // colours); fleet, section and task force get the three colours, at the theme's lightness and chroma, farthest
+  // from the others and from each other, and still visible on the cards
+  d('g-flotilla', c['t-vm']); d('g-division', c['t-container']); d('g-squadron', c['t-compose']);
+  const picked = ['g-flotilla', 'g-division', 'g-squadron'].map(k => themeOklab(c[k]));
+  const L0 = picked.reduce((a, p) => a + p[0], 0) / 3, C0 = Math.max(0.11, picked.reduce((a, p) => a + Math.hypot(p[1], p[2]), 0) / 3);
+  for (const k of ['g-fleet', 'g-section', 'g-taskforce']){
+    if (!c[k]){
+      let best = null, bd = -1;
+      for (const dl of [-0.12, -0.06, 0, 0.06, 0.12]) for (let h = 0; h < 360; h += 5){
+        const hex = themeFromOklch(Math.min(0.88, Math.max(0.35, L0 + dl)), C0, h);
+        if (themeContrast(hex, c.card) < 2.2) continue;
+        const lab = themeOklab(hex), dmin = Math.min(...picked.map(q => themeDE(lab, q)));
+        if (dmin > bd){ bd = dmin; best = hex; }
+      }
+      c[k] = best || THEME_FALLBACK[k];
+    }
+    picked.push(themeOklab(c[k]));
+  }
   // the ↓/↑ labels next to the read/write (in/out) lines: their line's hue, lifted toward the text
   d('rd', themeEnsure(themeMix(c['t-compose'], c.ink, .4), c.card, 4.5, c.ink));
   d('wr', themeEnsure(themeMix(c['t-vm'], c.ink, .4), c.card, 4.5, c.ink));

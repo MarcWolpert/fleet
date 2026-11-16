@@ -14,7 +14,7 @@ const ROW = id => `document.querySelector('#tree .row[data-select="${id}"]')`;
 const NROW = name => `[...document.querySelectorAll('#tree .row[data-netsel]')].find(r => r.textContent.includes(${JSON.stringify(name)}))`;
 // press on the first row, drag to the bottom of the last, let go (and the click that follows a drag)
 const drag = (p, from, to) => p.eval(`(() => { const a = (${from}).getBoundingClientRect(), b = (${to}).getBoundingClientRect(); const x0 = a.left + 40, y0 = a.top + 5, x1 = b.left + 70, y1 = b.bottom - 4; const t = document.elementFromPoint(x0, y0); const o = (x, y) => ({bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0, pointerId: 1}); t.dispatchEvent(new PointerEvent('pointerdown', o(x0, y0))); for (let i = 1; i <= 6; i++) document.dispatchEvent(new PointerEvent('pointermove', o(x0 + (x1 - x0) * i / 6, y0 + (y1 - y0) * i / 6))); document.dispatchEvent(new PointerEvent('pointerup', o(x1, y1))); t.dispatchEvent(new MouseEvent('click', o(x1, y1))); return true; })()`);
-const GROUPS = `[...document.querySelectorAll('#tree .tgroup')].map(g => ({name: g.querySelector('.tg-h').textContent.trim(), rows: [...g.querySelectorAll('.row')].map(r => r.dataset.select || r.dataset.netsel)}))`;
+const GROUPS = `[...document.querySelectorAll('#tree .tgroup')].map(g => ({name: g.querySelector('.tg-n').textContent.trim(), rows: [...g.querySelectorAll('.row')].map(r => r.dataset.select || r.dataset.netsel)}))`;
 const ORDER = `[...document.querySelectorAll('#tree .row[data-select]')].map(r => r.dataset.select)`;
 const saved = fx => { const ps = (fx.posts || []).filter(x => x.path === '/api/prefs'); return ps.length ? JSON.parse(ps[ps.length - 1].body).tgroups : undefined; };
 const CLOSED = {lx: false, lx2: false, mac: false, win: false};
@@ -30,7 +30,7 @@ test('a box over 3 of 4 machines groups exactly those 3, outlined, and saves it;
   try {
     await drag(p, ROW('lx'), ROW('mac'));
     await p.waitFor(`document.querySelector('#tree .tgroup')`);
-    assert.deepEqual(await p.eval(GROUPS), [{name: 'Division 1', rows: ['lx', 'lx2', 'mac']}]);
+    assert.deepEqual(await p.eval(GROUPS), [{name: 'Fleet 1', rows: ['lx', 'lx2', 'mac']}]);
     assert.deepEqual(await p.eval(ORDER), ['lx', 'lx2', 'mac', 'win']);
     assert.notEqual(await p.eval(`getComputedStyle(document.querySelector('#tree .tgroup')).getPropertyValue('--gc').trim()`), '');
     assert.equal(await p.eval(`S.sel`), 'fleet');
@@ -72,7 +72,7 @@ test('Pins only keeps its own groups, and any pins can be grouped', async () => 
   try {
     await drag(p, ROW('mac'), ROW('win'));
     await p.waitFor(`document.querySelector('#tree .tgroup')`);
-    assert.deepEqual(await p.eval(GROUPS), [{name: 'Division 1', rows: ['mac', 'win']}]);
+    assert.deepEqual(await p.eval(GROUPS), [{name: 'Fleet 1', rows: ['mac', 'win']}]);
     assert.deepEqual(Object.keys(saved(fx)), ['pins|root']);
     await p.eval(`(() => { document.querySelector('[data-pinsonly="0"]').click(); return true; })()`);
     await p.waitFor(`${ORDER}.length === 4`);
@@ -81,24 +81,21 @@ test('Pins only keeps its own groups, and any pins can be grouped', async () => 
   } finally { await p.close(); }
 });
 
-test('a group\'s right-click menu renames it, recolours it, and ungroups it', async () => {
+test('a group\'s right-click menu renames it, pins it, and disbands it', async () => {
   const fx = fixture();
-  fx.fleet.prefs = {tgroups: {'machines|root': [{id: 'g1', name: 'Division 1', c: 0, ids: ['lx', 'lx2']}]}};
+  fx.fleet.prefs = {tgroups: {'machines|root': [{id: 'g1', name: 'Fleet 1', c: 0, ids: ['lx', 'lx2']}]}};
   const p = await open({sel: 'fleet', open: CLOSED}, fx);
   const menu = () => p.eval(`(() => { const h = document.querySelector('#tree .tg-h'), r = h.getBoundingClientRect(); h.dispatchEvent(new MouseEvent('contextmenu', {bubbles: true, cancelable: true, clientX: r.left + 10, clientY: r.top + 5})); return [...document.querySelectorAll('#ctxmenu [role=menuitem]')].map(e => e.textContent.trim()); })()`);
   const pick = label => p.eval(`(() => { [...document.querySelectorAll('#ctxmenu [role=menuitem]')].find(e => e.textContent.trim() === ${JSON.stringify(label)}).click(); return true; })()`);
   try {
     await p.waitFor(`document.querySelector('#tree .tg-h')`);
-    assert.deepEqual(await menu(), ['Rename', 'Next colour', 'Disband division']);
+    assert.deepEqual(await menu(), ['Rename', 'Pin as a space', 'Disband fleet']);
     await pick('Rename');
     await p.waitFor(`document.activeElement && document.activeElement.classList.contains('tg-name')`);
     await p.eval(`(() => { const i = document.activeElement; i.value = 'Media boxes'; i.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', bubbles: true})); return true; })()`);
     await p.waitFor(`${GROUPS}[0] && ${GROUPS}[0].name === 'Media boxes'`);
     assert.equal(saved(fx)['machines|root'][0].name, 'Media boxes');
-    await menu(); await pick('Next colour');
-    for (let i = 0; i < 100 && saved(fx)['machines|root'][0].c !== 1; i++) await new Promise(r => setTimeout(r, 30));
-    assert.equal(saved(fx)['machines|root'][0].c, 1);
-    await menu(); await pick('Disband division');
+    await menu(); await pick('Disband fleet');
     await p.waitFor(`!document.querySelector('#tree .tgroup')`);
     assert.deepEqual(saved(fx)['machines|root'], []);
     assert.deepEqual(p.errors, []);
