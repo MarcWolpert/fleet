@@ -3,7 +3,7 @@
 import {test, before, after} from 'node:test';
 import assert from 'node:assert/strict';
 import {launch} from './harness.mjs';
-import {fixture, ui} from './fixtures.mjs';
+import {fixture, ui, PIDS} from './fixtures.mjs';
 
 let browser;
 before(async () => { browser = await launch(); });
@@ -126,6 +126,40 @@ test('the Go to list\'s row style stays in Go to: the spacers in card headers st
     await press(p, 'k', {mod: true, code: 'KeyK'});
     await p.waitFor(`document.querySelector('#gotolist [data-goi]')`);
     assert.equal(await p.eval(`(() => { const c = getComputedStyle(document.querySelector('#gotolist [data-goi]')); return [c.display, c.minHeight, c.padding, c.cursor].join(' '); })()`), 'flex 36px 5px 10px pointer');
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
+test('⌘F and Go to\'s Find a process select a leftover filter, and a refresh keeps it selected, so typing replaces it (regression)', async () => {
+  const fx = fixture();
+  const p = await open({view: 'details', filter: 'postgres'}, fx);
+  const SELN = `(() => { const f = document.getElementById('pfilter'); return [document.activeElement === f, f.value, f.selectionStart, f.selectionEnd]; })()`;
+  try {
+    await p.waitFor(`${PIDS}.length === 1`);
+    // ⌘F in Details, then a poll that changes the page
+    await press(p, 'f', {mod: true, code: 'KeyF'});
+    assert.deepEqual(await p.eval(SELN), [true, 'postgres', 0, 8]);
+    fx.procs.lx.procs[2][4] = 0.75;   // postgres: 3.1% to 4.7% of 16 cores
+    await p.eval(`(refreshNow(), true)`);
+    await p.waitFor(`document.querySelector('.ptbl tbody tr[data-pid="103"]').textContent.includes('4.7%')`);
+    assert.deepEqual(await p.eval(SELN), [true, 'postgres', 0, 8]);
+    await p.send('Input.insertText', {text: 'nginx'});
+    await p.waitFor(`${PIDS}.length === 2`);
+    assert.deepEqual(await p.eval(SELN), [true, 'nginx', 5, 5]);
+    assert.deepEqual(await p.eval(PIDS), [101, 102]);
+    // from the overview, Go to's Find a process opens Details on the filter; the process list arriving keeps it selected
+    await p.eval(`(() => { const f = document.getElementById('pfilter'); f.value = 'postgres'; f.dispatchEvent(new Event('input', {bubbles: true})); f.blur(); return true; })()`);
+    await press(p, 'd', {mod: true, code: 'KeyD'});
+    await p.waitFor(`!document.getElementById('pfilter')`);
+    await press(p, 'k', {mod: true, code: 'KeyK'});
+    await p.waitFor(`document.activeElement && document.activeElement.id === 'gotoq'`);
+    await p.eval(`(() => { const i = document.getElementById('gotoq'); i.value = 'find a process'; i.dispatchEvent(new Event('input', {bubbles: true})); return true; })()`);
+    await press(p, 'Enter');
+    await p.waitFor(`${PIDS}.length === 1`);
+    assert.deepEqual(await p.eval(SELN), [true, 'postgres', 0, 8]);
+    await p.send('Input.insertText', {text: 'nginx'});
+    await p.waitFor(`${PIDS}.length === 2`);
+    assert.deepEqual(await p.eval(SELN), [true, 'nginx', 5, 5]);
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
 });

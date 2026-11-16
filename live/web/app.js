@@ -1167,9 +1167,9 @@ function renderMain(){
   renderFilterBar();
   const main = $('main');
   const a = document.activeElement;
-  let refocus = null, selStart = null;
+  let refocus = null, selStart = null, selEnd = null, selDir;
   if (a && main.contains(a)){
-    if (a.id) { refocus = '#' + a.id; selStart = a.selectionStart; }
+    if (a.id) { refocus = '#' + a.id; selStart = a.selectionStart; selEnd = a.selectionEnd; selDir = a.selectionDirection; }
     else if (a.dataset) for (const k of ['select', 'mode', 'sort', 'pin', 'cpuview', 'netsel', 'gtoggle', 'gall']) if (a.dataset[k] != null){ refocus = `[data-${k}="${CSS.escape(a.dataset[k])}"]`; break; }
   }
   let html;
@@ -1194,7 +1194,7 @@ function renderMain(){
   const now = [...main.querySelectorAll(SCROLLERS)];
   if (now.length === scrolled.length) now.forEach((e, i) => { if (scrolled[i][0]) e.scrollTop = scrolled[i][0]; if (scrolled[i][1]) e.scrollLeft = scrolled[i][1]; });
   markPanel(); if (FIND.q) applyFind(false);
-  if (refocus){ const e = main.querySelector(refocus); if (e){ e.focus({preventScroll:true}); if (selStart != null && e.setSelectionRange) try { e.setSelectionRange(selStart, selStart); } catch (x) {} } }
+  if (refocus){ const e = main.querySelector(refocus); if (e){ e.focus({preventScroll:true}); if (selStart != null && e.setSelectionRange) try { e.setSelectionRange(selStart, selEnd, selDir); } catch (x) {} } }
 }
 function renderAll(){ renderSpaces(); renderToolbar(); renderTree(); renderMain(); refreshTip(); }
 
