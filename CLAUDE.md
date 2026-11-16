@@ -116,7 +116,7 @@ emails into this repo, its commit messages, issues or PRs.
   Marc. Every action test runs only against the `fleet-lab` VM.
 - **Protected objects:** never touch any `shop-*` Compose project,
   container or volume, above all `shop-prod` and its
-  `backup volumes` volumes, which hold production dumps and backups.
+  backup volumes, which hold production dumps and backups.
   Fleet's action layer must treat them as protected (typed confirmation), and
   a test proves it.
 - Never run `docker system|volume|container prune` or `image prune -a`. Remove
