@@ -59,7 +59,10 @@ def make_fleet(*cfgs):
 
 def give(f, mid, v, status="ok"):
     m = f.machines[mid]
-    m.view, m.status = v, status
+    if status == "ok":
+        m.got(v)   # a reading arrives
+    else:
+        m.view, m.status = v, status
     return m
 
 
