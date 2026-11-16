@@ -1861,7 +1861,8 @@ def restart_self(fleet, reason):
 # ---------------------------------------------------------------- settings
 TILES = ("laptop", "desktop", "terminal", "server", "globe", "vm")
 SSH_DEST = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.@:\[\]%-]{0,252}$")   # never starts with "-": no option smuggling
-MACHINE_KEYS = ("id", "name", "kind", "ssh", "os", "tile", "vm_on", "domain", "tailscale")
+MACHINE_KEYS = ("id", "name", "kind", "ssh", "os", "os_label", "tile", "vm_on", "domain", "tailscale", "note")
+NOTE_KEYS = ("label", "text")   # note is a table: [machine.note] label = "...", text = "..."
 
 
 def validate_config(data):
@@ -1876,7 +1877,11 @@ def validate_config(data):
     machines, ids = [], set()
     for i, m in enumerate(data.get("machines") or []):
         label = "Machine %d" % (i + 1)
-        mm = {k: str(m.get(k, "")).strip() for k in MACHINE_KEYS if str(m.get(k, "")).strip()}
+        mm = {k: str(m.get(k, "")).strip() for k in MACHINE_KEYS if k != "note" and str(m.get(k, "")).strip()}
+        if isinstance(m.get("note"), dict):
+            note = {k: str(m["note"].get(k, "")).strip() for k in NOTE_KEYS if str(m["note"].get(k, "")).strip()}
+            if note:
+                mm["note"] = note
         if not re.match(r"^[A-Za-z0-9_-]{1,40}$", mm.get("id", "")):
             errors.append("%s: id must be 1–40 letters, digits, - or _." % label)
         elif mm["id"] in ids:
@@ -1899,9 +1904,19 @@ def validate_config(data):
             if k in mm and not re.match(r"^[A-Za-z0-9_.@:-]{1,120}$", mm[k]):
                 errors.append("%s: %s has characters Fleet can't use." % (mm.get("name") or label, k))
         machines.append(mm)
+    runs_on = {mm["id"]: mm["vm_on"] for mm in machines if mm.get("id") and mm.get("vm_on")}
+    names = {mm["id"]: mm.get("name") or mm["id"] for mm in machines if mm.get("id")}
+    circled = set()
     for mm in machines:
         if mm.get("vm_on") and (mm["vm_on"] not in ids or mm["vm_on"] == mm.get("id")):
             errors.append("%s: “runs on” must be another machine in the list." % mm.get("name", "?"))
+        loop = [mm.get("id")]   # what it runs on, and what that runs on, ...: a circle never reaches a root
+        while loop[-1] in runs_on and runs_on[loop[-1]] not in loop:
+            loop.append(runs_on[loop[-1]])
+        if len(loop) > 1 and runs_on.get(loop[-1]) == loop[0] and loop[0] not in circled:
+            circled.update(loop)
+            errors.append("%s: “runs on” goes round in a circle (%s). One of them has to run on its own hardware."
+                          % (names[loop[0]], " → ".join(names[x] for x in loop + loop[:1])))
     if sum(1 for mm in machines if mm.get("kind") == "local") > 1:
         errors.append("Only one machine can be this computer.")
     term = str(data.get("terminal", "auto"))
@@ -1917,8 +1932,11 @@ def write_config(path, cfg):
     for m in cfg["machine"]:
         lines.append("[[machine]]")
         for k in MACHINE_KEYS:
-            if m.get(k):
+            if m.get(k) and k != "note":
                 lines.append("%s = %s" % (k, json.dumps(m[k], ensure_ascii=False)))
+        if m.get("note"):
+            lines.append("[machine.note]")
+            lines += ["%s = %s" % (k, json.dumps(m["note"][k], ensure_ascii=False)) for k in NOTE_KEYS if m["note"].get(k)]
         lines.append("")
     if os.path.exists(path):
         shutil.copy(path, path + ".bak")
