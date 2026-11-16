@@ -100,7 +100,7 @@ test('a VM\'s GPU use lands on the host GPU it runs on, as the host measures it;
   try {
     await p.waitFor(`typeof nodes !== 'undefined' && !!nodes.host && document.querySelectorAll('.gpus .gpu').length === 2`);
     assert.deepEqual(await p.eval(VM_MODEL), {
-      total: 150,
+      total: 145,   // the host's GPU total counts vm1 as the guest sees it (45, #206); its bar is on GPU 1, as the host measures it
       bt: {gpu0: {base: 0, compose: 0, container: 100, vm: 0}, gpu1: {base: 0, compose: 0, container: 0, vm: 50}},
       consumers: {gpu0: [['host/containers/trainer', 100]], gpu1: [['vm1', 50]]},
       hist: {gpu0: 100, gpu1: 50},

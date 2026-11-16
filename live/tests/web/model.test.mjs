@@ -24,7 +24,7 @@ test('every node has exactly its own numbers: jobs inside their owner, VMs by wh
   const p = await open();
   try {
     assert.deepEqual(await p.eval(`(() => { ${R} return Object.fromEntries(Object.keys(nodes).sort().map(id => [id, METRICS.map(m => r(cur(nodes[id], m.id)))])); })()`), {
-      'host':                    [9.8, 44, 190, 25, 4.7],
+      'host':                    [9.8, 44, 185, 25, 4.7],
       'host/base':               [2.5, 9, 50, 12, 1],     // its own (2, 8, 30, 10, 1) and its running job
       'host/base/cron':          [0.5, 1, 20, 2, 0],
       'host/base/cron/0':        [0.5, 1, 20, 2, 0],
@@ -36,14 +36,14 @@ test('every node has exactly its own numbers: jobs inside their owner, VMs by wh
       'host/containers':         [0.3, 1, 0, 1, 2],
       'host/containers/old':     [0, 0, 0, 0, 0],
       'host/containers/web':     [0.3, 1, 0, 1, 2],
-      'host/vms':                [2.5, 20, 50, 4, 1],
+      'host/vms':                [2.5, 20, 45, 4, 1],
       'host/vms/other':          [0.5, 4, 0, 0, 0],
       'host/vms/other/base':     [0.5, 4, 0, 0, 0],
       'nog':                     [1.2, 5, 0, 2, 0.6],
       'nog/base':                [1, 4, 0, 2, 0.5],
       'nog/containers':          [0.2, 1, 0, 0, 0.1],
       'nog/containers/web':      [0.2, 1, 0, 0, 0.1],
-      'vm1':                     [2, 16, 50, 4, 1],       // what the host sees of it
+      'vm1':                     [2, 16, 45, 4, 1],       // what the host sees of it; GPU as the guest sees it (#206)
       'vm1/base':                [1, 3, 40, 1, 0.5],
       'vm1/containers':          [0.5, 2, 5, 0, 0.5],
       'vm1/containers/app':      [0.5, 2, 5, 0, 0.5]});
@@ -80,11 +80,11 @@ test('the fleet adds up its machines by type, against the capacity of the ones w
     assert.deepEqual(await p.eval(`(() => { ${R} const c = ctxOf('fleet'); return Object.fromEntries(METRICS.map(m => [m.id, {bt: ro(c.bt(m.id)), cap: r(c.cap(m.id))}])); })()`), {
       cpu:  {bt: {base: 3.5, compose: 4.5, container: 0.5, vm: 2.5}, cap: 24},
       mem:  {bt: {base: 13, compose: 14, container: 2, vm: 20}, cap: 96},
-      gpu:  {bt: {base: 50, compose: 90, container: 0, vm: 50}, cap: 200},
+      gpu:  {bt: {base: 50, compose: 90, container: 0, vm: 45}, cap: 200},
       disk: {bt: {base: 14, compose: 8, container: 1, vm: 4}, cap: 1000},
       net:  {bt: {base: 1.5, compose: 0.7, container: 2.1, vm: 1}, cap: 250}});
     assert.deepEqual(await p.eval(`[...document.querySelectorAll('.hero-stats .hs')].map(e => [e.querySelector('.k').textContent, e.querySelector('.v').textContent])`),
-      [['CPU', '46%'], ['Memory', '51%'], ['GPU', '95%']]);
+      [['CPU', '46%'], ['Memory', '51%'], ['GPU', '93%']]);   // GPU: 185 of 200
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
 });
