@@ -30,7 +30,7 @@ async function open(fx, sel, opts = {}){
   return p;
 }
 
-test('an image name stays selected across refreshes; the next refresh after it is let go shows the new reading', async () => {
+test('an image name stays selected across refreshes, and the pane around it shows the new reading', async () => {
   const fx = fx2();
   const p = await open(fx, 'lx/containers/web');
   try {
@@ -43,9 +43,10 @@ test('an image name stays selected across refreshes; the next refresh after it i
     await p.waitFor(`!busy`);
     assert.equal(await p.eval(SELECTED), 'registry.example/team/web:1.4.2');
     assert.equal(await p.eval(`document.querySelector(${JSON.stringify(IMAGE)}) === getSelection().anchorNode || document.querySelector(${JSON.stringify(IMAGE)}).contains(getSelection().anchorNode)`), true);
-    assert.equal(await p.eval(TILE('CPU')), '0.40 cores');
+    assert.equal(await p.eval(TILE('CPU')), '0.90 cores');   // the pane was rebuilt around the selection (#155)
     await p.eval(`(getSelection().removeAllRanges(), refreshNow(), true)`);
-    await p.waitFor(`${TILE('CPU')} === '0.90 cores'`);
+    await p.waitFor(`!busy`);
+    assert.equal(await p.eval(TILE('CPU')), '0.90 cores');
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
 });
@@ -61,9 +62,10 @@ test('a cron command stays selected the same way', async () => {
     await p.eval(`(refreshNow(), true)`);
     await p.waitFor(`document.querySelector('#tree [data-val="lx/base/cron/0"]') && document.querySelector('#tree [data-val="lx/base/cron/0"]').textContent === '4.4%'`);
     assert.equal(await p.eval(SELECTED), '/usr/local/bin/backup --all --to /mnt/backups');
-    assert.equal(await p.eval(TILE('CPU')), '0.20 cores');
+    assert.equal(await p.eval(TILE('CPU')), '0.70 cores');   // the pane was rebuilt around the selection (#155)
     await p.eval(`(getSelection().removeAllRanges(), refreshNow(), true)`);
-    await p.waitFor(`${TILE('CPU')} === '0.70 cores'`);
+    await p.waitFor(`!busy`);
+    assert.equal(await p.eval(TILE('CPU')), '0.70 cores');
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
 });
