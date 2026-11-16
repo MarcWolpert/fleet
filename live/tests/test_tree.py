@@ -10,6 +10,7 @@ import os
 import sys
 import threading
 import unittest
+from unittest import mock
 import zlib
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
@@ -258,6 +259,56 @@ class VmCapacity(TreeTest):
         give(f, "win-vm", view(ncpu=8, cap=[8, 32.0, 0.0, 300.0, 125.0], os="Windows"))
         v = self.record(f, "nas")["vms"][0]
         self.assertEqual((v["id"], v["status"], v["cap"], v["hostside"]), ("win-vm", "ok", [8, 32.0, 0.0, 300.0, 125.0], [3.5, 16.0, 0, 2.0, 1.0]))
+
+
+VM2_CFG = {"id": "lab-vm", "name": "lab-vm", "ssh": "lab-vm", "os": "linux", "vm_on": "nas"}
+
+
+class VmsOfAHostWithoutAReading(TreeTest):
+    """#147: a host that has no reading still lists its configured VMs, each with what it knows of itself."""
+
+    def api_fleet(self, f):
+        with mock.patch.object(fleet_live, "load_pins", lambda: []), mock.patch.object(fleet_live, "load_tilepins", lambda: {}), \
+                mock.patch.object(fleet_live, "load_prefs", lambda: {}):
+            return f.api_fleet()
+
+    def tree(self, f):
+        """/api/fleet as (id, status, has_data) per machine, VMs nested."""
+        def one(s):
+            return (s["id"], s["status"], s["has_data"], [one(v) for v in s["vms"]])
+        return [one(s) for s in self.api_fleet(f)["machines"]]
+
+    def test_a_live_vm_under_a_host_without_a_reading_is_listed_with_its_data(self):
+        f = make_fleet(HOST_CFG, VM_CFG)
+        f.machines["nas"].status = "offline"
+        give(f, "win-vm", view(ncpu=8, cap=[8, 32.0, 0.0, 300.0, 125.0], host=[1.5, 9.0, 0.0, 2.0, 1.0], os="Windows",
+                               procs=[prow(40, "explorer.exe", "base", cpu=1.5)]))
+        self.record(f, "nas")
+        self.assertEqual(self.tree(f), [("nas", "offline", False, [("win-vm", "ok", True, [])])])
+        v = self.api_fleet(f)["machines"][0]["vms"][0]
+        self.assertEqual((v["cap"], v["base"]["h"]["cpu"][-1]), ([8, 32.0, 0.0, 300.0, 125.0], 1.5))
+        self.assertEqual([(p[0], p[10]) for p in f.api_procs("win-vm")["procs"]], [(40, "win-vm/base")])
+
+    def test_vms_without_readings_under_such_a_host_show_their_own_status_not_off(self):
+        f = make_fleet(HOST_CFG, VM_CFG, VM2_CFG)
+        f.machines["win-vm"].status = "offline"
+        self.record(f, "nas")
+        self.assertEqual(self.tree(f), [("nas", "connecting", False, [("win-vm", "offline", False, []), ("lab-vm", "connecting", False, [])])])
+
+    def test_a_live_host_that_does_not_list_a_vm_still_says_it_is_off(self):
+        f = make_fleet(HOST_CFG, VM_CFG)
+        give(f, "nas", host_view([]))
+        f.machines["win-vm"].status = "offline"
+        self.record(f, "nas")
+        self.assertEqual(self.tree(f), [("nas", "ok", True, [("win-vm", "off", False, [])])])
+
+    def test_a_vm_of_another_host_is_not_listed_here(self):
+        f = make_fleet(HOST_CFG, VM_CFG, {"id": "lx", "name": "lx", "ssh": "lx", "os": "linux"},
+                       {"id": "lx-vm", "name": "lx-vm", "ssh": "lx-vm", "os": "linux", "vm_on": "lx"})
+        self.record(f, "nas")
+        self.record(f, "lx")
+        self.assertEqual(self.tree(f), [("nas", "connecting", False, [("win-vm", "connecting", False, [])]),
+                                        ("lx", "connecting", False, [("lx-vm", "connecting", False, [])])])
 
 
 if __name__ == "__main__":

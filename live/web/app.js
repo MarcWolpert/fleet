@@ -168,7 +168,10 @@ function ctxOf(key){
   return {name:m.name, bt:(metric, i) => byType(m, metric, i), cap:metric => capOf(m.kind === 'machine' ? m : hostOf(m), metric)};
 }
 function cronCount(n){ let c = 0; (function v(x){ if (x.kind === 'cron') c++; x.children.forEach(v); })(n); return c; }
-function shareOfHost(n, metric){ return cur(n, metric) / capOf(hostOf(n), metric) * 100; }
+function shareOfHost(n, metric){   // under a host without a reading there's no host to take a share of: a VM's is of its own capacity
+  const h = hostOf(n); if (h === n || hasData(h)) return cur(n, metric) / capOf(h, metric) * 100;
+  return n.kind === 'machine' ? cur(n, metric) / capOf(n, metric) * 100 : NaN;
+}
 
 /* which GPU */
 function gpuBt(m, key, i){ const o = {base:0, compose:0, container:0, vm:0}; m.children.forEach(c => { const s = c.gseries[key]; if (s) o[c.type] += i == null ? s[H-1] : s[i]; }); return o; }

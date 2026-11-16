@@ -1219,6 +1219,8 @@ class Fleet:
                 spec["base"] = {"id": mid + "/base", "h": self.leaf(mid + "/base", [0] * 5, record)}
             if vm_parent is not None and vm_hostside is None:
                 spec["status"] = "off" if status != "ok" else status
+            # Without a reading of its own it still has its VMs: each shows what it knows of itself, not "off".
+            spec["vms"] = [self.machine_spec(mm, record) for mm in self.machines.values() if mm.cfg.get("vm_on") == mid]
             return spec
         spec.update({"os": view["os"] + (" · " + view["arch"] if view.get("arch") else ""), "cpu_model": view.get("cpu_model", ""),
                      "uptime": fmt_uptime(view.get("uptime", 0)), "cap": view["cap"], "cronLabel": view.get("cronLabel", "Cron jobs"),
