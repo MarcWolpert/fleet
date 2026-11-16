@@ -1208,6 +1208,7 @@ function select(id){
   save(); renderAll(); refreshNow();
 }
 document.addEventListener('click', e => {
+  if (e.target === $('tree')){ selectNone(); return; }   // empty space in a tree: nothing selected, everything shown
   const nv = e.target.closest('[data-nav]'); if (nv){ navGo(nv.dataset.nav === 'back' ? -1 : 1); return; }
   const fs = e.target.closest('[data-mfstep]'); if (fs){ stepFind(+fs.dataset.mfstep); return; }
   if (e.target.closest('[data-mfclose]')){ closeFind(); return; }
@@ -1759,6 +1760,7 @@ document.addEventListener('keydown', e => {
     if ($('keys')){ e.preventDefault(); closeKeys(); return; }
     if (e.target.id === 'tfq'){ e.preventDefault(); closeTreeFind(); return; }
     if (e.target.id === 'mfq'){ e.preventDefault(); closeFind(); return; }
+    if (PANEL === 'tree' && !typing && !overlayOpen() && !TF.q){ e.preventDefault(); selectNone(); return; }
     if (INSP.pid && !typing && !overlayOpen()){ e.preventDefault(); closeInspect(); return; }
     if (e.target.id === 'pfilter'){ e.preventDefault(); if (e.target.value){ e.target.value = ''; S.filter = ''; save(); renderMain(); } else e.target.blur(); return; }
     return;
@@ -2187,3 +2189,10 @@ addEventListener('keydown', e => {
   if ((e.key === 'Enter' || e.key === ' ') && i >= 0){ e.preventDefault(); e.stopPropagation(); const f = CTX.items[+items[i].dataset.cxi]; closeCtx(false); if (f && f.run) f.run(); }
 }, true);
 addEventListener('resize', () => closeCtx(false));
+
+// Selecting nothing shows everything, strictly from the top: All machines (whatever space you were in), or
+// the whole tailnet in the network tree.
+function selectNone(){
+  if (S.tree === 'network'){ S.netSel = 'net:tailnet'; save(); renderTree(); renderToolbar(); lastMainHTML = ''; renderMain(); return; }
+  goSpace('fleet');
+}
