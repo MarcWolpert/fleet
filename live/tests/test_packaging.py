@@ -70,7 +70,11 @@ class Packages(unittest.TestCase):
             env = dict(os.environ, PREFIX=prefix, HOME=tmp, PATH="/usr/bin:/bin")   # no python3 needed from here on
             subprocess.run(["sh", os.path.join(pkg, "install.sh")], env=env, capture_output=True, check=True)
             appdir = os.path.join(prefix, "share", "fleet")
-            for f in ("FLEET_BUNDLE", "bin/ttyd", "bin/tmux", "terminfo/x/xterm-256color", "python/bin/python3", "live/fleet_live.py"):
+            with open(os.path.join(pkg, "THIRD_PARTY_NOTICES.txt")) as f:   # what it carries, and their licences (#388)
+                notices = f.read()
+            for want in ("ttyd 1.7.7", "tmux 3.8", "mbed TLS", "musl libc", "libevent", "Python 3.12", "Symbols Nerd Font Mono", "Permission is hereby granted"):
+                self.assertIn(want, notices)
+            for f in ("FLEET_BUNDLE", "bin/ttyd", "bin/tmux", "terminfo/x/xterm-256color", "python/bin/python3", "live/fleet_live.py", "THIRD_PARTY_NOTICES.txt"):
                 self.assertTrue(os.path.exists(os.path.join(appdir, f)), f)
             with open(os.path.join(prefix, "bin", "fleet")) as f:
                 self.assertIn('exec "%s"' % os.path.join(appdir, "python", "bin", "python3"), f.read(), "its own Python")

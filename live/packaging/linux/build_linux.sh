@@ -25,6 +25,7 @@ if [ -n "$ARCH" ]; then   # what it runs, inside it: a Python, ttyd and tmux (#3
   mkdir -p "$OUT/app/bin" && cp "$DEPS/ttyd" "$DEPS/tmux" "$OUT/app/bin/" && chmod 755 "$OUT/app/bin/ttyd" "$OUT/app/bin/tmux"
   cp -R "$DEPS/terminfo" "$OUT/app/terminfo"
   touch "$OUT/app/FLEET_BUNDLE"
+  python3 "$HERE/../notices/notices.py" linux "$OUT/THIRD_PARTY_NOTICES.txt" && cp "$OUT/THIRD_PARTY_NOTICES.txt" "$OUT/app/"   # what it carries, and their licences (#388)
 fi
 for s in 16 32 48 64 128 256 512; do cp "$LIVE/packaging/icon/png/fleet-$s.png" "$OUT/icons/"; done
 cp "$LIVE/packaging/icon/fleet.svg" "$OUT/icons/fleet.svg"

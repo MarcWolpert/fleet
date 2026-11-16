@@ -47,7 +47,7 @@ sed "s/@VERSION@/$VERSION/g" "$HERE/Info.plist" > "$APP/Contents/Info.plist"
 plutil -lint "$APP/Contents/Info.plist" >/dev/null
 
 # what it runs, inside it (#359): its own Python, ttyd and tmux (Apple silicon: the Python and Homebrew's are arm64)
-if [ "$ARCHS" = arm64 ]; then "$HERE/bundle_deps.sh" "$APP"; else echo "build_macos: a $ARCHS build carries no Python, ttyd or tmux (only arm64 builds do)" >&2; fi
+if [ "$ARCHS" = arm64 ]; then "$HERE/bundle_deps.sh" "$APP" && python3 "$HERE/../notices/notices.py" macos "$APP/Contents/Resources/THIRD_PARTY_NOTICES.txt"; else echo "build_macos: a $ARCHS build carries no Python, ttyd or tmux (only arm64 builds do)" >&2; fi
 codesign --force --deep --sign - "$APP"   # ad-hoc: runs on this Mac; share a notarized build for other Macs
 if [ -f "$APP/Contents/Resources/FLEET_BUNDLE" ]; then   # the build checks itself: nothing outside the app, each program runs
   R="$APP/Contents/Resources"
@@ -60,6 +60,7 @@ ZIP="Fleet-$VERSION-macos$ZIPSUFFIX.zip"
 STAGE="$WORK/stage/Fleet-$VERSION" && rm -rf "$WORK/stage" && mkdir -p "$STAGE"
 ditto "$APP" "$STAGE/Fleet.app"
 cp "$HERE/install.command" "$STAGE/Install Fleet.command" && chmod 755 "$STAGE/Install Fleet.command"
+[ -f "$APP/Contents/Resources/THIRD_PARTY_NOTICES.txt" ] && cp "$APP/Contents/Resources/THIRD_PARTY_NOTICES.txt" "$STAGE/"   # what it carries, and their licences (#388)
 if [ -f "$APP/Contents/Resources/FLEET_BUNDLE" ]; then NEEDS="Everything Fleet runs is inside the app: its own Python, ttyd and tmux. It reaches your
 machines with the Mac's own ssh."; else NEEDS="This build needs Python 3.11 or newer (brew install python), and ttyd and tmux for the
 terminals below the page (brew install ttyd tmux)."; fi

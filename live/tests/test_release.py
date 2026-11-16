@@ -67,6 +67,7 @@ class Packages(unittest.TestCase):
             for f in ("index.html", "app.js", "themes.js", "icon.svg"):
                 shutil.copy(os.path.join(LIVE, "web", f), os.path.join(live, "web"))
             shutil.copytree(os.path.join(LIVE, "web", "fonts"), os.path.join(live, "web", "fonts"))   # the terminals' symbols font (#387)
+            shutil.copytree(os.path.join(LIVE, "packaging", "notices"), os.path.join(live, "packaging", "notices"))   # #388
             build = os.path.join(live, "packaging", "macos", "build_macos.sh")
             env = dict(os.environ, TMPDIR=work)
             r = subprocess.run(["sh", build, "--arch", "arm64", "--check"], capture_output=True, text=True, timeout=300, env=env)
@@ -77,7 +78,7 @@ class Packages(unittest.TestCase):
             zips = [f for f in os.listdir(os.path.join(live, "dist")) if f.endswith("-macos-arm64.zip")]
             names = subprocess.run(["zipinfo", "-1", os.path.join(live, "dist", zips[0])], capture_output=True, text=True).stdout.splitlines()
             top = names[0].split("/")[0]
-            for want in ("Fleet.app/Contents/MacOS/Fleet", "README.txt", "Install Fleet.command"):
+            for want in ("Fleet.app/Contents/MacOS/Fleet", "README.txt", "Install Fleet.command", "THIRD_PARTY_NOTICES.txt", "Fleet.app/Contents/Resources/THIRD_PARTY_NOTICES.txt"):
                 self.assertIn(top + "/" + want, names)
             self.assertTrue(top.startswith("Fleet-"), top)
             app = os.path.join(live, "dist", "Fleet.app", "Contents", "MacOS", "Fleet")

@@ -44,7 +44,7 @@ OUT="$LIVE/dist/fleet-$VERSION-$ARCH.flatpak"
 docker cp "$CT:/build/fleet.flatpak" "$OUT"
 # and a folder to hand over with it: the file, how to install it, and a script that does (#361)
 KIT="$LIVE/dist/fleet-$VERSION-$ARCH-flatpak"
-rm -rf "$KIT" && mkdir -p "$KIT" && cp "$OUT" "$KIT/" && cp "$HERE/install-flatpak.sh" "$KIT/install.sh" && chmod 755 "$KIT/install.sh"
+rm -rf "$KIT" && mkdir -p "$KIT" && cp "$OUT" "$KIT/" && cp "$HERE/install-flatpak.sh" "$KIT/install.sh" && chmod 755 "$KIT/install.sh" && cp "$PKG/THIRD_PARTY_NOTICES.txt" "$KIT/"
 cat > "$KIT/README.txt" <<EOT
 Fleet $VERSION as a Flatpak ($ARCH): every machine you manage, live, in one tree.
 
