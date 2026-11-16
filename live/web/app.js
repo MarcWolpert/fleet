@@ -670,16 +670,40 @@ function diskSelCard(m){
 function gpuToggle(){ return `<div class="seg" role="group" aria-label="GPU graph"><button type="button" data-gpuview="type" aria-pressed="${S.gpuView!=='each'}">By type</button><button type="button" data-gpuview="each" aria-pressed="${S.gpuView==='each'}">Each GPU</button></div>`; }
 function gpuSel(m){ return S.gpuSel && S.gpuSel.mid === m.id ? S.gpuSel.keys.filter(k => m.gpus.some(g => g.key === k)) : []; }
 function gpuHist(m, key){ return (m.gseries && m.gseries[key]) || zero(); }
+// Each GPU (issue #6): like the CCD viewer, a group per GPU with a live tile per metric it reports.
+const GPU_M = {util:['Utilisation', '%'], '3d':['3D', '%'], compute:['Compute', '%'], copy:['Copy', '%'], video:['Video', '%'], encode:['Video encode', '%'],
+  decode:['Video decode', '%'], vpp:['Video proc.', '%', 'Video processing'], jpeg:['JPEG', '%'], tiler:['Tiler', '%'], memctl:['Mem. controller', '%', 'Memory controller'],
+  vram:['VRAM', 'B', 'Dedicated GPU memory'], shared:['Shared', 'B', 'Shared GPU memory (system RAM)'], sysmem:['Memory', 'B', 'Memory in use by the GPU'],
+  temp:['Temperature', 'C'], power:['Power', 'W'], clock:['Clock', 'MHz', 'Core clock'], memclock:['Mem. clock', 'MHz', 'Memory clock'], fan:['Fan', '%'], fanrpm:['Fan', 'rpm']};
+function gpuValText(unit, v){
+  if (unit === '%') return pct(v);
+  if (unit === 'B') return memText(v / 1073741824);
+  if (unit === 'C') return Math.round(v) + ' °C';
+  if (unit === 'W') return (v >= 10 ? Math.round(v) : v.toFixed(1)) + ' W';
+  if (unit === 'MHz') return v >= 1000 ? (v / 1000).toFixed(2) + ' GHz' : Math.round(v) + ' MHz';
+  if (unit === 'rpm') return Math.round(v).toLocaleString() + ' rpm';
+  return num(v);
+}
 function gpuEachCard(m){
-  const sel = gpuSel(m);
-  const cells = m.gpus.map((g, gi) => [g, gi, gpuHist(m, g.key)[H-1]]).sort((a, b) => pinFirst('gpu', m.id, x => x[0].key)(a, b) || bySort('gpu')(a, b)).map(([g, gi]) => {
-    const h = gpuHist(m, g.key), now = h[H-1], on = sel.includes(g.key);
-    const pts = h.map((v, i) => `${(i/(H-1)*100).toFixed(1)},${(80 - Math.min(v, 100)/100*74).toFixed(1)}`);
-    return `<div class="gcell${on ? ' sel' : ''}${tpinned('gpu', m.id, g.key) ? ' pinned' : ''}"><button type="button" class="tsel" data-gsel="${esc(g.key)}" aria-pressed="${on}" aria-label="GPU ${gi}, ${esc(g.name)}, ${Math.round(now)}%"></button>`
-      + `<span class="trow"><span class="gk">GPU ${gi}${tpinBtn('gpu', m.id, g.key, 'GPU ' + gi)}</span><span class="gv">${pct(now)}</span></span><span class="gn">${esc(g.name)}</span><span class="gm">${esc(g.mem || '')}${g.host ? ' · on host ' + esc(g.host.replace('gpu', 'GPU ')) : ''}</span>`
-      + `<svg viewBox="0 0 100 80" preserveAspectRatio="none" aria-hidden="true"><path d="M0,80L${pts.join('L')}L100,80Z" fill="var(--accent-bg)" fill-opacity=".35"/><polyline points="${pts.join(' ')}" fill="none" stroke="var(--accent)" stroke-width="1.6" vector-effect="non-scaling-stroke"/></svg></div>`;
+  const sel = gpuSel(m), mac = /mac/i.test(m.os || '');
+  const groups = m.gpus.map((g, gi) => [g, gi, gpuHist(m, g.key)[H-1]]).sort((a, b) => pinFirst('gpu', m.id, x => x[0].key)(a, b) || bySort('gpu')(a, b)).map(([g, gi]) => {
+    const on = sel.includes(g.key);
+    const metrics = g.m && g.m.length ? g.m : [['util', null, gpuHist(m, g.key)]];
+    const util = (metrics.find(x => x[0] === 'util') || [0, 0, gpuHist(m, g.key)])[2];
+    const tiles = metrics.map((x, i) => [x, i]).sort((a, b) => pinFirst('gpum', m.id, y => g.key + ':' + y[0][0])(a, b) || a[1] - b[1]).map(([[k, lim, h]]) => {
+      const [label0, unit, long] = GPU_M[k] || [k, ''], label = k === '3d' && mac ? 'Renderer' : label0, full = long || label;
+      const now = h[H-1], peak = Math.max(...h);
+      const max = unit === '%' ? 100 : lim || (unit === 'C' ? Math.max(100, peak) : peak * 1.15 || 1);
+      const pts = h.map((v, i) => `${(i/(H-1)*100).toFixed(1)},${(56 - Math.min(v, max)/max*52).toFixed(1)}`);
+      const val = gpuValText(unit, now), sub = lim ? 'of ' + gpuValText(unit, lim) : '';
+      return `<div class="lcell gmc${tpinned('gpum', m.id, g.key + ':' + k) ? ' pinned' : ''}" data-gm="${esc(k)}" title="${esc(full)}"><button type="button" class="tsel" data-gsel="${esc(g.key)}" aria-pressed="${on}" aria-label="GPU ${gi} ${esc(full)} ${esc(val)}${sub ? ' ' + esc(sub) : ''}"></button>`
+        + `<span class="trow"><span class="lt">${esc(label)}${tpinBtn('gpum', m.id, g.key + ':' + k, label)}</span><span class="lv">${esc(val)}</span></span><span class="lm">${sub ? esc(sub) : '&nbsp;'}</span>`
+        + `<svg viewBox="0 0 100 56" preserveAspectRatio="none" aria-hidden="true"><path d="M0,56L${pts.join('L')}L100,56Z" fill="var(--accent-bg)" fill-opacity=".35"/><polyline points="${pts.join(' ')}" fill="none" stroke="var(--accent)" stroke-width="1.4" vector-effect="non-scaling-stroke"/></svg></div>`;
+    }).join('');
+    const pt = /passed through/.test(g.mem || '') ? `<p class="lhint">Its use shows inside that VM, not on this host.</p>` : '';
+    return `<div class="ggroup${on ? ' sel' : ''}" data-gpu="${esc(g.key)}"><div class="lgh"><button type="button" class="lgbtn${on ? ' sel' : ''}" data-gsel="${esc(g.key)}" aria-pressed="${on}" title="See what runs on this GPU">GPU ${gi} · ${esc(g.name)}</button>${tpinBtn('gpu', m.id, g.key, 'GPU ' + gi)}<span>${esc(g.mem || '')}${g.host ? ' · on host ' + esc(g.host.replace('gpu', 'GPU ')) : ''}</span><span>now ${pct(util[H-1])}</span></div>${pt}<div class="lgrid">${tiles}</div></div>`;
   }).join('');
-  return `<section class="card"><div class="card-h"><h2>Each GPU</h2><span class="sub">${m.gpus.length} GPU${m.gpus.length > 1 ? 's' : ''} · click one to see what runs on it</span><span class="grow"></span>${m.gpus.length > 1 ? sortMenu('gpu') : ''}${gpuToggle()}</div><div class="ggrid">${cells}</div></section>`;
+  return `<section class="card"><div class="card-h"><h2>Each GPU</h2><span class="sub">${m.gpus.length} GPU${m.gpus.length > 1 ? 's' : ''} · click one to see what runs on it</span><span class="grow"></span>${m.gpus.length > 1 ? sortMenu('gpu') : ''}${gpuToggle()}</div><div class="lgroups ggroups">${groups}</div></section>`;
 }
 function gpuSelCard(m){
   if (!m.gpus.length) return '';

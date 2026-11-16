@@ -628,6 +628,12 @@ kbd{display:inline-block;min-width:22px;padding:2px 7px;border-radius:6px;border
 .fmatch{background:color-mix(in srgb, var(--stale) 16%, transparent)!important}
 tr.fmatch>td{background:color-mix(in srgb, var(--stale) 16%, transparent)!important}
 .fcur{outline:2px solid color-mix(in srgb, var(--stale) 75%, transparent);outline-offset:-2px}
+
+/* Each GPU: a group of metric tiles per GPU */
+.ggroups .lgrid{grid-template-columns:repeat(auto-fill,minmax(138px,1fr))}
+.ggroup.sel .lgh .lgbtn{color:var(--ink)}
+.ggroup.sel .lcell{border-color:color-mix(in srgb, var(--accent) 45%, transparent)}
+.gmc .lt{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 </style>
 </head>
 <body>
