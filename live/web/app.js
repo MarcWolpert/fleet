@@ -3525,6 +3525,35 @@ function renderFold(){
 }
 document.addEventListener('click', e => { const b = e.target.closest('#treefold [data-fold]'); if (b) foldPress(b.dataset.fold); });
 
+// The tree panel resizes from its right edge (#393): drag (kept in S.sideW), double-click for the default, ←/→ (⇧ more)
+const SIDE_W = {def:390, min:240};
+function sideMax(){ return Math.max(SIDE_W.min, Math.round(innerWidth * 0.6)); }
+function setSideW(w, keep){
+  const v = Math.round(Math.min(sideMax(), Math.max(SIDE_W.min, w)));
+  document.documentElement.style.setProperty('--side-w', v + 'px');
+  const g = document.querySelector('aside.side .side-grip'); if (g) g.setAttribute('aria-valuenow', v);
+  if (keep){ if (v === SIDE_W.def) delete S.sideW; else S.sideW = v; save(); }
+  return v;
+}
+if (S.sideW) setSideW(S.sideW, false);
+document.addEventListener('pointerdown', e => {
+  const g = e.target.closest('aside.side .side-grip'); if (!g || e.button !== 0) return;
+  e.preventDefault();
+  const x0 = e.clientX, w0 = document.querySelector('aside.side').getBoundingClientRect().width;
+  g.classList.add('on'); document.body.classList.add('sidedrag');
+  const mv = ev => setSideW(w0 + ev.clientX - x0, false);
+  const up = ev => { document.removeEventListener('pointermove', mv); document.removeEventListener('pointerup', up); g.classList.remove('on'); document.body.classList.remove('sidedrag'); const v = setSideW(w0 + ev.clientX - x0, true); if (v === SIDE_W.def) delete S.sideW; else S.sideW = v; save(); };
+  document.addEventListener('pointermove', mv); document.addEventListener('pointerup', up);
+});
+document.addEventListener('dblclick', e => { if (e.target.closest('aside.side .side-grip')) setSideW(SIDE_W.def, true); });
+document.addEventListener('keydown', e => {
+  const g = e.target.closest && e.target.closest('aside.side .side-grip'); if (!g) return;
+  const w = document.querySelector('aside.side').getBoundingClientRect().width, step = e.shiftKey ? 80 : 20;
+  if (e.key === 'ArrowRight'){ e.preventDefault(); e.stopPropagation(); setSideW(w + step, true); }
+  else if (e.key === 'ArrowLeft'){ e.preventDefault(); e.stopPropagation(); setSideW(w - step, true); }
+  else if (e.key === 'Home'){ e.preventDefault(); e.stopPropagation(); setSideW(SIDE_W.def, true); }
+}, true);
+
 // The super button (#331): Fleet's logo at the top right opens Go to anything, its key in the platform's notation
 (function(){ const b = document.querySelector('[data-super]'); if (!b) return;
   b.setAttribute('aria-label', `Go to anything (${MODK}K)`); b.title = `Go to anything: machines, containers, jobs and commands (${MODK}K)`; })();
