@@ -40,6 +40,7 @@ plus an app window.
 | ✅ | Machine tree: Base system, Docker Compose (project → service), containers, VMs, recursively |
 | ✅ | Where usage goes: CPU, memory, GPU, disk I/O and network split by type, as a share of capacity or of what's in use |
 | ✅ | Which GPU: per-GPU rows, "what runs on which GPU", and `GPU0`/`GPU1` tags on every workload |
+| ✅ | Each GPU, like Task Manager: per GPU a group of live tiles for its engines (3D, compute, copy, video encode/decode), VRAM and shared memory, temperature, power, clocks and fan, from NVIDIA, AMD, Intel and Apple GPUs on Linux, Windows and macOS |
 | ✅ | Scheduled jobs under what runs them: crontab, systemd timers, launchd, Windows Scheduled Tasks, with usage while they run |
 | ✅ | Details: a sortable, filterable process list for any node, groupable by CPU group (CCD, P-cores, E-cores), owner, user or status |
 | ✅ | Logical processors: one live graph per CPU, grouped by CCD, P/E cores or Apple core clusters |
