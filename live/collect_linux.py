@@ -334,6 +334,22 @@ def net_users(ifaddr):
     return users
 
 
+def guest_mem(meminfo, vmstat, balloon_features, page):
+    """[MemTotal, MemAvailable] in bytes, as this machine has them now. In a VM whose virtio balloon
+    negotiated deflate-on-OOM (feature bit 2), the pages the host took back stay inside MemTotal and read
+    as used, so they come out of the total; without that feature the kernel already took them out."""
+    mi = {}
+    for line in meminfo.splitlines():
+        k, _, v = line.partition(":")
+        if v.split():
+            mi[k] = int(v.split()[0]) * 1024
+    total, avail = mi.get("MemTotal", 0), mi.get("MemAvailable", 0)
+    m = re.search(r"^nr_balloon_pages (\d+)$", vmstat, re.M)
+    if m and any(len(f.strip()) > 2 and f.strip()[2] == "1" for f in balloon_features):
+        total = max(avail, total - int(m.group(1)) * page)
+    return [total, avail]
+
+
 def snapshot():
     global out
     out = {"t": time.time(), "hz": HZ, "ncpu": os.cpu_count(), "host": os.uname()[1], "kernel": os.uname()[2]}
@@ -385,12 +401,8 @@ def snapshot():
     for c in lcpus:
         c["kind"] = "P" if c["n"] in p_cpus else "E" if c["n"] in e_cpus else ""
     out["cpu_model"] = (re.search(r"model name\s*:\s*(.+)", rd("/proc/cpuinfo")) or re.search(r"(.*)", "")).group(1).strip()
-    mi = {}
-    for line in rd("/proc/meminfo").splitlines():
-        k, _, v = line.partition(":")
-        if v.split():
-            mi[k] = int(v.split()[0]) * 1024
-    out["mem"] = [mi.get("MemTotal", 0), mi.get("MemAvailable", 0)]
+    out["mem"] = guest_mem(rd("/proc/meminfo"), rd("/proc/vmstat"), [rd(f) for f in glob.glob("/sys/bus/virtio/drivers/virtio_balloon/virtio*/features")],
+                           os.sysconf("SC_PAGE_SIZE"))
 
     disk = 0
     for line in rd("/proc/diskstats").splitlines():
