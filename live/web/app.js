@@ -96,7 +96,7 @@ function machineFrom(s, isVm){
     os:s.os || '', tile:s.tile || 'vm', agent:s.agent || '', uptime:s.uptime || '', note:s.note, status:s.status || 'ok', error:s.error || '',
     cronLabel:s.cronLabel || 'Cron jobs', cpu_model:s.cpu_model || '', ncpu:s.ncpu || cap[0], groups:s.groups || [],
     hostHist:s.hostside && !Array.isArray(s.hostside) ? histOf(s.hostside) : null,
-    ssh:s.ssh || '', hasData:s.has_data !== false || s.status === 'hostonly', lastOk:s.last_ok || 0});
+    ssh:s.ssh || '', hasData:s.has_data !== false || s.status === 'hostonly', lastOk:s.last_ok || 0, on:s.on !== false});
   const gks = g => (g || []).filter(k => gpus.some(x => x.key === k));
   const b = attach(m, leaf(s.base.id, 'Base system', 'base', 'base', s.base.h));
   b.gk = gks(s.base.g);
@@ -221,11 +221,13 @@ function heroStats(list){ return `<div class="hero-stats">${list.map(s => `<div 
 // A machine with data keeps showing it while it reconnects ("stale"); only a machine that never
 // reported gets the offline card. Status changes never swap the layout.
 function isLive(n){ return n.status === 'ok'; }
+// a machine Fleet reaches over SSH has a connection you can turn off and on (this computer needs none)
+function switchable(n){ return n.kind === 'machine' && /^ssh /.test(n.agent || ''); }
 function hasData(n){ return n.kind !== 'machine' || n.hasData || n.status === 'ok' || n.status === 'hostonly'; }
 function isStale(n){ return n.kind === 'machine' && n.status !== 'ok' && n.status !== 'hostonly' && n.hasData; }
 function staleFor(n){ return n.lastOk ? Math.max(0, Date.now() / 1000 - n.lastOk) : 0; }
 function statusClass(n){ return isLive(n) ? 'ok' : n.status === 'hostonly' ? 'hostonly' : isStale(n) ? 'stale' : n.status === 'off' ? 'off' : n.status === 'connecting' ? 'connecting' : 'offline'; }
-function statusText(n){ return n.status === 'ok' ? 'live' : n.status === 'off' ? 'off' : n.status === 'hostonly' ? 'seen from host' : isStale(n) ? 'reconnecting' : n.status === 'connecting' ? 'connecting' : 'offline'; }
+function statusText(n){ return n.status === 'ok' ? 'live' : n.status === 'off' || n.status === 'disabled' ? 'off' : n.status === 'hostonly' ? 'seen from host' : isStale(n) ? 'reconnecting' : n.status === 'connecting' ? 'connecting' : 'offline'; }
 function stalePill(n){ return isStale(n) ? `<span class="spill" title="Showing the last reading until ${esc(n.name)} answers again">reconnecting · ${ago(staleFor(n)).replace(' ago', '')}</span>` : ''; }
 function pinBtn(id){ const on = PINS.includes(id); return `<button type="button" class="pinbtn${on ? ' on' : ''}" data-pin="${esc(id)}" aria-pressed="${on}" aria-label="${on ? 'Unpin' : 'Pin'} ${esc(nodes[id] ? nodes[id].name : id)} as a space" title="${on ? 'Unpin from the space bar' : 'Pin to the space bar'}">${icon('pin')}</button>`; }
 
@@ -396,7 +398,7 @@ function renderTree(){
   function treeRow({n, d, pk}){
     const kids = n.children.length > 0, open = kids && opened(n);
     const count = (n.kind === 'group' || n.kind === 'cronfolder' || n.kind === 'project' || n.kind === 'division') ? `<span class="count">${n.children.length}</span>` : '';
-    const dot = n.kind === 'cron' ? `<i class="dot${n.running?' on':''}" data-dot="${esc(n.id)}" title="running now"></i>` : n.kind === 'machine' ? `<i class="sdot ${statusClass(n)}" data-sdot="${esc(n.id)}" title="${statusText(n)}"></i>` : '';
+    const dot = n.kind === 'cron' ? `<i class="dot${n.running?' on':''}" data-dot="${esc(n.id)}" title="running now"></i>` : n.kind === 'machine' ? (switchable(n) ? connDot(n) : `<i class="sdot ${statusClass(n)}" data-sdot="${esc(n.id)}" title="${statusText(n)}"></i>`) : '';
     const gw = S.metric === 'gpu' && n.parent && hostOf(n).gpus.length > 1 ? whichGpu(n) : '';
     const gtag = gw ? `<span class="gtag" title="${esc(whichGpuLong(n))}">${gw}</span>` : '';
     const st = n.kind === 'machine' ? ' ' + statusClass(n) : '';
@@ -475,7 +477,7 @@ function updateTree(){
   document.querySelectorAll('[data-val]').forEach(e => { const n = nodes[e.dataset.val]; if (n) e.textContent = rowVal(n); });
   document.querySelectorAll('[data-spark]').forEach(e => { const n = nodes[e.dataset.spark]; if (n) e.firstElementChild.setAttribute('points', sparkPts(n.series[S.metric], 60, 16)); });
   document.querySelectorAll('[data-dot]').forEach(e => { const n = nodes[e.dataset.dot]; if (n) e.classList.toggle('on', !!n.running); });
-  document.querySelectorAll('[data-sdot]').forEach(e => { const n = nodes[e.dataset.sdot]; if (n){ e.className = 'sdot ' + statusClass(n); e.title = statusText(n); } });
+  document.querySelectorAll('[data-sdot]').forEach(e => { const n = nodes[e.dataset.sdot]; if (n){ e.className = 'sdot ' + statusClass(n); e.title = statusText(n) + (e.dataset.conn ? (n.on ? ' · click to disconnect' : ' · click to connect') : ''); if (e.dataset.conn){ e.setAttribute('aria-pressed', String(n.on)); e.setAttribute('aria-label', (n.on ? 'Disconnect ' : 'Connect ') + n.name); } } });
   document.querySelectorAll('[data-val]').forEach(e => { const n = nodes[e.dataset.val]; if (n && n.kind === 'machine') e.classList.toggle('dim', !isLive(n)); });
 }
 
@@ -896,6 +898,7 @@ function machineView(m){
 function diagnose(m){
   const e = (m.error || '').toLowerCase(), host = esc(m.ssh || m.name), name = esc(m.name);
   const retry = 'Press <b>Retry now</b>.';
+  if (m.status === 'disabled') return {kind:'off', ic:'power', title:'Not connected', text:`Fleet isn’t connecting to ${name}: its connection was turned off, or it isn’t in the machines <b>Connect automatically</b> connects to when Fleet starts. Connect to read it now.`, steps:[]};
   if (m.status === 'off') return {kind:'off', ic:'power', title:`${name} is turned off`, text:'Its host reports this VM as not running. Start it there and Fleet picks it up within a few seconds.', steps:[]};
   if (m.status === 'connecting' && !e) return {kind:'wait', ic:'refresh', title:`Connecting to ${name}…`, text:'Waiting for its first reading.', steps:[]};
   if (/host key verification failed|remote host identification has changed/.test(e)) return {kind:'key', ic:'key', title:`Fleet can’t confirm this is really ${name}`,
@@ -928,7 +931,7 @@ function offlineView(m){
   return `<div class="hero">${heroMachineTile(m)}<div><h1>${esc(m.name)} <span class="spill ${d.kind}">${esc(statusText(m))}</span>${termBtn(m)}</h1><div class="facts">${facts.map(f => `<span>${esc(f)}</span>`).join('')}</div></div><button type="button" class="btn${pinned ? ' on' : ''}" data-pin="${esc(m.id)}" aria-pressed="${pinned}" style="margin-left:auto">${icon('pin')}${pinned ? 'Pinned' : 'Pin as space'}</button></div>`
     + `<section class="state"><div class="state-ic ${d.kind}">${icon(d.ic)}</div><div class="state-body"><h2>${d.title}</h2><p>${d.text}</p>`
     + (d.steps.length ? `<ol class="steps">${d.steps.map(x => `<li><span>${x}</span></li>`).join('')}</ol>` : '')
-    + `<div class="state-actions">${m.status === 'off' ? '' : `<button type="button" class="btn primary" data-retry="${esc(m.id)}">${icon('refresh')}Retry now</button>`}<button type="button" class="btn" data-settings="1">${icon('gear')}Open Settings</button></div>`
+    + `<div class="state-actions">${m.status === 'disabled' ? `<button type="button" class="btn primary" data-conn="${esc(m.id)}" aria-pressed="false">${icon('power')}Connect</button>` : m.status === 'off' ? '' : `<button type="button" class="btn primary" data-retry="${esc(m.id)}">${icon('refresh')}Retry now</button>`}<button type="button" class="btn" data-settings="1">${icon('gear')}Open Settings</button></div>`
     + (m.error ? `<details class="state-raw"${S.rawOpen ? ' open' : ''}><summary>Technical details</summary><code>${esc(m.error)}</code><div>${m.lastOk ? 'Last reading ' + ago(staleFor(m)) : 'No reading yet'} · retrying on its own</div></details>` : '')
     + `</div></section>`;
 }
@@ -1310,6 +1313,9 @@ function select(id){
 }
 document.addEventListener('click', e => {
   if (e.target === $('tree')){ selectNone(); return; }
+  // a machine's dot (or Connect on its page) turns its connection off or on; it doesn't select the row
+  const cn = e.target.closest('[data-conn]'); if (cn){ e.stopPropagation(); setConnected(cn.dataset.conn, cn.getAttribute('aria-pressed') !== 'true'); return; }
+  if (e.target.closest('[data-autoconn]')){ openAutoConn(e.target.closest('[data-autoconn]')); return; }
   // a group's chevron folds it to its header, or unfolds it as it was
   const tf = e.target.closest('[data-tgfold]'); if (tf){ S.gfold = Object.assign({}, S.gfold, {[tf.dataset.tgfold]:tf.getAttribute('aria-expanded') === 'true'}); save(); renderTree(); const b = document.querySelector(`[data-tgfold="${CSS.escape(tf.dataset.tgfold)}"]`); if (b) b.focus(); return; }
   // a group's header selects the group: its own all-up view (a fleet's is All machines for its members)
@@ -1413,6 +1419,7 @@ async function refreshNow(){
     DATA = await r.json();
     INTERVAL = DATA.interval || 3; WINDOW = DATA.window_s || INTERVAL * H; PINS = DATA.pins || []; if (!prefsBusy){ PREFS = DATA.prefs || {}; applyTheme(currentTheme()); } if (!tpinBusy) TPINS = DATA.tilepins || {};
     build(DATA);
+    renderAutoConn();
     if (S.sel !== 'fleet' && !nodes[S.sel]) { /* keep selection; it may come back */ }
     const n = S.sel === 'fleet' ? null : nodes[S.sel];
     const jobs = [];
@@ -2282,6 +2289,7 @@ function ctxFor(t){
       {label:'Open', run:() => goNode(n.id, 'overview')}, {label:'Show its processes', run:() => goNode(n.id, 'details')},
       pinnable && {label:pinned ? 'Unpin' : 'Pin as a space', run:() => togglePin(n.id)},
       termOk(n) && {label:'Open a terminal', run:() => openTerminal(n.id)},
+      switchable(n) && {label:n.on ? 'Disconnect' : 'Connect', run:() => setConnected(n.id, !n.on)},
       ...groupMoveItems(n.id, tr.dataset.pk),
       ...(n.kind === 'division' ? groupEditItems(n) : []),
       '—', {label:'Copy name', run:() => copyText(n.name, n.name)},
@@ -2608,4 +2616,56 @@ async function openAddMachine(){
     }
   });
   q('ssh').focus();
+}
+
+/* ---------- connections: on and off by hand, and which connect when Fleet starts ---------- */
+const AC = {naming:false};
+function connDot(n){
+  return `<button type="button" class="sdot ${statusClass(n)}" data-sdot="${esc(n.id)}" data-conn="${esc(n.id)}" aria-pressed="${n.on}" aria-label="${n.on ? 'Disconnect' : 'Connect'} ${esc(n.name)}" title="${statusText(n)} · click to ${n.on ? 'disconnect' : 'connect'}"></button>`;
+}
+async function setConnected(id, on){
+  const n = nodes[id];
+  if (n){ n.on = on; n.status = on ? 'connecting' : 'disabled'; updateTree(); }
+  try {
+    const r = await api('/api/connect', {machine:id, on});
+    if (r.connect && DATA) DATA.connect = r.connect;
+    if (!r.ok) toast('Couldn’t change that connection');
+    else toast(`${on ? 'Connecting to' : 'Disconnected'} ${n ? n.name : id}`);
+  } catch (e) { toast('Couldn’t change that connection'); }
+  lastMainHTML = ''; refreshNow();
+}
+function autoLabel(c){ return !c || c.auto === 'all' ? 'All' : c.auto === 'none' ? 'None' : c.auto; }
+function renderAutoConn(){
+  const box = $('autoconn'); if (!box || AC.naming) return;
+  const c = DATA && DATA.connect, label = autoLabel(c);
+  const html = `<button type="button" class="btn autoc-btn" data-autoconn="1" aria-haspopup="menu" title="Which machines Fleet connects to when it starts">${icon('power')}<span>Auto: ${esc(label)}</span></button>`;
+  if (box.innerHTML !== html) box.innerHTML = html;
+}
+async function connApi(body){
+  try {
+    const r = await api('/api/connect', body);
+    if (r.connect && DATA) DATA.connect = r.connect;
+    if (!r.ok) toast(r.error || 'Couldn’t change that');
+  } catch (e) { toast('Couldn’t change that'); }
+  AC.naming = false; renderAutoConn();
+}
+function openAutoConn(btn){
+  const c = (DATA && DATA.connect) || {auto:'all', presets:{}}, names = Object.keys(c.presets || {});
+  const opt = (key, label) => ({label:(c.auto === key ? '✓ ' : '') + label, run:() => connApi({auto:key})});
+  const r = btn.getBoundingClientRect();
+  openCtx({title:'Connect when Fleet starts', items:[
+    opt('all', 'All machines'), ...names.map(k => opt(k, k)), opt('none', 'None'), '—',
+    {label:'Save what’s connected now as a set…', run:startNaming},
+    ...names.map(k => ({label:`Delete “${k}”`, run:() => connApi({delete:k})}))]}, r.left, r.top - 8, btn);
+}
+function startNaming(){
+  const box = $('autoconn'); if (!box) return;
+  AC.naming = true;
+  box.innerHTML = `<input id="autoname" class="autoc-name" maxlength="60" placeholder="Name this set" aria-label="Name for the machines connected now" autocomplete="off">`;
+  const i = $('autoname'); i.focus();
+  i.addEventListener('keydown', e => {
+    if (e.key === 'Enter'){ e.preventDefault(); const v = i.value.trim(); if (v) connApi({save:v}); }
+    else if (e.key === 'Escape'){ e.preventDefault(); e.stopPropagation(); AC.naming = false; renderAutoConn(); }
+  });
+  i.addEventListener('blur', () => setTimeout(() => { if (AC.naming && document.activeElement !== i){ AC.naming = false; renderAutoConn(); } }, 150));
 }

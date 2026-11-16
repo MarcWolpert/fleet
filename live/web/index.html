@@ -698,7 +698,13 @@ tr.fmatch>td{background:color-mix(in srgb, var(--stale) 16%, transparent)!import
 .prow2 .pv{font:500 12px var(--mono);color:var(--ink);text-align:right}
 
 /* + Add a machine: the foot of the tree panel, and its dialog */
-.side-foot{flex:none;padding:10px 12px;border-top:1px solid var(--line)}
+.side-foot{flex:none;padding:10px 12px;border-top:1px solid var(--line);display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+button.sdot{border:0;padding:0;cursor:pointer;position:relative;font:inherit}
+button.sdot::after{content:'';position:absolute;inset:-7px}
+button.sdot:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+.sdot[aria-pressed="false"]{background:transparent;box-shadow:inset 0 0 0 1.5px var(--ink-3)}
+.autoc-btn span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:150px}
+.autoc-name{background:var(--side);border:1px solid var(--line-2);border-radius:8px;padding:6px 9px;color:var(--ink);font:13px var(--sans);width:170px}
 .addm-btn svg{width:14px;height:14px}
 .sheet.addm{width:min(640px,100%)}
 .addm ol{margin:0 0 4px;padding-left:20px;display:flex;flex-direction:column;gap:9px;font-size:13px;color:var(--ink-2);line-height:1.5}
@@ -729,7 +735,7 @@ tr.fmatch>td{background:color-mix(in srgb, var(--stale) 16%, transparent)!import
       <div class="tfind" id="tfind" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg><input type="search" id="tfq" placeholder="Filter the tree" aria-label="Filter the tree" autocomplete="off" spellcheck="false"></div>
       <div class="tree" id="tree" role="tree"></div>
       <div id="side-note"></div>
-      <div class="side-foot"><button type="button" class="btn addm-btn" data-addmachinedlg="1" aria-haspopup="dialog"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>Add a machine</button></div>
+      <div class="side-foot"><button type="button" class="btn addm-btn" data-addmachinedlg="1" aria-haspopup="dialog"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>Add a machine</button><span id="autoconn"></span></div>
     </aside>
     <main id="main"></main>
     <div class="mfind" id="mfind" role="search" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg><input type="search" id="mfq" placeholder="Find on this page" aria-label="Find on this page" autocomplete="off" spellcheck="false"><span id="mfcount" aria-live="polite"></span><button type="button" data-mfstep="-1" aria-label="Previous match" title="Previous (⇧Enter)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M6 15l6-6 6 6"/></svg></button><button type="button" data-mfstep="1" aria-label="Next match" title="Next (Enter)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button><button type="button" data-mfclose="1" aria-label="Close find" title="Close (Esc)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>

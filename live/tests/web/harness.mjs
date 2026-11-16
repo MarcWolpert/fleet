@@ -26,7 +26,7 @@ export function startServer(fx){
     const json = o => { const b = Buffer.from(JSON.stringify(o)); res.writeHead(200, {'Content-Type': 'application/json', 'Content-Length': b.length}); res.end(b); };
     if (u.pathname.startsWith('/api/')){
       const mid = u.searchParams.get('machine') || '';
-      if (req.method === 'POST'){ let body = ''; req.on('data', c => { body += c; }); req.on('end', () => { fx.posts = (fx.posts || []).concat([{path: u.pathname, body}]); if (u.pathname === '/api/prefs' && fx.fleet) fx.fleet.prefs = JSON.parse(body || '{}');  // kept, like the server's ui.json
+      if (req.method === 'POST'){ let body = ''; req.on('data', c => { body += c; }); req.on('end', () => { fx.posts = (fx.posts || []).concat([{path: u.pathname, body}]); const own = typeof fx.onPost === 'function' ? fx.onPost(u.pathname, body) : null; if (own) return json(own);  // a test plays the server's part if (u.pathname === '/api/prefs' && fx.fleet) fx.fleet.prefs = JSON.parse(body || '{}');  // kept, like the server's ui.json
         json(u.pathname === '/api/pins' ? {pins: JSON.parse(body || '[]')} : u.pathname === '/api/prefs' ? {ok: true, prefs: JSON.parse(body || '{}')} : {ok: true}); }); return; }
       if (u.pathname === '/api/fleet') return json(fx.fleet);
       if (u.pathname === '/api/procs') return json((fx.procs || {})[mid] || {procs: []});

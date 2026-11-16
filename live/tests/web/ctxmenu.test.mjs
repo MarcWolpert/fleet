@@ -42,7 +42,7 @@ test('tree rows: a machine, a container and the base system each get their own m
   const p = await open({sel: 'lx', open: {lx: true, 'lx/containers': true}});
   try {
     await rclick(p, `#tree .row[data-select="lx"]`);
-    assert.deepEqual(await p.eval(MENU), {title: 'lab-linux', items: ['Open', 'Show its processes', 'Pin as a space', 'Open a terminal', '—', 'Copy name', 'Copy SSH destination']});
+    assert.deepEqual(await p.eval(MENU), {title: 'lab-linux', items: ['Open', 'Show its processes', 'Pin as a space', 'Open a terminal', 'Disconnect', '—', 'Copy name', 'Copy SSH destination']});
     await p.eval(`(() => { document.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape', bubbles: true})); return true; })()`);
     assert.equal(await p.eval(MENU), null);
     await p.waitFor(`document.querySelector('#tree .row[data-select="lx/containers/web"]')`);
