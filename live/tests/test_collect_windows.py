@@ -439,10 +439,14 @@ class ScriptPairsUp(unittest.TestCase):
         self.assertEqual(ps_unbalanced(self.SRC), [])
         self.assertEqual(ps_unbalanced(fl.ps_compact(self.SRC)), [], "as sent, too")
 
+    def line_of(self, text):
+        return self.SRC[:self.SRC.index(text)].count("\n") + 1
+
     def test_a_dropped_brace_quote_or_paren_is_caught(self):
-        self.assertEqual(ps_unbalanced(self.SRC.replace("$o.procs = $plist\n", "$o.procs = $plist\n{\n")), ["{ from line 41 is never closed"])
-        self.assertEqual(ps_unbalanced(self.SRC.replace('"$($_.IPAddress)/', '"$($_.IPAddress/'))[:2],
-                         ['unterminated "..." from line 204', "$( from line 159 is never closed"])
+        self.assertEqual(ps_unbalanced(self.SRC.replace("$o.procs = $plist\n", "$o.procs = $plist\n{\n")),
+                         ["{ from line %d is never closed" % self.line_of("while ($true) {")])
+        self.assertIn("$( from line %d is never closed" % self.line_of('"$($_.IPAddress)/'),
+                      ps_unbalanced(self.SRC.replace('"$($_.IPAddress)/', '"$($_.IPAddress/')))
         self.assertEqual(ps_unbalanced("$a = @(1, 2"), ["( from line 1 is never closed"])
         self.assertEqual(ps_unbalanced("$a = 'it''s"), ["unterminated '...' from line 1"])
         self.assertEqual(ps_unbalanced("$a = @'\nC# with } and \"\n"), ["unterminated here-string from line 1"])
