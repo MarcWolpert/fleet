@@ -39,6 +39,30 @@ def netdev(text):
     return out
 
 
+def cpulist(s):
+    """A sysfs CPU list ("0-3,8,10-11") -> the set of CPU numbers."""
+    got = set()
+    for part in s.strip().split(","):
+        if "-" in part:
+            a, b = part.split("-")
+            got.update(range(int(a), int(b) + 1))
+        elif part.isdigit():
+            got.add(int(part))
+    return got
+
+
+def add_cron(cron, text, src):
+    """Append the jobs of one crontab (`crontab -l`, /etc/crontab or a file of /etc/cron.d) to cron."""
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or re.match(r"^[A-Z_]+=", line):
+            continue
+        f = line.split()
+        if f[0].startswith("@"):
+            cron.append({"sched": f[0], "cmd": " ".join(f[1:]), "src": src})
+        elif len(f) >= 6:
+            user_col = src != "crontab" and len(f) >= 7
+            cron.append({"sched": " ".join(f[:5]), "cmd": " ".join(f[6:] if user_col else f[5:]), "src": src})
 
 
 # ---- GPUs from every vendor: the kernel's DRM devices, per-process engine time from fdinfo ----
@@ -368,18 +392,6 @@ def snapshot():
                       "die": rd(base + "topology/die_id").strip(), "l3": l3})
     out["lcpus"] = lcpus
 
-
-    def cpulist(s):
-        got = set()
-        for part in s.strip().split(","):
-            if "-" in part:
-                a, b = part.split("-")
-                got.update(range(int(a), int(b) + 1))
-            elif part.isdigit():
-                got.add(int(part))
-        return got
-
-
     # Hybrid CPUs (Intel P/E cores) list their CPUs under cpu_core and cpu_atom.
     p_cpus, e_cpus = cpulist(rd("/sys/devices/cpu_core/cpus")), cpulist(rd("/sys/devices/cpu_atom/cpus"))
     for c in lcpus:
@@ -515,22 +527,11 @@ def snapshot():
 
     # Scheduled jobs: crontabs and systemd timers.
     cron = []
-    def add_cron(text, src):
-        for line in text.splitlines():
-            line = line.strip()
-            if not line or line.startswith("#") or re.match(r"^[A-Z_]+=", line):
-                continue
-            f = line.split()
-            if f[0].startswith("@"):
-                cron.append({"sched": f[0], "cmd": " ".join(f[1:]), "src": src})
-            elif len(f) >= 6:
-                user_col = src != "crontab" and len(f) >= 7
-                cron.append({"sched": " ".join(f[:5]), "cmd": " ".join(f[6:] if user_col else f[5:]), "src": src})
-    add_cron(run(["crontab", "-l"]), "crontab")
-    add_cron(rd("/etc/crontab"), "/etc/crontab")
+    add_cron(cron, run(["crontab", "-l"]), "crontab")
+    add_cron(cron, rd("/etc/crontab"), "/etc/crontab")
     try:
         for n in sorted(os.listdir("/etc/cron.d")):
-            add_cron(rd("/etc/cron.d/" + n), "/etc/cron.d/" + n)
+            add_cron(cron, rd("/etc/cron.d/" + n), "/etc/cron.d/" + n)
     except Exception:
         pass
     out["cron"] = cron
@@ -589,16 +590,17 @@ def snapshot():
     return out
 
 
-try:
-    INTERVAL
-except NameError:
-    INTERVAL = 3.0
-while True:
-    began = time.time()
-    data = json.dumps(snapshot(), separators=(",", ":")).encode()
+if __name__ == "__main__":  # piped to `python3 -` by Fleet Live; importing it (the tests) takes no reading
     try:
-        sys.stdout.write(base64.b64encode(zlib.compress(data, 3)).decode() + "\n")
-        sys.stdout.flush()
-    except (BrokenPipeError, OSError):
-        os._exit(0)  # Fleet Live went away: stop
-    time.sleep(max(0.2, INTERVAL - (time.time() - began)))
+        INTERVAL
+    except NameError:
+        INTERVAL = 3.0
+    while True:
+        began = time.time()
+        data = json.dumps(snapshot(), separators=(",", ":")).encode()
+        try:
+            sys.stdout.write(base64.b64encode(zlib.compress(data, 3)).decode() + "\n")
+            sys.stdout.flush()
+        except (BrokenPipeError, OSError):
+            os._exit(0)  # Fleet Live went away: stop
+        time.sleep(max(0.2, INTERVAL - (time.time() - began)))
