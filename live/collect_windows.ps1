@@ -68,13 +68,13 @@ foreach ($s in $samples) {
 }
 $o.lcpus = @($lcpu.Keys | Sort-Object | ForEach-Object { @{ n = $_; pct = $lcpu[$_]; mhz = [int]$freq[$_] } })
 
-# GPUs: real adapters are the ones with dedicated memory; NVIDIA names and totals from nvidia-smi.
+# GPUs: real adapters are the ones with dedicated memory, in LUID order; NVIDIA names and totals from nvidia-smi.
 $gpuUtil = @{}
 foreach ($k in $eng.Keys) { $l = $k.Split('|')[0]; if ($eng[$k] -gt [double]$gpuUtil[$l]) { $gpuUtil[$l] = $eng[$k] } }
 # each engine type (3d, copy, videodecode, ...) at its busiest engine, per adapter, like Task Manager
 $engT = @{}
 foreach ($k in $eng.Keys) { $p = $k.Split('|'); $tk = $p[0] + '|' + $p[2]; if ($eng[$k] -gt [double]$engT[$tk]) { $engT[$tk] = $eng[$k] } }
-$o.gpus = @($adMem.Keys | Where-Object { $adMem[$_] -gt 0 } | Sort-Object { - $adMem[$_] } | ForEach-Object {
+$o.gpus = @($adMem.Keys | Where-Object { $adMem[$_] -gt 0 } | Sort-Object | ForEach-Object {
   $l = $_; $e = @{}; foreach ($tk in $engT.Keys) { $p = $tk.Split('|', 2); if ($p[0] -eq $l) { $e[$p[1]] = $engT[$tk] } }
   @{ luid = $l; util = [double]$gpuUtil[$l]; dedicated = $adMem[$l]; shared = [double]$adShared[$l]; eng = $e } })
 # NVIDIA's own numbers; drivers without the newer fields fail the whole query, so fall back to the basic one

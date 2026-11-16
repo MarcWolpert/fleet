@@ -633,15 +633,28 @@ class Machine:
 
     # ------------------------------------------------------------ windows
     def windows_gpus(self, r):
-        """Adapters ordered by dedicated memory, each with its engines by type (the GPU Engine counters),
-        dedicated and shared memory, and NVIDIA's own numbers from nvidia-smi when present."""
+        """Adapters in LUID order (it stays put while VRAM use moves), each with its engines by type (the GPU
+        Engine counters), dedicated and shared memory, and NVIDIA's own numbers from the nvidia-smi row whose
+        memory.used is that adapter's dedicated usage (WDDM reports one number to both)."""
         nv = [[x.strip() for x in line.split(",")] for line in r.get("nvidia", []) if line and line.count(",") >= 4]
-        names = [x[1] for x in nv] + [n for n in r.get("videoNames", []) if not any(n == x[1] for x in nv)]
+        others = [n for n in r.get("videoNames", []) if not any(n == x[1] for x in nv)]
         num = lambda x: float(x) if re.match(r"^-?\d+(\.\d+)?$", x or "") else None
+
+        def luid_key(g):
+            try:
+                return tuple(int(x, 16) for x in g["luid"].split("_"))
+            except (KeyError, AttributeError, ValueError):
+                return (float("inf"),)
+        adapters = sorted(r.get("gpus", []), key=luid_key)
+        rows, pairs = {}, sorted((abs((num(x[3]) or 0) * MIB - float(g.get("dedicated") or 0)), j, i)
+                                 for j, x in enumerate(nv) for i, g in enumerate(adapters))
+        for _, j, i in pairs:
+            if i not in rows and j not in rows.values():
+                rows[i] = j
         gpus, luid_idx = [], {}
-        for i, g in enumerate(r.get("gpus", [])):
+        for i, g in enumerate(adapters):
             luid_idx[g["luid"]] = i
-            row = nv[i] if i < len(nv) else []
+            row = nv[rows[i]] if i in rows else []
             total = num(row[4]) if len(row) > 4 else None
             m = {"util": min(100.0, g.get("util", 0))}
             for e, v in (g.get("eng") or {}).items():
@@ -668,7 +681,8 @@ class Machine:
                         lim[k] = num(row[j])
             for k in ("3d", "copy", "encode", "decode"):   # Task Manager's four, there even when idle
                 m.setdefault(k, 0.0)
-            gpus.append({"name": names[i] if i < len(names) else "GPU %d" % i, "mem": "%d GB VRAM" % round(total / 1024) if total else "",
+            name = row[1] if row else others.pop(0) if others else "GPU %d" % i
+            gpus.append({"name": name, "mem": "%d GB VRAM" % round(total / 1024) if total else "",
                          "util": m["util"], "m": m, "lim": lim})
         gpu_by_pid = {}
         for pid, luid, pct in r.get("gproc", []):
