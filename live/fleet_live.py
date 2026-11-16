@@ -698,6 +698,7 @@ class Machine:
         for tk in r["tasks"]:
             tk["triggers"] = aslist(tk.get("triggers"))
         t = r["t"]
+        tp, tn, td = r.get("tp", t), r.get("tn", t), r.get("td", t)   # when process CPU, adapter bytes and docker stats were read
         ncpu = r["ncpu"]
         lc = sorted(r.get("lcpus", []), key=lambda x: x["n"])
         topo = r.get("topo") or []
@@ -717,7 +718,7 @@ class Machine:
         self.disk_peak = max(self.disk_peak, disk * MB * 1.25)
         ifs, net, speed = [], 0.0, 0.0
         for a in r.get("ifs", []):
-            rx, tx = self.rate("ifrx." + a["name"], a["rx"], t) / MB, self.rate("iftx." + a["name"], a["tx"], t) / MB
+            rx, tx = self.rate("ifrx." + a["name"], a["rx"], tn) / MB, self.rate("iftx." + a["name"], a["tx"], tn) / MB
             kind = "virtual" if a.get("virtual") else "physical"
             ifs.append({"name": a["name"], "kind": kind, "rx": rx, "tx": tx, "addrs": a.get("addrs") or [], "master": "",
                         "state": a.get("status", ""), "speed": a.get("speed", ""), "desc": a.get("desc", "")})
@@ -730,7 +731,7 @@ class Machine:
         procs, vm_u = [], [0.0] * 5
         for p in r.get("procs", []):
             pid, ppid, name, c_secs, ws, threads, io, cmd = p
-            c = self.rate("wp.%d" % pid, c_secs, t)  # cumulative CPU seconds -> cores
+            c = self.rate("wp.%d" % pid, c_secs, tp)  # cumulative CPU seconds -> cores
             io = max(0.0, io)
             g = sum(gpu_by_pid.get(pid, {}).values())
             row = [pid, ppid, name, "", "", c, ws / GB, io / MB, g, threads, cmd, "base", -1, sorted(gpu_by_pid.get(pid, {})), [],
@@ -760,7 +761,7 @@ class Machine:
             labels = dict(kv.split("=", 1) for kv in c.get("Labels", "").split(",") if "=" in kv)
             cid = c.get("ID", "")[:12]
             st = stats.get(cid, (0, 0, 0, 0))
-            u = [st[0], st[1], 0.0, self.rate("cb." + cid, st[2], t) / MB, self.rate("cn." + cid, st[3], t) / MB]
+            u = [st[0], st[1], 0.0, self.rate("cb." + cid, st[2], td) / MB, self.rate("cn." + cid, st[3], td) / MB]
             containers.append({"id": cid, "name": c.get("Names", ""), "image": c.get("Image", ""), "status": c.get("Status", ""),
                                "project": labels.get("com.docker.compose.project", ""), "service": labels.get("com.docker.compose.service", ""),
                                "file": labels.get("com.docker.compose.project.config_files", ""), "networks": c.get("Networks", ""), "u": u})

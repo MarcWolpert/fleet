@@ -210,6 +210,54 @@ class EveryProgramHasADeadline(unittest.TestCase):
         self.assertIn(".Wait([int]($secs * 1000))", body.group(2))
         self.assertIn(".Kill()", body.group(2))
 
+MB = fl.MB
+CID = "abc123def456"
+
+
+def reading(t, cpu_secs, rx, tx, bio, nio, **stamps):
+    """One collect_windows.ps1 reading: one process, one adapter, one Docker Desktop container."""
+    return dict({"t": t, "ncpu": 4, "lcpus": [{"n": n, "pct": 5.0, "mhz": 3000} for n in range(4)], "topo": [], "gpus": [], "nvidia": [],
+                 "videoNames": [], "gproc": [], "procs": [[10, 4, "train", cpu_secs, 1 << 20, 3, 0, "C:\\train.exe"]],
+                 "ifs": [{"name": "Ethernet", "desc": "Intel(R) Ethernet", "status": "Up", "speed": "1 Gbps", "virtual": False, "rx": rx, "tx": tx, "addrs": []}],
+                 "wsl": [{"name": "docker-desktop", "state": "Running", "default": False}],
+                 "containers": ['{"ID": "%s", "Names": "web", "Image": "nginx", "Status": "Up", "Labels": "", "Networks": "bridge"}' % CID],
+                 "dstats": ['{"ID": "%s", "CPUPerc": "1.00%%", "MemUsage": "0B / 1GiB", "BlockIO": "%dB / 0B", "NetIO": "%dB / 0B"}' % (CID, bio, nio)],
+                 "tasks": [], "mem": [16 << 30, 8 << 30], "diskBps": 0, "os": "Windows", "disks": []}, **stamps)
+
+
+def rates(m, r):
+    v = m.derive_windows(r)
+    [p], [a], [c] = v["procs"], v["ifs"], v["containers"]
+    return {"cores": p[5], "rx": a["rx"], "tx": a["tx"], "cblock": c["u"][3], "cnet": c["u"][4]}
+
+
+class EachCounterHasItsOwnClock(unittest.TestCase):
+    """#145: process CPU time, interface bytes and docker stats are read at different moments of a reading, after
+    work that runs only on some readings; each rate divides by the time between two reads of that counter."""
+
+    def test_rates_use_the_stamp_of_their_own_counters(self):
+        m = fl.Machine({"id": "w", "name": "w", "os": "windows"}, 3)
+        rates(m, reading(1000.0, 50.0, 10 * MB, 20 * MB, 100 * MB, 40 * MB, tp=1000.5, tn=1001.0, td=1002.0))
+        # t moved 3 s, but the process list was read 4 s after the last one, the adapters 2 s and docker stats 2.5 s
+        got = rates(m, reading(1003.0, 54.0, 12 * MB, 23 * MB, 105 * MB, 42.5 * MB, tp=1004.5, tn=1003.0, td=1004.5))
+        self.assertEqual(got, {"cores": 1.0, "rx": 1.0, "tx": 1.5, "cblock": 2.0, "cnet": 1.0})
+
+    def test_a_reading_without_stamps_uses_t(self):
+        m = fl.Machine({"id": "w", "name": "w", "os": "windows"}, 3)
+        rates(m, reading(1000.0, 50.0, 10 * MB, 20 * MB, 100 * MB, 40 * MB))
+        got = rates(m, reading(1004.0, 54.0, 12 * MB, 23 * MB, 105 * MB, 42 * MB))
+        self.assertEqual(got, {"cores": 1.0, "rx": 0.5, "tx": 0.75, "cblock": 1.25, "cnet": 0.5})
+
+    def between(self, start, end):
+        src = fl.ps_compact(open(os.path.join(LIVE, "collect_windows.ps1"), encoding="utf-8").read())
+        i = src.index(start)
+        return src[i + len(start):src.index(end, i)]
+
+    def test_the_collector_stamps_each_counter_right_before_reading_it(self):
+        self.assertNotRegex(self.between("$o.tp = ", ".TotalProcessorTime"), r"Get-CimInstance|Get-Net|Bounded")
+        self.assertEqual(self.between("$o.tn = ", "Get-NetAdapterStatistics"), "UnixNow; foreach ($st in ")
+        self.assertEqual(self.between("Invoke-Bounded 'docker' 'stats", "$o.td = "), ' --no-stream --format "{{json .}}"\'; ')
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -21,6 +21,7 @@ function Wait-Bounded($job, $secs = 8) {
   try { $job.p.Kill() } catch {}
   ''
 }
+function UnixNow { [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() / 1000.0 }
 function Invoke-Bounded($exe, $argline) { @((Wait-Bounded (Start-Bounded $exe $argline)) -split "`r?`n" | Where-Object { $_ }) }
 # Stop when Fleet goes away. Fleet keeps our stdin open and writes nothing after this script, so the pending read
 # completes (EOF) the moment the SSH session ends for any reason; also stop if our parent shell is
@@ -43,7 +44,9 @@ if ($sshd -and -not (Get-Process -Id $sshd -ErrorAction SilentlyContinue)) { exi
 if (((Get-Date) - $born).TotalHours -ge 6) { exit 0 }
 $started = Get-Date
 $o = [ordered]@{}
-$o.t = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() / 1000.0
+# t stamps the reading; tp, tn and td stamp the cumulative counters (process CPU time, adapter bytes, docker stats) when
+# they are read, after work that runs only on some readings, so each rate divides by its own counter's time.
+$o.t = UnixNow
 $os = Get-CimInstance Win32_OperatingSystem
 $cs = Get-CimInstance Win32_ComputerSystem
 $o.os = $os.Caption; $o.build = $os.BuildNumber; $o.host = $env:COMPUTERNAME; $o.arch = $env:PROCESSOR_ARCHITECTURE
@@ -100,6 +103,7 @@ $o.gproc = @($pidGpu.Keys | ForEach-Object { $gp = $_.Split('|'); ,@([int]$gp[0]
 
 if ($loop % 3 -eq 0) { $cmdCache = @{}; foreach ($wp in Get-CimInstance Win32_Process) { $cmdCache[[int]$wp.ProcessId] = @([int]$wp.ParentProcessId, [string]$wp.CommandLine) } }
 $plist = New-Object System.Collections.ArrayList
+$o.tp = UnixNow
 foreach ($gp in Get-Process) {
   if ($gp.Id -eq 0) { continue }
   $wc = $cmdCache[[int]$gp.Id]; $cmd = ''; $ppid = 0
@@ -123,8 +127,9 @@ if ($loop % 3 -eq 0) { $ipIf = @{}; foreach ($ia in Get-NetIPAddress) { $ipIf[[s
   $pn = @{}; foreach ($tc in Get-NetTCPConnection -State Established) { $ifn = $ipIf[[string]$tc.LocalAddress]; if ($ifn) { $k = [string]$tc.OwningProcess; if (-not $pn.ContainsKey($k)) { $pn[$k] = @{} }; $pn[$k][$ifn] = 1 } }
   $pnetCache = @{}; foreach ($k in $pn.Keys) { $pnetCache[$k] = @($pn[$k].Keys) } }
 $o.pnet = $pnetCache
+$ast = @{}; $o.tn = UnixNow; foreach ($st in Get-NetAdapterStatistics) { $ast[[string]$st.Name] = $st }
 $o.ifs = @(Get-NetAdapter | ForEach-Object {
-  $st = Get-NetAdapterStatistics -Name $_.Name
+  $st = $ast[[string]$_.Name]
   @{ name = $_.Name; desc = $_.InterfaceDescription; status = [string]$_.Status; speed = [string]$_.LinkSpeed; virtual = [bool]$_.Virtual
      rx = [double]$st.ReceivedBytes; tx = [double]$st.SentBytes
      addrs = $(if ($loop % 10 -eq 0 -or -not $addrCache.ContainsKey($_.Name)) { $addrCache[$_.Name] = @(Get-NetIPAddress -InterfaceIndex $_.ifIndex -AddressFamily IPv4 | ForEach-Object { "$($_.IPAddress)/$($_.PrefixLength)" }) }; $addrCache[$_.Name]) }
@@ -137,7 +142,7 @@ $o.wsl = $wsl
 $o.containers = @(); $o.dstats = @()
 if (@($wsl | Where-Object { $_.name -eq 'docker-desktop' -and $_.state -eq 'Running' }).Count -gt 0) {
   $o.containers = Invoke-Bounded 'docker' 'ps --no-trunc --format "{{json .}}"'
-  $o.dstats = Invoke-Bounded 'docker' 'stats --no-stream --format "{{json .}}"'
+  $o.dstats = Invoke-Bounded 'docker' 'stats --no-stream --format "{{json .}}"'; $o.td = UnixNow
 }
 
 if ($loop % 10 -eq 0) { $taskCache = @(Get-ScheduledTask | Where-Object { $_.TaskPath -notlike '\Microsoft\*' } | ForEach-Object {
