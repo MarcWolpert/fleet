@@ -44,5 +44,16 @@ class Packages(unittest.TestCase):
         self.assertEqual([f for f in app if '/%s"' % f not in script], [])
 
 
+class Icon(unittest.TestCase):
+    """The app icon (#136): one SVG, the East Indiaman, that the page, the .icns and the PNGs are made from."""
+    def test_one_icon_everywhere(self):
+        svg = open(os.path.join(LIVE, "packaging", "icon", "fleet.svg"), encoding="utf-8").read()
+        self.assertIn("East Indiaman", svg)
+        self.assertEqual(open(os.path.join(LIVE, "web", "icon.svg"), encoding="utf-8").read(), svg)
+        for s in (16, 32, 48, 64, 128, 256, 512, 1024):
+            png = os.path.join(LIVE, "packaging", "icon", "png", "fleet-%d.png" % s)
+            self.assertGreaterEqual(os.path.getmtime(png), os.path.getmtime(os.path.join(LIVE, "packaging", "icon", "fleet.svg")) - 1, png)
+
+
 if __name__ == "__main__":
     unittest.main()
