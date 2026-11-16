@@ -103,6 +103,7 @@ function machineFrom(s, isVm){
     hostHist:s.hostside && !Array.isArray(s.hostside) ? histOf(s.hostside) : null,
     hostG:Object.fromEntries(Object.entries(s.hostside_gh || {}).filter(([, a]) => a && a.length === H)),
     ssh:s.ssh || '', hasData:s.has_data !== false || s.status === 'hostonly', lastOk:s.last_ok || 0, on:s.on !== false});
+  connAsked(m, s);
   // what a node measurably uses of each of this machine's GPUs (the server's gh: one history per GPU); without gh, the
   // GPU keys it names (g), over which its GPU use is split
   const ghOf = gh => gh ? Object.fromEntries(gpus.filter(g => gh[g.key] && gh[g.key].length === H).map(g => [g.key, gh[g.key]])) : null;
@@ -2816,15 +2817,25 @@ function connTitle(n){
   if (!n.on) return 'off · click to connect';
   return (n.status === 'off' ? 'stopped on its host' : statusText(n)) + ' · click to disconnect';
 }
+// A connection turned on or off by hand shows as asked until the server says so (#302): /api/fleet answers from
+// machine specs built once a reading (up to an interval old), and a poll already on its way left before the change.
+// CONN_ASKED: machine id -> {on, until}; it goes when the server agrees, turns it down, or after 15 s.
+const CONN_ASKED = {};
+function connAsked(m, s){
+  const a = CONN_ASKED[m.id]; if (!a) return;
+  if (s && ((s.on !== false) === a.on || Date.now() > a.until)){ delete CONN_ASKED[m.id]; return; }
+  m.on = a.on; m.status = a.on ? 'connecting' : 'disabled'; if (!a.on) m.hasData = false;
+}
 async function setConnected(id, on){
   const n = nodes[id];
-  if (n){ n.on = on; n.status = on ? 'connecting' : 'disabled'; updateTree(); }
+  CONN_ASKED[id] = {on, until:Date.now() + 15000};
+  if (n){ connAsked(n); updateTree(); if (S.sel === id){ lastMainHTML = ''; renderMain(); } }   // the click shows at once, on its page too
   try {
     const r = await api('/api/connect', {machine:id, on});
     if (r.connect && DATA) DATA.connect = r.connect;
-    if (!r.ok) toast('Couldn’t change that connection');
+    if (!r.ok){ delete CONN_ASKED[id]; toast('Couldn’t change that connection'); }
     else toast(`${on ? 'Connecting to' : 'Disconnected'} ${n ? n.name : id}`);
-  } catch (e) { toast('Couldn’t change that connection'); }
+  } catch (e) { delete CONN_ASKED[id]; toast('Couldn’t change that connection'); }
   lastMainHTML = ''; refreshNow();
 }
 function autoLabel(c){ return !c || c.auto === 'none' ? 'None' : c.auto === 'all' ? 'All' : c.auto; }   // nothing chosen: None (#224)

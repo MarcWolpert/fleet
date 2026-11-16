@@ -170,3 +170,79 @@ test('the Auto button outlives the polls: same element, still focused, until its
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
 });
+
+// The server's /api/fleet answers from machine specs it builds once a reading (every interval), so a poll right after
+// a toggle, or one already on its way, still says the old state. The dot and the page keep what was asked for until
+// the server says so, instead of flipping back for up to ~5 s (#302).
+function lagging(fx, ms){
+  fx.onPost = (path, body) => {
+    if (path !== '/api/connect') return null;
+    const d = JSON.parse(body || '{}');
+    if (!('machine' in d)) return null;
+    const m = fx.fleet.machines.find(x => x.id === d.machine);
+    setTimeout(() => { m.on = d.on; m.status = d.on ? 'ok' : 'disabled'; m.has_data = !!d.on; }, ms);   // the next record pass
+    return {ok: true, connect: fx.fleet.connect};
+  };
+}
+// every value expr takes for ms, sampled every 20 ms from right after `act` runs (in the same task, so nothing is missed)
+const watch = (p, expr, ms, act = '') => p.eval(`new Promise(ok => { ${act}; const seen = new Set(), t0 = Date.now(); (function look(){ seen.add(String(${expr})); if (Date.now() - t0 < ${ms}) setTimeout(look, 20); else ok([...seen]); })(); })`);
+
+test('a dot turned off stays off while the server catches up, and after', async () => {
+  const fx = fx1(); lagging(fx, 2500);
+  const p = await browser.page(fx, {ui: ui({sel: 'fleet'})});
+  const DOT = `document.querySelector('#tree [data-conn="lx"]').getAttribute('aria-pressed')`;
+  try {
+    await p.waitFor(`${DOT} === 'true'`);
+    assert.deepEqual(await watch(p, DOT, 5500, `document.querySelector('#tree [data-conn="lx"]').click()`), ['false'], 'off from the click on, never back to on');
+    assert.equal(fx.fleet.machines.find(m => m.id === 'lx').on, false, 'the server caught up meanwhile');
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
+test('Connect on the Not connected page shows it connecting, not Not connected again, while the server catches up', async () => {
+  const fx = fx1(); lagging(fx, 2500);
+  Object.assign(fx.fleet.machines.find(m => m.id === 'lx'), {on: false, status: 'disabled', has_data: false});
+  const p = await browser.page(fx, {ui: ui({sel: 'lx'})});
+  const NOTC = `/Not connected/.test((document.querySelector('#main .state') || {}).textContent || '')`;
+  try {
+    await p.waitFor(NOTC);
+    assert.deepEqual(await watch(p, `[${NOTC}, document.querySelector('#tree [data-conn="lx"]').getAttribute('aria-pressed')].join()`, 5500,
+      `document.querySelector('#main .state [data-conn="lx"]').click()`), ['false,true']);
+    assert.deepEqual(posts(fx), [{machine: 'lx', on: true}], 'one request: the button didn\'t look unclicked');
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
+test('a poll already on its way when the dot was clicked doesn\'t turn it back', async () => {
+  const fx = fx1();   // fx1's server takes the change at once: only the poll in flight is old
+  const p = await browser.page(fx, {ui: ui({sel: 'fleet'})});
+  const DOT = `document.querySelector('#tree [data-conn="lx"]').getAttribute('aria-pressed')`;
+  try {
+    await p.waitFor(`${DOT} === 'true'`);
+    fx.holdFleet = true;
+    const stale = await heldPoll(p, fx);   // made while lx was on
+    await p.eval(`(document.querySelector('#tree [data-conn="lx"]').click(), true)`);
+    await p.waitFor(`${DOT} === 'false'`);
+    await sleep(200);                      // the toggle's own answer is in; the poll from before it is still out
+    fx.holdFleet = false;
+    assert.deepEqual(await watch(p, DOT, 3000, ''), ['false']);
+    stale();
+    assert.deepEqual(await watch(p, DOT, 3000), ['false'], 'the old answer arrives: still off');
+    assert.deepEqual(p.errors, []);
+  } finally { fx.holdFleet = false; (fx.held || []).splice(0).forEach(send => send()); await p.close(); }
+});
+
+test('a toggle the server turns down goes back to what the server says (control)', async () => {
+  const fx = fx1();
+  fx.onPost = path => path === '/api/connect' ? {ok: false, connect: fx.fleet.connect} : null;
+  const p = await browser.page(fx, {ui: ui({sel: 'fleet'})});
+  const DOT = `document.querySelector('#tree [data-conn="lx"]').getAttribute('aria-pressed')`;
+  try {
+    await p.waitFor(`${DOT} === 'true'`);
+    await p.eval(`(document.querySelector('#tree [data-conn="lx"]').click(), true)`);
+    await p.waitFor(`/Couldn’t change that connection/.test(document.body.textContent)`);
+    await p.waitFor(`${DOT} === 'true'`);
+    assert.deepEqual(await watch(p, DOT, 2500), ['true'], 'and it stays what the server says');
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
