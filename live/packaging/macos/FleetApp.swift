@@ -109,10 +109,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         if tries == 6 && server == nil && !serverAnswers() { startServer() }  // ~3 s without a server: run our own
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { self.load() }
     }
-    func webView(_ w: WKWebView, didFinish n: WKNavigation!) { tries = 0; tellZoom() }
+    func webView(_ w: WKWebView, didFinish n: WKNavigation!) { tries = 0; tellZoom(); showZoom() }
     // A CSS px is pageZoom points: the page keeps the traffic lights' room once it knows the zoom. The title bar
     // it reports stays in CSS px, and titleBarDrags takes the click into CSS px to compare.
     func tellZoom() { web.evaluateJavaScript("window.fleetNativeZoom && window.fleetNativeZoom(\(Double(web.pageZoom)))", completionHandler: nil) }
+    // the page shows the zoom level by Settings when it isn't 100% (#225)
+    func showZoom() { web.evaluateJavaScript("window.fleetZoomed && window.fleetZoomed(\(Double(web.pageZoom)))", completionHandler: nil) }
 
     func serverAnswers() -> Bool {
         var ok = false
@@ -224,6 +226,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         web.pageZoom = next
         tellZoom()
         UserDefaults.standard.set(Double(next), forKey: "FleetZoom")
+        showZoom()
     }
     @objc func zoomIn(_ s: Any?) { zoom("in") }
     @objc func zoomOut(_ s: Any?) { zoom("out") }

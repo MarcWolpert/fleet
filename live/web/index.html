@@ -725,6 +725,8 @@ html.hc .sub,html.hc .facts{color:var(--ink-2)}
 .access label.chk{flex-direction:row;align-items:center;gap:8px;font-size:13px;color:var(--ink);padding-bottom:7px}
 .access select{background:var(--side);border:1px solid var(--line-2);border-radius:8px;padding:7px 9px;color:var(--ink);font:13px var(--sans)}
 .access .sub{flex:1 1 100%;margin:0}
+.zoomchip{font:600 12px/1 var(--mono);color:var(--ink-2);background:var(--chrome-2);border:1px solid var(--line-2);border-radius:7px;padding:5px 8px;margin-right:8px}
+.zoomchip:hover{color:var(--ink);border-color:color-mix(in srgb, var(--ink) 30%, transparent)}
 .vmlook{display:flex;flex-direction:column;gap:10px;margin-top:10px}.vmlook>div{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.vmlook .sub{font-size:12px;color:var(--ink-3);flex:1 1 260px;min-width:0}
 .vmtag{font:600 9.5px/1 var(--sans);letter-spacing:.04em;color:var(--ink-3);border:1px solid var(--line-2);border-radius:4px;padding:1px 3px;margin-left:3px;vertical-align:1px}
 .autoc-btn span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:150px}
@@ -751,6 +753,7 @@ html.hc .sub,html.hc .facts{color:var(--ink-2)}
   <header class="spacebar">
     <div class="lights" aria-hidden="true"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i></div>
     <nav class="spaces" id="spaces" aria-label="Pinned spaces"></nav>
+    <button type="button" class="zoomchip" id="zoomchip" hidden title="Zoom: click for 100% (⌘0)"></button>
     <button type="button" class="setbtn" data-settings="1" aria-haspopup="dialog"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span>Settings</span></button>
   </header>
   <div class="toolbar">
