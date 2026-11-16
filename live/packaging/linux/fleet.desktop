@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Fleet
+GenericName=Fleet monitor
+Comment=Every machine you manage, live, in one tree
+Exec=@BIN@
+Icon=fleet
+Terminal=false
+Categories=System;Monitor;
+Keywords=task manager;system monitor;docker;vm;cpu;gpu;ssh;
+StartupWMClass=fleet-live

@@ -229,6 +229,7 @@ function renderSpaces(){
     + `<span class="mini" data-mini="${esc(p.key)}" aria-hidden="true">${p.gone ? '' : miniBar(p.key)}</span><span class="pc" data-pc="${esc(p.key)}">${p.gone ? 'gone' : pillPct(p.key)}</span></button>`
     + (p.pinned ? `<button type="button" class="unpin" data-unpin="${esc(p.key)}" aria-label="Unpin ${esc(p.name)}" title="Unpin">${icon('x', 2.4)}</button>` : '') + `</div>`).join('')
     + `<button type="button" class="addpin" data-addpin="1" aria-haspopup="dialog" aria-expanded="${PICK.open}" aria-label="Pin a grouping to the space bar" title="Pin a grouping">${icon('plus', 2)}</button>`;
+  setTimeout(reportDragRegions, 0);
 }
 
 /* ---------- + picker: pin any grouping ---------- */
@@ -289,6 +290,14 @@ function closePicker(refocus){
   const btn = document.querySelector('[data-addpin]');
   if (btn){ btn.setAttribute('aria-expanded', 'false'); if (refocus) btn.focus(); }
 }
+function reportDragRegions(){
+  const h = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.fleet;
+  if (!h) return;
+  const bar = document.querySelector('.spacebar'); if (!bar) return;
+  const regions = [...bar.querySelectorAll('button, .space, input, a')].map(e => { const r = e.getBoundingClientRect(); return [r.left, r.top, r.width, r.height]; });
+  h.postMessage({band:bar.getBoundingClientRect().bottom, regions});
+}
+addEventListener('resize', () => setTimeout(reportDragRegions, 50));
 function updateSpaces(){
   document.querySelectorAll('[data-mini]').forEach(e => { if (e.dataset.mini === 'fleet' || nodes[e.dataset.mini]) e.innerHTML = miniBar(e.dataset.mini); });
   document.querySelectorAll('[data-pc]').forEach(e => { if (e.dataset.pc === 'fleet' || nodes[e.dataset.pc]) e.textContent = pillPct(e.dataset.pc); });

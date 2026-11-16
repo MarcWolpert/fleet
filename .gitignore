@@ -83,3 +83,6 @@ compile_commands.json
 /subprojects/.wraplock
 _build
 BUILD
+
+# Fleet Live build output
+live/dist/
