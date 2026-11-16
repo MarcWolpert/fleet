@@ -138,6 +138,10 @@ class Hist:
             for i, v in enumerate(vals):
                 q[i].append(round(float(v), 4))
 
+    def keys(self, prefix):
+        with self.lock:
+            return [k for k in self.d if k.startswith(prefix)]
+
     def get(self, key, n=5):
         with self.lock:
             q = self.d.get(key)
@@ -1633,9 +1637,8 @@ class Fleet:
         own = record and live
         spec.update({"os": view["os"] + (" · " + view["arch"] if view.get("arch") else ""), "cpu_model": view.get("cpu_model", ""),
                      "uptime": fmt_uptime(view.get("uptime", 0)), "cap": view["cap"], "cronLabel": view.get("cronLabel", "Cron jobs"),
-                     "gpus": [{"name": g["name"], "mem": g.get("mem", ""),
-                               "m": [[k, lim, self.leaf("%s/gpu%d/%s" % (mid, gi, k), [(g.get("m") or {}).get(k, 0.0)], own)["cpu"]] for k, lim in gpu_metric_order(g)]}
-                              for gi, g in enumerate(view["gpus"])], "ncpu": view["ncpu"],
+                     "gpus": [{"name": g["name"], "mem": g.get("mem", ""), "m": self.gpu_metrics(mid, gi, g, own)} for gi, g in enumerate(view["gpus"])],
+                     "ncpu": view["ncpu"],
                      "groups": view.get("groups", [])})
         if view.get("note"):
             spec["note"] = {"label": "How this is counted.", "text": view["note"]}
@@ -1735,6 +1738,18 @@ class Fleet:
         if record:
             HIST.push(key, u)
         return hist_obj(key)
+
+    def gpu_metrics(self, mid, gi, g, record):
+        """One GPU's tiles: [metric, limit, history] for each metric it reports now. A metric it reported before but
+        not now (Windows' compute and video processing engines are counted only while a process holds them) reads 0
+        while it's away, so its history keeps time with the others and a comeback isn't drawn next to old values (#290)."""
+        m, prefix = g.get("m") or {}, "%s/gpu%d/" % (mid, gi)
+        out = [[k, lim, self.leaf(prefix + k, [m.get(k, 0.0)], record)["cpu"]] for k, lim in gpu_metric_order(g)]
+        if record:
+            for key in HIST.keys(prefix):
+                if key[len(prefix):] not in m:
+                    HIST.push(key, [0.0])
+        return out
 
     def gpu_leaf(self, key, gu, n, record):
         """What a node uses of each of its machine's n GPUs, with history: {"gpu0": [...], "gpu1": [...]}."""
