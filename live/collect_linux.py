@@ -148,6 +148,17 @@ def node_pdev(path):
     return os.path.basename(os.path.realpath("/sys/class/drm/%s/device" % os.path.basename(path)))
 
 
+def debugfs_pids(text):
+    """The pids in a DRM debugfs clients file. Its first column is the process name, which may hold spaces ("Plex
+    Transcoder", "Web Content"), so the pid is the number before the minor and the y/n master and auth flags."""
+    pids = set()
+    for line in text.splitlines()[1:]:
+        m = re.match(r"^.*? (\d+) +\d+ +[yn] +[yn] ", line)
+        if m:
+            pids.add(m.group(1))
+    return pids
+
+
 def gpu_clients(cards):
     """[pid, pdev, client id, {engine: busy ns}, {engine: capacity}, memory bytes] for every process using a GPU."""
     want = {c["pdev"] for c in cards if c.get("card")}
@@ -157,10 +168,7 @@ def gpu_clients(cards):
     debug = [d for d in ("/sys/kernel/debug/dri/" + p for p in want) if os.path.exists(d + "/clients")]
     if debug:  # cheap: the kernel lists each GPU's clients (root + debugfs)
         for d in debug:
-            for line in rd(d + "/clients").splitlines()[1:]:
-                f = line.split()
-                if len(f) > 1 and f[1].isdigit():
-                    pids.add(f[1])
+            pids |= debugfs_pids(rd(d + "/clients"))
         fds = []
         for pid in pids:
             try:

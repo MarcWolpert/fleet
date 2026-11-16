@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """collect_linux.py's parsers, fed the text each source prints (/proc/net/dev, sysfs CPU lists, crontabs, virsh,
-QEMU command lines, nvidia-smi).
+QEMU command lines, nvidia-smi,
+DRM debugfs clients).
 Importing the collector reads nothing from this machine: its reading loop runs only when the file runs as a
 script, the way Fleet Live pipes it to `python3 -`. Every assertion is the exact result.
 
@@ -262,6 +263,32 @@ class NvidiaGpus(unittest.TestCase):
 
     def test_no_nvidia_gpu(self):
         self.assertEqual(self.gpus(""), [])
+
+
+# /sys/kernel/debug/dri/<pci address>/clients, printed by the kernel's drm_clients_info() (drivers/gpu/drm/drm_debugfs.c):
+# the process name right-aligned in 20 columns, its tgid, the minor, master and authenticated flags, uid and magic.
+CLIENTS = [("Plex Transcoder", 12345, 128, "n", "y", 0), ("Web Content", 2201, 128, "n", "y", 1000), ("Xorg", 1100, 0, "y", "y", 0),
+           ("Worker 3", 4242, 128, "n", "y", 1000), ("ffmpeg", 1234567, 128, "n", "y", 0), ("<unknown>", 880, 128, "n", "y", 0)]
+
+
+def clients_file(rows, names=False):
+    """The clients file, optionally with the client-name column newer kernels add at the end."""
+    head = "%20s %5s %3s master a %5s %10s" % ("command", "tgid", "dev", "uid", "magic") + (" %20s" % "name" if names else "")
+    return "".join(l + "\n" for l in [head] + ["%20s %5d %3d   %c    %c %5d %10u" % (comm, pid, minor, master, auth, uid, 0)
+                                                + (" %20s" % "<unset>" if names else "") for comm, pid, minor, master, auth, uid in rows])
+
+
+class DebugfsClients(unittest.TestCase):
+    PIDS = {"12345", "2201", "1100", "4242", "1234567", "880"}
+
+    def test_names_with_spaces_and_digits(self):
+        self.assertEqual(collector().debugfs_pids(clients_file(CLIENTS)), self.PIDS)
+
+    def test_with_the_client_name_column(self):
+        self.assertEqual(collector().debugfs_pids(clients_file(CLIENTS, names=True)), self.PIDS)
+
+    def test_no_clients(self):
+        self.assertEqual([collector().debugfs_pids(clients_file([])), collector().debugfs_pids("")], [set(), set()])
 
 
 if __name__ == "__main__":
