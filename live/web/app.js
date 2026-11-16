@@ -1158,7 +1158,11 @@ function netView(){
 
 /* ---------- main ---------- */
 let lastMainHTML = '';
-function renderMain(){
+// text selected in the main pane (an image name, a cron command to copy): a rebuild would drop it
+function textSelectedIn(el){ const s = getSelection(); return !!(s && !s.isCollapsed && (el.contains(s.anchorNode) || el.contains(s.focusNode))); }
+// refresh: a poll's redraw, which waits while text is selected in the pane; anything you do redraws at once
+function renderMain(refresh){
+  if (refresh && textSelectedIn($('main'))) return;
   renderFilterBar();
   const main = $('main');
   const a = document.activeElement;
@@ -1192,7 +1196,7 @@ function renderMain(){
   markPanel(); if (FIND.q) applyFind(false);
   if (refocus){ const all = main.querySelectorAll(refocus), e = all[refocusAt] || all[0]; if (e){ e.focus({preventScroll:true}); if (selStart != null && e.setSelectionRange) try { e.setSelectionRange(selStart, selStart); } catch (x) {} } }
 }
-function renderAll(){ renderSpaces(); renderToolbar(); renderTree(); renderMain(); refreshTip(); }
+function renderAll(refresh){ renderSpaces(); renderToolbar(); renderTree(); renderMain(refresh); refreshTip(); }
 
 /* ---------- tooltips ---------- */
 const tip = $('tip');
@@ -1396,8 +1400,8 @@ async function refreshNow(){
     await Promise.all(jobs.map(p => p.catch(() => null)));
     fails = 0; $('conn').hidden = true; $('live').hidden = false;
     const sig = sigOf();
-    if (sig !== lastSig){ lastSig = sig; renderAll(); }
-    else { updateSpaces(); updateTree(); renderMain(); refreshTip(); }
+    if (sig !== lastSig){ lastSig = sig; renderAll(true); }
+    else { updateSpaces(); updateTree(); renderMain(true); refreshTip(); }
   } catch (e) {
     fails++;
     if (fails >= 3){ $('conn').hidden = false; $('live').hidden = true; }  // a restart takes a second or two: don't flash
