@@ -110,8 +110,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { self.load() }
     }
     func webView(_ w: WKWebView, didFinish n: WKNavigation!) { tries = 0; tellZoom() }
-    // The page measures its bar in CSS px, and a CSS px is pageZoom points: it reports the title bar in points
-    // and keeps the traffic lights' room once it knows the zoom.
+    // A CSS px is pageZoom points: the page keeps the traffic lights' room once it knows the zoom. The title bar
+    // it reports stays in CSS px, and titleBarDrags takes the click into CSS px to compare.
     func tellZoom() { web.evaluateJavaScript("window.fleetNativeZoom && window.fleetNativeZoom(\(Double(web.pageZoom)))", completionHandler: nil) }
 
     func serverAnswers() -> Bool {

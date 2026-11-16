@@ -335,16 +335,17 @@ function closePicker(refocus){
 // Fleet.app's title bar: the band (what's visible of the bar; none once a narrow window has scrolled it away)
 // and where its pills and buttons are. Sent again whenever they move: a render, a resize, a poll's new numbers,
 // the pills scrolled sideways, the page scrolled (#188); only what changed goes out.
-// In the app's points: at a text size other than 100% (⌘+ ⌘−, WKWebView's page zoom) a CSS px is NZ points,
-// and the app says what NZ is; the traffic lights' room in the bar stays 84 points too (#189).
+// In CSS px: at a text size other than 100% (⌘+ ⌘−, WKWebView's page zoom) the app takes the click into CSS px
+// before it compares (titleBarDrags, #203). The app says its zoom (NZ) so the traffic lights' room in the bar
+// stays 84 points (#189).
 let dragSent = '', NZ = 1;
 window.fleetNativeZoom = z => { NZ = z > 0 ? +z : 1; document.documentElement.style.setProperty('--nz', NZ); reportDragRegions(); };
 function reportDragRegions(){
   const h = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.fleet;
   if (!h) return;
   const bar = document.querySelector('.spacebar'); if (!bar) return;
-  const regions = [...bar.querySelectorAll('button, .space, input, a')].map(e => { const r = e.getBoundingClientRect(); return [r.left * NZ, r.top * NZ, r.width * NZ, r.height * NZ]; });
-  const band = Math.max(0, bar.getBoundingClientRect().bottom) * NZ, msg = JSON.stringify([band, regions]);
+  const regions = [...bar.querySelectorAll('button, .space, input, a')].map(e => { const r = e.getBoundingClientRect(); return [r.left, r.top, r.width, r.height]; });
+  const band = Math.max(0, bar.getBoundingClientRect().bottom), msg = JSON.stringify([band, regions]);
   if (msg === dragSent) return;
   dragSent = msg;
   h.postMessage({band, regions});

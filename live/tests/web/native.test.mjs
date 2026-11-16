@@ -67,16 +67,16 @@ test('a narrow window scrolls the bar away with the page: no band is left to dra
 });
 
 // Fleet.app's text size (⌘+ ⌘−) is WKWebView's page zoom: the page's CSS px are that many of the app's points,
-// and the app tells the page its zoom (#189)
-test('at other text sizes the bar Fleet.app is told about is in its points, and the traffic lights keep their room', async () => {
+// and the app tells the page its zoom (#189). The app's hit test takes the click into CSS px (titleBarDrags,
+// #203), so the bar it is told about stays in CSS px at every zoom: converted once, by the app.
+test('at other text sizes the bar Fleet.app is told about stays in CSS px, and the traffic lights keep their room', async () => {
   const {p} = await open(1500);
-  const points = z => `(() => { const b = ${BAR}; return {band: b.band * ${z}, regions: b.regions.map(r => r.map(v => v * ${z}))}; })()`;
   const inset = `parseFloat(getComputedStyle(document.querySelector('.spacebar')).paddingLeft)`;
   try {
     assert.equal(await p.eval(inset), 84);
     for (const z of [1.1, 0.67, 2, 1]){
       await p.eval(`(fleetNativeZoom(${z}), true)`);
-      assert.deepEqual(await p.eval(TOLD), await p.eval(points(z)), 'zoom ' + z);
+      assert.deepEqual(await told(p), await p.eval(BAR), 'zoom ' + z);
       assert.ok(Math.abs(await p.eval(inset) * z - 84) < 0.05, `zoom ${z}: the lights' 84 pt are ${await p.eval(inset) * z}`);
     }
     assert.deepEqual(p.errors, []);
