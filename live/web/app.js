@@ -64,10 +64,11 @@ function ago(s){ return s >= 120 ? Math.round(s / 60) + ' min ago' : Math.round(
 const S = {space:'fleet', sel:'fleet', metric:'cpu', view:'overview', mode:'cap', open:{}, tree:'machines', netSel:'net:tailnet',
            cpuView:'type', sort:{k:'cpu', dir:-1}, group:'none', filter:'', hover:null, mx:0, my:0};
 try { Object.assign(S, JSON.parse(localStorage.getItem('fleet-live-ui') || '{}'), {hover:null}); } catch (e) {}
+if (S.tree === 'pins'){ S.tree = 'machines'; S.pinsOnly = true; }  // pins-only used to be a tab
 function save(){ try { const {hover, mx, my, ...keep} = S; localStorage.setItem('fleet-live-ui', JSON.stringify(keep)); } catch (e) {} }
 
 /* ---------- model ---------- */
-let DATA = null, PINS = [], WINDOW = 180, INTERVAL = 3;
+let DATA = null, PINS = [], WINDOW = 180, INTERVAL = 3, NET = null;
 const nodes = {}, roots = [];
 const zero = () => new Array(H).fill(0);
 function mk(id, p){ const n = Object.assign({id, children:[], parent:null}, p); nodes[id] = n; return n; }
@@ -173,7 +174,324 @@ function gpuConsumers(m, key){
 function gpuSub(n){ const host = hostOf(n); if (!host.gpus.length) return 'host has no GPU'; const w = whichGpuLong(n); return w ? 'on ' + esc(w) : 'not using a GPU'; }
 function gpuCell(n){ const w = whichGpu(n); return fmt(cur(n, 'gpu'), 'gpu') + (w ? ` <span class="gtag">${w}</span>` : ''); }
 
+/* ---------- small renderers ---------- */
+const $ = id => document.getElementById(id);
+function colOf(n){ return TCOL[n.type] || 'var(--ink-2)'; }
+function iconOf(n){
+  if (n.kind === 'machine') return n.tile || 'vm';
+  if (n.kind === 'cronfolder' || n.kind === 'cron') return 'clock';
+  if (n.kind === 'base') return 'chip';
+  if (n.type === 'compose' && n.kind !== 'service') return 'layers';
+  if (n.type === 'vm') return 'vm';
+  return 'cube';
+}
+function sparkPts(data, w, h){ const max = Math.max(...data) * 1.15 || 1; return data.map((v, i) => `${(i/(H-1)*w).toFixed(2)},${(h - v/max*h).toFixed(2)}`).join(' '); }
 // A machine with data keeps showing it while it reconnects ("stale"); only a machine that never
 // reported gets the offline card. Status changes never swap the layout.
 function isLive(n){ return n.status === 'ok'; }
 function hasData(n){ return n.kind !== 'machine' || n.hasData || n.status === 'ok' || n.status === 'hostonly'; }
+function isStale(n){ return n.kind === 'machine' && n.status !== 'ok' && n.status !== 'hostonly' && n.hasData; }
+function staleFor(n){ return n.lastOk ? Math.max(0, Date.now() / 1000 - n.lastOk) : 0; }
+function statusClass(n){ return isLive(n) ? 'ok' : n.status === 'hostonly' ? 'hostonly' : isStale(n) ? 'stale' : n.status === 'off' ? 'off' : n.status === 'connecting' ? 'connecting' : 'offline'; }
+function statusText(n){ return n.status === 'ok' ? 'live' : n.status === 'off' ? 'off' : n.status === 'hostonly' ? 'seen from host' : isStale(n) ? 'reconnecting' : n.status === 'connecting' ? 'connecting' : 'offline'; }
+function pinBtn(id){ const on = PINS.includes(id); return `<button type="button" class="pinbtn${on ? ' on' : ''}" data-pin="${esc(id)}" aria-pressed="${on}" aria-label="${on ? 'Unpin' : 'Pin'} ${esc(nodes[id] ? nodes[id].name : id)} as a space" title="${on ? 'Unpin from the space bar' : 'Pin to the space bar'}">${icon('pin')}</button>`; }
+
+/* ---------- spaces (All machines + pins) ---------- */
+function pillPct(key){
+  if (key === 'fleet'){ const c = ctxOf('fleet'); return pct(sumv(c.bt(S.metric)) / c.cap(S.metric) * 100); }
+  const n = nodes[key]; if (!n) return '';
+  if (n.kind === 'machine' && !hasData(n)) return statusText(n);
+  return pct(n.kind === 'machine' && !n.parent ? cur(n, S.metric) / capOf(n, S.metric) * 100 : shareOfHost(n, S.metric));
+}
+function miniBar(key){
+  const n = key === 'fleet' ? null : nodes[key];
+  if (n && n.kind !== 'machine') return `<i style="width:${Math.min(100, shareOfHost(n, S.metric)).toFixed(1)}%;background:${colOf(n)}"></i>`;
+  const c = ctxOf(key), bt = c.bt(S.metric), cap = c.cap(S.metric);
+  if (!cap) return '';
+  return TYPES.map(t => `<i style="width:${(bt[t.id]/cap*100).toFixed(2)}%;background:${TCOL[t.id]}"></i>`).join('');
+}
+function renderSpaces(){
+  const pills = [{key:'fleet', name:'All machines', tile:'fleet'}].concat(PINS.map(id => {
+    const n = nodes[id];
+    return n ? {key:id, name:n.name, tile:n.kind === 'machine' ? n.tile : iconOf(n), tcol:n.kind === 'machine' ? '' : colOf(n), pinned:true, sub:n.kind === 'machine' ? '' : rootOf(n).name}
+             : {key:id, name:id.split('/').pop(), tile:'cube', pinned:true, gone:true};
+  }));
+  $('spaces').innerHTML = pills.map(p => `<div class="space${S.space===p.key?' active':''}${p.pinned?' pinned':''}${p.gone?' gone':''}" title="${esc(p.name)}${p.sub ? ' · on ' + esc(p.sub) : ''}${p.gone ? ' · not seen right now' : ''}">`
+    + `<button type="button" data-space="${esc(p.key)}" aria-pressed="${S.space===p.key}" style="display:flex;align-items:center;gap:10px;min-width:0;height:100%">`
+    + `<span class="tile ${p.tcol ? '' : p.tile}" ${p.tcol ? `style="background:color-mix(in srgb, ${p.tcol} 22%, transparent);color:${p.tcol}"` : ''}>${icon(p.tile)}</span><span class="nm">${esc(p.name)}</span>`
+    + `<span class="mini" data-mini="${esc(p.key)}" aria-hidden="true">${p.gone ? '' : miniBar(p.key)}</span><span class="pc" data-pc="${esc(p.key)}">${p.gone ? 'gone' : pillPct(p.key)}</span></button>`
+    + (p.pinned ? `<button type="button" class="unpin" data-unpin="${esc(p.key)}" aria-label="Unpin ${esc(p.name)}" title="Unpin">${icon('x', 2.4)}</button>` : '') + `</div>`).join('')
+    + `<button type="button" class="addpin" data-addpin="1" aria-haspopup="dialog" aria-expanded="${PICK.open}" aria-label="Pin a grouping to the space bar" title="Pin a grouping">${icon('plus', 2)}</button>`;
+}
+
+/* ---------- + picker: pin any grouping ---------- */
+const PICK = {open:false, q:''};
+function kindLabel(n){
+  if (n.kind === 'machine') return n.parent ? 'VM' : 'machine';
+  if (n.kind === 'group') return 'group';
+  if (n.kind === 'project') return 'Compose project';
+  if (n.kind === 'service') return 'service';
+  if (n.kind === 'base') return 'Base system';
+  return n.kind;
+}
+function pickCandidates(){
+  const out = [];
+  (function w(list, d, path){ list.forEach(n => {
+    if (n.kind === 'cron' || n.kind === 'cronfolder') return;
+    out.push({n, d, path});
+    w(orderedKids(n), d + 1, path.concat(n.name));
+  }); })(sortedRoots(), 0, []);
+  return out;
+}
+function renderPickerList(){
+  const box = $('picklist'); if (!box) return;
+  const a = document.activeElement, refocus = a && box.contains(a) && a.dataset ? a.dataset.pin : null;
+  const q = PICK.q.trim().toLowerCase();
+  let list = pickCandidates();
+  if (q) list = list.filter(x => [x.n.name, kindLabel(x.n), x.n.os || '', (x.n.meta && x.n.meta.image) || '', x.path.join(' ')].join(' ').toLowerCase().includes(q));
+  const shown = list.slice(0, 400);
+  box.innerHTML = shown.length ? shown.map(({n, d, path}) => {
+    const on = PINS.includes(n.id);
+    const where = q && path.length ? `<span class="pw">${esc(path.join(' › '))}</span>` : '';
+    return `<button type="button" class="prow${on ? ' on' : ''}" data-pin="${esc(n.id)}" aria-pressed="${on}" style="padding-left:${10 + (q ? 0 : d * 16)}px">`
+      + `<span class="ico" style="color:${n.kind === 'machine' ? 'var(--ink-2)' : colOf(n)}">${icon(iconOf(n))}</span>`
+      + `<span class="pn"><span>${esc(n.name)}</span>${where}</span><span class="pk">${esc(kindLabel(n))}${n.children.length && n.kind !== 'base' ? ' · ' + n.children.length : ''}</span>`
+      + `<span class="pp">${icon('pin')}${on ? 'Pinned' : 'Pin'}</span></button>`;
+  }).join('') + (list.length > shown.length ? `<div class="more">${list.length - shown.length} more; type to narrow it down.</div>` : '')
+    : `<div class="more">Nothing matches “${esc(PICK.q)}”.</div>`;
+  if (refocus){ const e = box.querySelector(`[data-pin="${CSS.escape(refocus)}"]`); if (e) e.focus({preventScroll:true}); }
+}
+function openPicker(){
+  PICK.open = true;
+  const p = $('picker'), btn = document.querySelector('[data-addpin]');
+  p.innerHTML = `<div class="pick-h">${icon('search')}<input type="search" id="pickq" placeholder="Search machines, VMs, projects, containers…" value="${esc(PICK.q)}" aria-label="Search groupings" autocomplete="off"></div><div class="picklist" id="picklist" role="list"></div><div class="pick-f">Pinned groupings appear in the space bar. <b>All machines</b> is always there.</div>`;
+  p.hidden = false;
+  const r = btn ? btn.getBoundingClientRect() : {left:16, bottom:56};
+  const w = Math.min(420, innerWidth - 24);
+  p.style.width = w + 'px';
+  p.style.left = Math.max(12, Math.min(r.left, innerWidth - w - 12)) + 'px';
+  p.style.top = (r.bottom + 8) + 'px';
+  renderPickerList();
+  if (btn) btn.setAttribute('aria-expanded', 'true');
+  $('pickq').focus();
+}
+function closePicker(refocus){
+  if (!PICK.open) return;
+  PICK.open = false;
+  $('picker').hidden = true;
+  const btn = document.querySelector('[data-addpin]');
+  if (btn){ btn.setAttribute('aria-expanded', 'false'); if (refocus) btn.focus(); }
+}
+function updateSpaces(){
+  document.querySelectorAll('[data-mini]').forEach(e => { if (e.dataset.mini === 'fleet' || nodes[e.dataset.mini]) e.innerHTML = miniBar(e.dataset.mini); });
+  document.querySelectorAll('[data-pc]').forEach(e => { if (e.dataset.pc === 'fleet' || nodes[e.dataset.pc]) e.textContent = pillPct(e.dataset.pc); });
+}
+
+/* ---------- toolbar ---------- */
+function renderToolbar(){
+  let crumbs;
+  if (S.tree === 'network') crumbs = `<button type="button" data-space="fleet">All machines</button><span class="sep" aria-hidden="true">/</span><span class="cur">Network</span>`;
+  else if (S.sel === 'fleet' || !nodes[S.sel]) crumbs = `<span class="cur">All machines</span>`;
+  else {
+    const path = []; for (let n = nodes[S.sel]; n; n = n.parent) path.unshift(n);
+    crumbs = `<button type="button" data-space="fleet">All machines</button>` + path.map((n, i) => `<span class="sep" aria-hidden="true">/</span>` + (i === path.length - 1 ? `<span class="cur">${esc(n.name)}</span>` : `<button type="button" data-select="${esc(n.id)}">${esc(n.name)}</button>`)).join('');
+  }
+  $('crumbs').innerHTML = crumbs;
+  $('metrics').innerHTML = METRICS.map(m => `<button type="button" data-metric="${m.id}" aria-pressed="${S.view === 'overview' && S.metric===m.id}">${m.label}</button>`).join('');
+  document.querySelectorAll('[data-tree]').forEach(b => b.setAttribute('aria-pressed', String(S.tree === b.dataset.tree)));
+}
+
+/* ---------- machine tree ---------- */
+function isOpen(n){
+  if (S.open[n.id] !== undefined) return S.open[n.id];
+  if (n.kind === 'machine') return S.space !== 'fleet' || !n.parent;
+  return n.kind === 'group' && n.type === 'vm';
+}
+function rowVal(n){
+  if (n.kind === 'machine' && !hasData(n)) return statusText(n);
+  return pct(n.kind === 'machine' && !n.parent ? cur(n, S.metric) / capOf(n, S.metric) * 100 : shareOfHost(n, S.metric));
+}
+// Tree order: alphabetical (case-insensitive, natural numbers), pinned items first.
+// A machine's own groups (Base system, Compose, Containers, VMs) keep their fixed order.
+const COLL = new Intl.Collator(undefined, {numeric:true, sensitivity:'base'});
+function cmpNodes(a, b){ const pa = PINS.includes(a.id), pb = PINS.includes(b.id); if (pa !== pb) return pa ? -1 : 1; return COLL.compare(a.name, b.name); }
+function orderedKids(n){ return n.kind === 'machine' ? n.children : n.children.slice().sort(cmpNodes); }
+function sortedRoots(){ return roots.slice().sort(cmpNodes); }
+function treeRoots(){
+  if (S.pinsOnly) return PINS.map(id => nodes[id]).filter(Boolean).sort((a, b) => COLL.compare(a.name, b.name));
+  return S.space === 'fleet' ? sortedRoots() : (nodes[S.space] ? [nodes[S.space]] : sortedRoots());
+}
+function renderTree(){
+  if (S.tree === 'network') return renderNetTree();
+  const rows = [];
+  (function walkRows(list, d){ list.forEach(n => { rows.push({n, d}); if (n.children.length && isOpen(n)) walkRows(orderedKids(n), d + 1); }); })(treeRoots(), 0);
+  $('tree').innerHTML = rows.map(({n, d}) => {
+    const kids = n.children.length > 0, open = kids && isOpen(n);
+    const count = (n.kind === 'group' || n.kind === 'cronfolder' || n.kind === 'project') ? `<span class="count">${n.children.length}</span>` : '';
+    const dot = n.kind === 'cron' ? `<i class="dot${n.running?' on':''}" data-dot="${esc(n.id)}" title="running now"></i>` : n.kind === 'machine' ? `<i class="sdot ${statusClass(n)}" data-sdot="${esc(n.id)}" title="${statusText(n)}"></i>` : '';
+    const gw = S.metric === 'gpu' && n.parent && hostOf(n).gpus.length > 1 ? whichGpu(n) : '';
+    const gtag = gw ? `<span class="gtag" title="${esc(whichGpuLong(n))}">${gw}</span>` : '';
+    const st = n.kind === 'machine' ? ' ' + statusClass(n) : '';
+    const pin = (n.kind === 'machine' || n.kind === 'project' || n.kind === 'service' || n.kind === 'container' || n.kind === 'group') ? pinBtn(n.id) : '<span style="width:22px;flex:none"></span>';
+    return `<div class="row ${n.kind}${st}${S.sel===n.id?' sel':''}" style="--d:${d}" role="treeitem" aria-level="${d+1}" ${kids?`aria-expanded="${open}"`:''} aria-selected="${S.sel===n.id}" data-select="${esc(n.id)}">`
+      + `<button type="button" class="chev${open?' open':''}${kids?'':' leaf'}" ${kids?`data-toggle="${esc(n.id)}" aria-label="${open?'Collapse':'Expand'} ${esc(n.name)}"`:'tabindex="-1" aria-hidden="true"'}>${icon('chev', 2.4)}</button>`
+      + `<span class="ico" style="color:${n.kind==='cronfolder'||n.kind==='cron'?'var(--ink-3)':colOf(n)}">${icon(iconOf(n))}</span>`
+      + `<button type="button" class="nm" data-select="${esc(n.id)}">${esc(n.name)}</button>${count}${gtag}${dot}${pin}`
+      + `<svg class="spark" data-spark="${esc(n.id)}" viewBox="0 0 60 16" preserveAspectRatio="none" aria-hidden="true"><polyline points="${sparkPts(n.series[S.metric], 60, 16)}" fill="none" stroke="${n.kind==='machine'&&!n.parent?'var(--accent)':colOf(n)}" stroke-width="1.5" vector-effect="non-scaling-stroke" stroke-linejoin="round"/></svg>`
+      + `<span class="val${n.kind === 'machine' && !isLive(n) ? ' dim' : ''}" data-val="${esc(n.id)}" title="share of host ${mlabel(S.metric)}">${rowVal(n)}</span></div>`;
+  }).join('');
+  if (S.pinsOnly && !rows.length) $('tree').innerHTML = `<div class="empty-pins">${icon('pin')}<b>Nothing pinned yet</b><span>Pin a machine, VM, project or container with the pin on its row, or with <b>+</b> in the top bar.</span></div>`;
+  const scope = S.space === 'fleet' ? 'All machines' : (nodes[S.space] ? nodes[S.space].name : 'All machines');
+  $('tree-title').innerHTML = `<span class="scopeseg" role="group" aria-label="Show"><button type="button" data-pinsonly="0" aria-pressed="${!S.pinsOnly}">${esc(scope)}</button><button type="button" data-pinsonly="1" aria-pressed="${!!S.pinsOnly}">Pins only</button></span>`;
+  $('tree-col').textContent = '% of host · ' + mlabel(S.metric);
+  $('side-note').innerHTML = '';
+}
+function updateTree(){
+  if (S.tree === 'network') return renderNetTree();
+  document.querySelectorAll('[data-val]').forEach(e => { const n = nodes[e.dataset.val]; if (n) e.textContent = rowVal(n); });
+  document.querySelectorAll('[data-spark]').forEach(e => { const n = nodes[e.dataset.spark]; if (n) e.firstElementChild.setAttribute('points', sparkPts(n.series[S.metric], 60, 16)); });
+  document.querySelectorAll('[data-dot]').forEach(e => { const n = nodes[e.dataset.dot]; if (n) e.classList.toggle('on', !!n.running); });
+  document.querySelectorAll('[data-sdot]').forEach(e => { const n = nodes[e.dataset.sdot]; if (n){ e.className = 'sdot ' + statusClass(n); e.title = statusText(n); } });
+  document.querySelectorAll('[data-val]').forEach(e => { const n = nodes[e.dataset.val]; if (n && n.kind === 'machine') e.classList.toggle('dim', !isLive(n)); });
+}
+
+/* ---------- network tree ---------- */
+let netNodes = {};
+function buildNet(){
+  netNodes = {};
+  if (!NET) return [];
+  const mkn = (id, p) => (netNodes[id] = Object.assign({id, children:[]}, p));
+  const root = mkn('net:tailnet', {name:NET.tailnet, kind:'tailnet', rx:0, tx:0});
+  NET.machines.forEach(m => {
+    const ts = m.tailscale || {};
+    const mn = mkn('net:m:' + m.id, {name:m.name, kind:'nmachine', status:m.status, error:m.error, ts, vm_on:m.vm_on, rx:0, tx:0, mid:m.id});
+    root.children.push(mn);
+    const ifs = (m.ifs || []).filter(x => x.kind !== 'loopback' && !/^veth/.test(x.name));
+    const vmByIf = {}; (m.vms || []).forEach(v => (v.ifs || []).forEach(i => { vmByIf[i.if] = v.name; }));
+    const nets = {}; (m.dockernets || []).forEach(n => { nets[n.name === 'bridge' ? 'docker0' : 'br-' + n.id] = n.name; });
+    const ifn = {};
+    ifs.forEach(x => { ifn[x.name] = mkn('net:if:' + m.id + ':' + x.name, {name:x.name, kind:'if', ifkind:x.kind, rx:x.rx, tx:x.tx, hrx:x.hrx, htx:x.htx, addrs:x.addrs || [], state:x.state, speed:x.speed, desc:x.desc || '', master:x.master, vm:vmByIf[x.name] || '', dnet:nets[x.name] || ''}); });
+    ifs.forEach(x => {
+      const n = ifn[x.name];
+      if (x.master && ifn[x.master]) ifn[x.master].children.push(n); else mn.children.push(n);
+      if (n.ifkind === 'physical'){ mn.rx += n.rx; mn.tx += n.tx; }
+    });
+    Object.values(ifn).forEach(n => {
+      if (!n.dnet) return;
+      (m.containers || []).filter(c => (c.networks || '').split(',').includes(n.dnet)).forEach(c => {
+        n.children.push(mkn('net:c:' + m.id + ':' + c.name, {name:c.name, kind:'ncontainer', rx:c.net, tx:0, dnet:n.dnet}));
+      });
+    });
+    mn.children.sort((a, b) => COLL.compare(a.name, b.name));
+    Object.values(ifn).forEach(x => x.children.sort((a, b) => COLL.compare(a.name, b.name)));
+    root.rx += mn.rx; root.tx += mn.tx;
+  });
+  root.children.sort((a, b) => COLL.compare(a.name, b.name));
+  return [root];
+}
+function netOpen(n){ return S.open[n.id] !== undefined ? S.open[n.id] : (n.kind === 'tailnet' || (n.kind === 'nmachine' && n.status === 'ok' && n.children.length < 12)); }
+function renderNetTree(){
+  const rootsN = buildNet();
+  const rows = [];
+  (function w(list, d){ list.forEach(n => { rows.push({n, d}); if (n.children.length && netOpen(n)) w(n.children, d + 1); }); })(rootsN, 0);
+  $('tree').innerHTML = rows.length ? rows.map(({n, d}) => {
+    const kids = n.children.length > 0, open = kids && netOpen(n);
+    const ic = n.kind === 'tailnet' ? 'net' : n.kind === 'nmachine' ? 'desktop' : n.kind === 'ncontainer' ? 'cube' : n.ifkind === 'bridge' ? 'bridge' : n.vm ? 'vm' : 'nic';
+    const sub = n.kind === 'nmachine' ? `<i class="sdot ${n.status}" title="${esc(n.status)}"></i>` : n.vm ? `<span class="count">${esc(n.vm)}</span>` : n.dnet && n.kind === 'if' ? `<span class="count">${esc(n.dnet)}</span>` : '';
+    const rate = `<span>↓ ${rateText(n.rx)}</span><span>↑ ${n.kind === 'ncontainer' ? '—' : rateText(n.tx)}</span>`;
+    return `<div class="row${S.netSel===n.id?' sel':''}" style="--d:${d}" role="treeitem" aria-level="${d+1}" ${kids?`aria-expanded="${open}"`:''} data-netsel="${esc(n.id)}">`
+      + `<button type="button" class="chev${open?' open':''}${kids?'':' leaf'}" ${kids?`data-toggle="${esc(n.id)}" aria-label="${open?'Collapse':'Expand'} ${esc(n.name)}"`:'tabindex="-1" aria-hidden="true"'}>${icon('chev', 2.4)}</button>`
+      + `<span class="ico" style="color:var(--ink-2)">${icon(ic)}</span><button type="button" class="nm" data-netsel="${esc(n.id)}">${esc(n.name)}</button>${sub}<span class="nrate">${rate}</span></div>`;
+  }).join('') : '<div class="side-note">Loading the network…</div>';
+  $('tree-title').innerHTML = 'Network';
+  $('tree-col').textContent = '↓ in · ↑ out';
+  $('side-note').innerHTML = '';
+}
+
+function renderAll(){ renderSpaces(); renderToolbar(); renderTree(); }
+
+/* ---------- actions ---------- */
+async function api(path, body){
+  const r = await fetch(path, {method:'POST', headers:{'Content-Type':'application/json', 'X-Fleet':'1'}, body:JSON.stringify(body)});
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  return r.json();
+}
+async function setPins(pins){
+  PINS = pins;
+  renderSpaces(); renderTree(); renderPickerList();
+  try { const d = await api('/api/pins', pins); PINS = d.pins || pins; } catch (e) {}
+  renderSpaces(); renderPickerList();
+}
+function togglePin(id){ setPins(PINS.includes(id) ? PINS.filter(x => x !== id) : PINS.concat([id])); }
+function goSpace(id){ S.space = id; S.sel = id; if (S.tree === 'network') S.tree = 'machines'; save(); renderAll(); $('main').scrollTop = 0; refreshNow(); }
+function select(id){
+  if (id === 'fleet') return goSpace('fleet');
+  const n = nodes[id]; if (!n) return;
+  if (S.space !== 'fleet' && !(nodes[S.space] && within(n, S.space))) S.space = 'fleet';
+  S.sel = id;
+  if (S.tree === 'network') S.tree = 'machines';
+  for (let p = n.parent; p; p = p.parent) S.open[p.id] = true;
+  save(); renderAll(); refreshNow();
+}
+document.addEventListener('click', e => {
+  const ap = e.target.closest('[data-addpin]'); if (ap){ PICK.open ? closePicker(false) : openPicker(); return; }
+  if (PICK.open && !$('picker').contains(e.target)) closePicker(false);
+  const up = e.target.closest('[data-unpin]'); if (up){ e.stopPropagation(); togglePin(up.dataset.unpin); if (S.space === up.dataset.unpin) goSpace('fleet'); return; }
+  const pn = e.target.closest('[data-pin]'); if (pn){ e.stopPropagation(); togglePin(pn.dataset.pin); return; }
+  const tg = e.target.closest('[data-toggle]');
+  if (tg){ const id = tg.dataset.toggle; const n = nodes[id] || netNodes[id]; S.open[id] = !(nodes[id] ? isOpen(n) : netOpen(n)); save(); renderTree(); return; }
+  const po = e.target.closest('[data-pinsonly]'); if (po){ S.pinsOnly = po.dataset.pinsonly === '1'; save(); renderTree(); return; }
+  const tr = e.target.closest('[data-tree]'); if (tr){ S.tree = tr.dataset.tree; if (S.tree === 'network') S.view = 'overview'; save(); renderAll(); refreshNow(); return; }
+  const ns = e.target.closest('[data-netsel]'); if (ns){ S.netSel = ns.dataset.netsel; S.tree = 'network'; save(); renderTree(); renderToolbar(); return; }
+  const sp = e.target.closest('[data-space]'); if (sp){ goSpace(sp.dataset.space); return; }
+  const se = e.target.closest('[data-select]'); if (se){ select(se.dataset.select); return; }
+  const me = e.target.closest('[data-metric]'); if (me){ S.metric = me.dataset.metric; S.view = 'overview'; save(); renderAll(); refreshNow(); return; }
+});
+document.addEventListener('input', e => {
+  if (e.target.id === 'pickq'){ PICK.q = e.target.value; renderPickerList(); }
+});
+$('picker').addEventListener('keydown', e => {
+  if (e.key === 'Escape'){ e.preventDefault(); closePicker(true); }
+  if (e.key === 'Enter' && e.target.id === 'pickq'){ const first = $('picklist').querySelector('[data-pin]'); if (first){ e.preventDefault(); togglePin(first.dataset.pin); } }
+});
+
+/* ---------- polling ---------- */
+let lastSig = '', busy = false, fails = 0;
+function sigOf(){ return Object.keys(nodes).join('|') + '#' + PINS.join('|'); }
+async function refreshNow(){
+  if (busy) return; busy = true;
+  try {
+    const r = await fetch('/api/fleet', {cache:'no-store'});
+    DATA = await r.json();
+    INTERVAL = DATA.interval || 3; WINDOW = DATA.window_s || INTERVAL * H; PINS = DATA.pins || [];
+    build(DATA);
+    if (S.sel !== 'fleet' && !nodes[S.sel]) { /* keep selection; it may come back */ }
+    const jobs = [];
+    if (S.tree === 'network') jobs.push(fetch('/api/net', {cache:'no-store'}).then(r => r.json()).then(d => { NET = d; }));
+    await Promise.all(jobs.map(p => p.catch(() => null)));
+    fails = 0; $('conn').hidden = true; $('live').hidden = false;
+    const sig = sigOf();
+    if (sig !== lastSig){ lastSig = sig; renderAll(); }
+    else { updateSpaces(); updateTree(); }
+  } catch (e) {
+    fails++;
+    if (fails >= 3){ $('conn').hidden = false; $('live').hidden = true; }  // a restart takes a second or two: don't flash
+  } finally { busy = false; }
+}
+renderToolbar();
+refreshNow();
+setInterval(refreshNow, 2000);
+
+/* ---------- reload the window when the app's own files change ---------- */
+(function(){
+  let sig = null;
+  async function check(){
+    try {
+      const hs = await Promise.all(['/', '/app.js'].map(u => fetch(u, {method:'HEAD', cache:'no-store'}).then(r => (r.headers.get('last-modified') || '') + (r.headers.get('content-length') || ''))));
+      const s = hs.join('|');
+      if (sig !== null && s !== sig && !PICK.open){ save(); location.reload(); return; }
+      sig = s;
+    } catch (e) {}
+  }
+  setInterval(check, 1500); check();
+})();
