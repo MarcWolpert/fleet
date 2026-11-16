@@ -11,16 +11,9 @@ let browser;
 before(async () => { browser = await launch(); });
 after(async () => { await browser.close(); });
 
-const H = 60, flat = v => new Array(H).fill(v);
-function fx(){
-  const f = fixture();
-  f.disks = {lx: {per_process: true, disks: [{name: 'nvme0n1', model: 'Test NVMe', size: 1e12, rot: false, role: 'system', mounts: ['/'], read: 1, write: 2, busy: 5, hr: flat(1), hw: flat(2)}]}};
-  f.ifs = {lx: {per_process: true, ifs: [{name: 'eth0', kind: 'physical', rx: 1, tx: 1, addrs: ['10.0.0.2/24'], master: '', state: 'up', speed: '1000', hrx: flat(1), htx: flat(1), vm: '', dnet: '', members: 0, containers: 0}]}};
-  return f;
-}
 // /api/procs reads over three polls, after the page has settled
 async function procReads(over){
-  const p = await browser.page(fx(), {ui: ui(Object.assign({sel: 'lx', detailsDocked: false}, over))});
+  const p = await browser.page(fixture(), {ui: ui(Object.assign({sel: 'lx', detailsDocked: false}, over))});
   try {
     await p.waitFor(`document.querySelector('.grid2')`);
     await p.eval(`(async () => { for (let i = 0; i < 2; i++){ while (busy) await new Promise(r => setTimeout(r, 20)); await refreshNow(); } return true; })()`);
@@ -41,6 +34,8 @@ const CASES = {
   'disk picked, Each disk': {metric: 'disk', diskView: 'each', diskSel: {mid: 'lx', names: ['nvme0n1']}},
   'interface picked, By type': {metric: 'net', ifView: 'type', ifSel: {mid: 'lx', names: ['eth0']}},
   'interface picked, Each interface': {metric: 'net', ifView: 'each', ifSel: {mid: 'lx', names: ['eth0']}},
+  'interface picked but gone, Each interface': {metric: 'net', ifView: 'each', ifSel: {mid: 'lx', names: ['br-0123456789ab']}},
+  'disk picked but gone, Each disk': {metric: 'disk', diskView: 'each', diskSel: {mid: 'lx', names: ['sdb']}},
   'nothing picked, Each disk': {metric: 'disk', diskView: 'each'},
   'CPU, with picks elsewhere': {metric: 'cpu', diskSel: {mid: 'lx', names: ['nvme0n1']}, ifSel: {mid: 'lx', names: ['eth0']}, gpuSel: {mid: 'lx', keys: ['gpu1']}}
 };
@@ -52,5 +47,6 @@ test('the process list is read only while a picked disk\'s or interface\'s card 
     'GPU picked, Each GPU': 'none', 'GPU picked, By type': 'none',
     'disk picked, By type': 'none', 'disk picked, Each disk': 'every poll',
     'interface picked, By type': 'none', 'interface picked, Each interface': 'every poll',
+    'interface picked but gone, Each interface': 'none', 'disk picked but gone, Each disk': 'none',
     'nothing picked, Each disk': 'none', 'CPU, with picks elsewhere': 'none'});
 });

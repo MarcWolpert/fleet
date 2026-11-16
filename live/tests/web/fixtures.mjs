@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Hand-made API answers shaped like a real Fleet Live server's (/api/fleet, /api/procs, /api/cpus).
+// Hand-made API answers shaped like a real Fleet Live server's (/api/fleet, /api/procs, /api/cpus, /api/disks, /api/ifs).
 // Every test gets a fresh copy, so it may change the data between polls.
 //
-//   lx    Linux, 16 CPUs in two CCDs, two NVIDIA GPUs; reports the last CPU (p[12]) and GPUs (p[13]) per process
+//   lx    Linux, 16 CPUs in two CCDs, two NVIDIA GPUs, two disks, two interfaces; reports the last CPU (p[12]) and GPUs (p[13]) per process
 //   lx2   the "nothing else" control: same process names, CPUs and GPUs as lx, other PIDs
 //   win   Windows: one GPU, per-process GPUs reported, the last CPU not (-1)
 //   mac   macOS: one unified GPU, neither reported
@@ -37,6 +37,20 @@ export function lxProcs(base = 100, mid = 'lx'){
   ];
 }
 
+// /api/disks and /api/ifs: lx's disks and interfaces, the ones its processes name
+export function lxDisks(){
+  const h = v => new Array(H).fill(v);
+  return {per_process: true, disks: [
+    {name: 'nvme0n1', model: 'Test NVMe SSD', size: 2e12, rot: false, role: 'system', mounts: ['/', '/boot'], read: 12.5, write: 3.2, busy: 18, hr: h(12.5), hw: h(3.2)},
+    {name: 'sda', model: 'Test HDD', size: 8e12, rot: true, role: 'data', mounts: ['/mnt/data'], read: 0, write: 0.4, busy: 2, hr: h(0), hw: h(0.4)}]};
+}
+export function lxIfs(){
+  const h = v => new Array(H).fill(v);
+  return {per_process: true, ifs: [
+    {name: 'eth0', kind: 'physical', rx: 2.5, tx: 0.8, addrs: ['10.0.0.2/24'], master: '', state: 'up', speed: '10000', hrx: h(2.5), htx: h(0.8), vm: '', dnet: '', members: 0, containers: 0},
+    {name: 'docker0', kind: 'bridge', rx: 0.1, tx: 0.1, addrs: ['172.17.0.1/16'], master: '', state: 'up', speed: '-1', hrx: h(0.1), htx: h(0.1), vm: '', dnet: 'bridge', members: 0, containers: 1}]};
+}
+
 function machine(id, name, os, ncpu, groups, gpus, extra = {}){
   return Object.assign({id, name, tile: 'server', status: 'ok', error: '', os, agent: 'ssh ' + id, cronLabel: 'Cron jobs',
     gpus, cap: [ncpu, 64, 100 * gpus.length, 500, 125], ncpu, cpu_model: name + ' CPU', groups, has_data: true, last_ok: Date.now() / 1000,
@@ -68,7 +82,9 @@ export function fixture(){
       win: {procs: lxProcs(300, 'win').map(p => { const q = p.slice(); q[12] = -1; q[13] = p[13].length ? [0] : []; return q; }), gpu_procs: true},
       mac: {procs: strip(lxProcs(400, 'mac')).map(p => { p[12] = -1; return p; }), gpu_procs: false}
     },
-    cpus: {lx: cpusOf(groups2), lx2: cpusOf(groups2), win: cpusOf(winGroups), mac: cpusOf(macGroups)}
+    cpus: {lx: cpusOf(groups2), lx2: cpusOf(groups2), win: cpusOf(winGroups), mac: cpusOf(macGroups)},
+    disks: {lx: lxDisks(), lx2: lxDisks()},
+    ifs: {lx: lxIfs(), lx2: lxIfs()}
   };
 }
 

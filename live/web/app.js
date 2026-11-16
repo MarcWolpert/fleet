@@ -634,7 +634,7 @@ function cpuSelCard(m){
     + `<h3 class="cpuproc">On these processors</h3>${procs}</section>`;
 }
 function ifToggle(){ return `<div class="seg" role="group" aria-label="Network graph"><button type="button" data-ifview="type" aria-pressed="${S.ifView!=='each'}">By type</button><button type="button" data-ifview="each" aria-pressed="${S.ifView==='each'}">Each interface</button></div>`; }
-function ifSel(m){ return S.ifSel && S.ifSel.mid === m.id ? S.ifSel.names : []; }
+function ifSel(m){ const D = IFS[m.id]; return S.ifSel && S.ifSel.mid === m.id ? S.ifSel.names.filter(k => !D || !D.ifs || D.ifs.some(x => x.name === k)) : []; }
 function ifKind(x){ return x.vm ? 'VM tap · ' + x.vm : x.dnet ? 'Docker network · ' + x.dnet : x.kind === 'bridge' ? 'bridge' + (x.members ? ' · ' + x.members + ' member' + (x.members > 1 ? 's' : '') : '') + (x.containers ? ' · ' + x.containers + ' container' + (x.containers > 1 ? 's' : '') : '') : x.kind === 'physical' ? 'physical' : x.desc || x.kind; }
 function speedText(sp){
   if (/^\d+$/.test(String(sp))) return +sp > 0 ? (+sp >= 1000 ? (+sp / 1000) + ' Gb/s' : sp + ' Mb/s') : '';
@@ -710,7 +710,8 @@ async function toggleTilePin(spec){
   tpinBusy = false;
 }
 function diskToggle(){ return `<div class="seg" role="group" aria-label="Disk graph"><button type="button" data-diskview="type" aria-pressed="${S.diskView!=='each'}">By type</button><button type="button" data-diskview="each" aria-pressed="${S.diskView==='each'}">Each disk</button></div>`; }
-function diskSel(m){ return S.diskSel && S.diskSel.mid === m.id ? S.diskSel.names : []; }
+// A saved pick of a disk or interface that's gone (unplugged, renamed) counts as not picked, like a GPU's.
+function diskSel(m){ const D = DISKS[m.id]; return S.diskSel && S.diskSel.mid === m.id ? S.diskSel.names.filter(k => !D || !D.disks || D.disks.some(d => d.name === k)) : []; }
 function bytesText(b){ return b >= 1e12 ? (b / 1e12).toFixed(b >= 1e13 ? 0 : 1) + ' TB' : b >= 1e9 ? Math.round(b / 1e9) + ' GB' : b ? Math.round(b / 1e6) + ' MB' : ''; }
 function diskLabel(d){ return [d.role, d.model].filter(Boolean).join(' · ') || d.name; }
 function diskEachCard(m){
@@ -1395,8 +1396,10 @@ async function refreshNow(){
     if (S.view !== 'details' && n && n.kind === 'machine' && S.metric === 'cpu' && S.cpuView === 'logical' && cpuSel(n).length && n.status === 'ok') jobs.push(fetch('/api/procs?machine=' + encodeURIComponent(n.id), {cache:'no-store'}).then(r => r.json()).then(d => { PROCS = {machine:n.id, list:d.procs || [], gpuProcs:!!d.gpu_procs}; }));
     if (S.view !== 'details' && n && n.kind === 'machine' && S.metric === 'cpu' && S.cpuView === 'logical') jobs.push(fetch('/api/cpus?machine=' + encodeURIComponent(n.id), {cache:'no-store'}).then(r => r.json()).then(d => { CPUS[n.id] = d; }));
     const nm = n && n.kind === 'machine' ? n : null;
-    if (nm && S.metric === 'net' && S.view !== 'details') jobs.push(fetch('/api/ifs?machine=' + encodeURIComponent(nm.id), {cache:'no-store'}).then(r => r.json()).then(d => { IFS[nm.id] = d; }));
-    if (nm && S.metric === 'disk' && S.view !== 'details') jobs.push(fetch('/api/disks?machine=' + encodeURIComponent(nm.id), {cache:'no-store'}).then(r => r.json()).then(d => { DISKS[nm.id] = d; }));
+    // Each interface / Each disk shows nm's; Details filtered by a disk or interface pick needs its machine's to tell whether that's still there.
+    const dn = shownDetails(), dmid = dn && procMachineFor(dn), lists = (shown, pick) => [...new Set([shown && nm ? nm.id : null, pick && pick.mid === dmid && pick.names.length ? dmid : null].filter(Boolean))];
+    lists(S.metric === 'net' && S.view !== 'details', S.ifSel).forEach(id => jobs.push(fetch('/api/ifs?machine=' + encodeURIComponent(id), {cache:'no-store'}).then(r => r.json()).then(d => { IFS[id] = d; })));
+    lists(S.metric === 'disk' && S.view !== 'details', S.diskSel).forEach(id => jobs.push(fetch('/api/disks?machine=' + encodeURIComponent(id), {cache:'no-store'}).then(r => r.json()).then(d => { DISKS[id] = d; })));
     if (nm && S.view !== 'details' && !S.detailsDocked && ((S.metric === 'disk' && S.diskView === 'each' && diskSel(nm).length) || (S.metric === 'net' && S.ifView === 'each' && ifSel(nm).length)) && nm.status === 'ok') jobs.push(fetch('/api/procs?machine=' + encodeURIComponent(nm.id), {cache:'no-store'}).then(r => r.json()).then(d => { PROCS = {machine:nm.id, list:d.procs || [], gpuProcs:!!d.gpu_procs}; }));
     if (S.tree === 'network') jobs.push(fetch('/api/net', {cache:'no-store'}).then(r => r.json()).then(d => { NET = d; }));
     await Promise.all(jobs.map(p => p.catch(() => null)));
