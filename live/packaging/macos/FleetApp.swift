@@ -238,7 +238,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         let viewItem = NSMenuItem(); main.addItem(viewItem)
         let view = NSMenu(title: "View")
         view.addItem(cmdItem("Go to…", "'goto'", "k"))
-        view.addItem(cmdItem("Find Processes", "'find'", "f"))
+        view.addItem(cmdItem("Find", "'find'", "f"))
+        view.addItem(cmdItem("Back", "'back'", "["))
+        view.addItem(cmdItem("Forward", "'fwd'", "]"))
         view.addItem(cmdItem("Details", "'details'", "d"))
         view.addItem(cmdItem("Dock Details", "'dock'", "d", [.command, .shift]))
         view.addItem(.separator())
@@ -254,8 +256,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         viewItem.submenu = view
         let spaceItem = NSMenuItem(); main.addItem(spaceItem)
         let spaces = NSMenu(title: "Spaces")
-        spaces.addItem(cmdItem("Previous Space", "'space-step', -1", "["))
-        spaces.addItem(cmdItem("Next Space", "'space-step', 1", "]"))
+        spaces.addItem(cmdItem("Previous Space", "'space-step', -1", "{"))
+        spaces.addItem(cmdItem("Next Space", "'space-step', 1", "}"))
         spaces.addItem(.separator())
         spaces.addItem(cmdItem("All Machines", "'space', 0", "1"))
         for n in 2...9 { spaces.addItem(cmdItem("Space \(n)", "'space', \(n - 1)", "\(n)")) }

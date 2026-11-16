@@ -18,8 +18,8 @@ async function open(over = {}, fx = fixture()){
   return p;
 }
 
-test('⌘F opens Details and puts the cursor in its filter; Esc clears it, then leaves it', async () => {
-  const p = await open();
+test('⌘F in Details puts the cursor in its filter; Esc clears it, then leaves it', async () => {
+  const p = await open({view: 'details'});
   try {
     await press(p, 'f', {mod: true, code: 'KeyF'});
     await p.waitFor(`document.activeElement && document.activeElement.id === 'pfilter'`);
@@ -32,7 +32,7 @@ test('⌘F opens Details and puts the cursor in its filter; Esc clears it, then 
   } finally { await p.close(); }
 });
 
-test('⌥1–5 pick the metric, ⌘1–9 and ⌘[ ⌘] pick the space', async () => {
+test('⌥1–5 pick the metric, ⌘1–9 and ⌘⇧[ ⌘⇧] pick the space', async () => {
   const fx = fixture(); fx.fleet.pins = ['lx'];
   const p = await open({}, fx);
   try {
@@ -40,7 +40,7 @@ test('⌥1–5 pick the metric, ⌘1–9 and ⌘[ ⌘] pick the space', async ()
     assert.equal(await p.eval(`document.querySelector('[data-metric="mem"]').getAttribute('aria-pressed')`), 'true');
     await press(p, '2', {mod: true, code: 'Digit2'});
     await p.waitFor(`document.querySelector('[data-space="lx"]').getAttribute('aria-pressed') === 'true'`);
-    await press(p, '[', {mod: true, code: 'BracketLeft'});
+    await press(p, '{', {mod: true, shift: true, code: 'BracketLeft'});   // ⌘⇧[ : the previous space (⌘[ is Back)
     await p.waitFor(`document.querySelector('[data-space="fleet"]').getAttribute('aria-pressed') === 'true'`);
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }

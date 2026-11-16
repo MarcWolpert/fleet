@@ -65,10 +65,14 @@ const S = {space:'fleet', sel:'fleet', metric:'cpu', view:'overview', mode:'cap'
            cpuView:'type', sort:{k:'cpu', dir:-1}, group:'none', filter:'', hover:null, mx:0, my:0};
 try { Object.assign(S, JSON.parse(localStorage.getItem('fleet-live-ui') || '{}'), {hover:null}); } catch (e) {}
 if (S.tree === 'pins'){ S.tree = 'machines'; S.pinsOnly = true; }  // pins-only used to be a tab
-function save(){ try { const {hover, mx, my, ...keep} = S; localStorage.setItem('fleet-live-ui', JSON.stringify(keep)); } catch (e) {} }
+function save(){ try { const {hover, mx, my, ...keep} = S; localStorage.setItem('fleet-live-ui', JSON.stringify(keep)); } catch (e) {} navRecord(); }
 
 /* ---------- model ---------- */
 let TPINS = {}, PREFS = {}, prefsBusy = false;
+// where you've been, for Back and Forward (see "Panels, find, back and forward")
+const NAV = {stack:[], i:-1, applying:false};
+const TF = {q:'', open:false}, FIND = {q:'', i:0, n:0};
+let PANEL = null;   // the panel you're in: 'tree', 'main' or 'details'
 // the process open in the Details drop-down (see "One process, up close")
 const INSP = {mid:null, pid:0, name:'', order:null, gorder:null, data:null, good:null, acc:{}, samples:0, secs:0, looks:0, busy:false};
 let DATA = null, PINS = [], WINDOW = 180, INTERVAL = 3, CPUS = {}, PROCS = {machine:null, list:[]}, NET = null, DISKS = {}, IFS = {};
@@ -345,9 +349,13 @@ function treeRoots(){
 function renderTree(){
   if (S.tree === 'network') return renderNetTree();
   const rows = [];
-  (function walkRows(list, d){ list.forEach(n => { rows.push({n, d}); if (n.children.length && isOpen(n)) walkRows(orderedKids(n), d + 1); }); })(treeRoots(), 0);
+  // ⌘F in the tree: only what matches, and the path down to it
+  const keep = TF.q ? treeMatches(treeRoots(), TF.q) : null;
+  const shown = n => !keep || keep.has(n.id), opened = n => keep ? n.children.some(c => keep.has(c.id)) : isOpen(n);
+  (function walkRows(list, d){ list.forEach(n => { if (!shown(n)) return; rows.push({n, d}); if (n.children.length && opened(n)) walkRows(orderedKids(n), d + 1); }); })(treeRoots(), 0);
+  if (keep && !rows.length){ $('tree').innerHTML = `<div class="tempty">Nothing in the tree matches “${esc(TF.q)}”.</div>`; return; }
   $('tree').innerHTML = rows.map(({n, d}) => {
-    const kids = n.children.length > 0, open = kids && isOpen(n);
+    const kids = n.children.length > 0, open = kids && opened(n);
     const count = (n.kind === 'group' || n.kind === 'cronfolder' || n.kind === 'project') ? `<span class="count">${n.children.length}</span>` : '';
     const dot = n.kind === 'cron' ? `<i class="dot${n.running?' on':''}" data-dot="${esc(n.id)}" title="running now"></i>` : n.kind === 'machine' ? `<i class="sdot ${statusClass(n)}" data-sdot="${esc(n.id)}" title="${statusText(n)}"></i>` : '';
     const gw = S.metric === 'gpu' && n.parent && hostOf(n).gpus.length > 1 ? whichGpu(n) : '';
@@ -414,7 +422,8 @@ function netOpen(n){ return S.open[n.id] !== undefined ? S.open[n.id] : (n.kind 
 function renderNetTree(){
   const rootsN = buildNet();
   const rows = [];
-  (function w(list, d){ list.forEach(n => { rows.push({n, d}); if (n.children.length && netOpen(n)) w(n.children, d + 1); }); })(rootsN, 0);
+  const keep = TF.q ? treeMatches(rootsN, TF.q) : null;
+  (function w(list, d){ list.forEach(n => { if (keep && !keep.has(n.id)) return; rows.push({n, d}); if (n.children.length && (keep ? n.children.some(c => keep.has(c.id)) : netOpen(n))) w(n.children, d + 1); }); })(rootsN, 0);
   $('tree').innerHTML = rows.length ? rows.map(({n, d}) => {
     const kids = n.children.length > 0, open = kids && netOpen(n);
     const ic = n.kind === 'tailnet' ? 'net' : n.kind === 'nmachine' ? 'desktop' : n.kind === 'ncontainer' ? 'cube' : n.ifkind === 'bridge' ? 'bridge' : n.vm ? 'vm' : 'nic';
@@ -1074,6 +1083,7 @@ function renderMain(){
   if (full === lastMainHTML) return;
   lastMainHTML = full;
   main.innerHTML = full;
+  markPanel(); if (FIND.q) applyFind(false);
   if (refocus){ const e = main.querySelector(refocus); if (e){ e.focus({preventScroll:true}); if (selStart != null && e.setSelectionRange) try { e.setSelectionRange(selStart, selStart); } catch (x) {} } }
 }
 function renderAll(){ renderSpaces(); renderToolbar(); renderTree(); renderMain(); refreshTip(); }
@@ -1169,6 +1179,9 @@ function select(id){
   save(); renderAll(); refreshNow();
 }
 document.addEventListener('click', e => {
+  const nv = e.target.closest('[data-nav]'); if (nv){ navGo(nv.dataset.nav === 'back' ? -1 : 1); return; }
+  const fs = e.target.closest('[data-mfstep]'); if (fs){ stepFind(+fs.dataset.mfstep); return; }
+  if (e.target.closest('[data-mfclose]')){ closeFind(); return; }
   if (e.target.closest('[data-inspclose]')){ closeInspect(); return; }
   const prow = e.target.closest('.ptbl tbody tr[data-pid]');
   if (prow && !e.target.closest('button, a, input, select, label')){ toggleInspect(prow.closest('.ptbl').dataset.mid, +prow.dataset.pid, prow); return; }
@@ -1628,12 +1641,13 @@ const MODK = IS_MAC ? '⌘' : 'Ctrl+', ALTK = IS_MAC ? '⌥' : 'Alt+', SHIFTK = 
 const METRIC_KEYS = ['cpu', 'mem', 'gpu', 'disk', 'net'];
 const SHORTCUTS = [
   ['Go to anything: machines, containers, jobs, commands', [MODK + 'K']],
-  ['Find: filter the process list', [MODK + 'F', '/']],
+  ['Find in the panel you’re in: the tree, the page or Details', [MODK + 'F', '/']],
+  ['Back, forward', [MODK + '[', MODK + ']']],
   ['Details on and off', [MODK + 'D']],
   ['Dock Details beside the overview', [MODK + SHIFTK + 'D']],
   ['CPU, Memory, GPU, Disk I/O, Network', [ALTK + '1 … ' + ALTK + '5']],
   ['Go to a space (1 is All machines)', [MODK + '1 … ' + MODK + '9']],
-  ['Previous or next space', [MODK + '[', MODK + ']']],
+  ['Previous or next space', [MODK + SHIFTK + '[', MODK + SHIFTK + ']']],
   ['Move through the tree', ['↑', '↓']],
   ['Collapse or expand; go to the parent', ['←', '→']],
   ['Pin or unpin the selection as a space', ['P']],
@@ -1650,6 +1664,15 @@ function overlayOpen(){ return SET.open || PICK.open || COLMENU.open || !!$('key
 function fleetCommand(name, arg){
   switch (name){
     case 'find': {
+      const panel = PANEL || 'main';
+      if (panel === 'tree') return openTreeFind();
+      const f = panel === 'details' ? document.querySelector('.dpanel #pfilter') : S.view === 'details' ? $('pfilter') : null;
+      if (f){ f.focus(); f.select(); return true; }
+      return openFind();
+    }
+    case 'back': return navGo(-1) || true;
+    case 'fwd': return navGo(1) || true;
+    case 'findproc': {
       if (S.tree === 'network'){ S.tree = 'machines'; }
       if (!S.detailsDocked && S.view !== 'details'){ S.view = 'details'; save(); lastMainHTML = ''; renderAll(); refreshNow(); }
       const f = $('pfilter'); if (f){ f.focus(); f.select(); }
@@ -1705,6 +1728,8 @@ document.addEventListener('keydown', e => {
   const run = (name, arg) => { if ((SET.open || $('keys') || $('goto')) && !['keys', 'refresh', 'goto'].includes(name)) return; if (fleetCommand(name, arg)) e.preventDefault(); };
   if (e.key === 'Escape'){
     if ($('keys')){ e.preventDefault(); closeKeys(); return; }
+    if (e.target.id === 'tfq'){ e.preventDefault(); closeTreeFind(); return; }
+    if (e.target.id === 'mfq'){ e.preventDefault(); closeFind(); return; }
     if (INSP.pid && !typing && !overlayOpen()){ e.preventDefault(); closeInspect(); return; }
     if (e.target.id === 'pfilter'){ e.preventDefault(); if (e.target.value){ e.target.value = ''; S.filter = ''; save(); renderMain(); } else e.target.blur(); return; }
     return;
@@ -1723,11 +1748,15 @@ document.addEventListener('keydown', e => {
     if (k === '/') return run('keys');
     if (k === 'r' && !e.shiftKey) return run('refresh');
     if (k === 't' && !e.shiftKey && !typing) return run('terminal');
-    if (e.key === '[' || e.key === ']') return run('space-step', e.key === '[' ? -1 : 1);
+    if (e.code === 'BracketLeft' || e.code === 'BracketRight' || e.key === '[' || e.key === ']'){
+      const fwd = e.code === 'BracketRight' || e.key === ']';
+      return e.shiftKey ? run('space-step', fwd ? 1 : -1) : run(fwd ? 'fwd' : 'back');
+    }
     if (/^Digit[1-9]$/.test(e.code) && !e.shiftKey) return run('space', +e.code.slice(5) - 1);
     return;
   }
   if (e.altKey && !mod && /^Digit[1-5]$/.test(e.code)) return run('metric', METRIC_KEYS[+e.code.slice(5) - 1]);
+  if (e.altKey && !mod && !IS_MAC && !typing && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) return run(e.key === 'ArrowLeft' ? 'back' : 'fwd');
   if (typing || e.metaKey || e.ctrlKey || e.altKey || overlayOpen()) return;
   if (e.key === '/') return run('find');
   if (e.key === '?') return run('keys');
@@ -1747,7 +1776,9 @@ function gotoCommands(){
   return [
     {label:'Settings', hint:MODK + ',', ic:'gear', run:() => fleetCommand('settings')},
     {label:'Details: the process list', hint:MODK + 'D', ic:'chip', run:() => fleetCommand('details')},
-    {label:'Find a process', hint:MODK + 'F', ic:'search', run:() => fleetCommand('find')},
+    {label:'Find a process (Details filter)', ic:'search', run:() => fleetCommand('findproc')},
+    {label:'Back', hint:MODK + '[', ic:'chev', run:() => fleetCommand('back')},
+    {label:'Forward', hint:MODK + ']', ic:'chev', run:() => fleetCommand('fwd')},
     {label:'Dock Details beside the overview', hint:MODK + SHIFTK + 'D', ic:'panelright', run:() => fleetCommand('dock')}
   ].concat(METRIC_KEYS.map((k, i) => ({label:'Show ' + METRIC_NAMES[k], hint:ALTK + (i + 1), ic:'chip', run:() => fleetCommand('metric', k)})), [
     {label:'Machine tree', ic:'server', run:tree('machines')},
@@ -1922,3 +1953,89 @@ function inspectPanel(p){
   const threads = th.length ? `<div class="icard wide"><h4>Busiest threads</h4><table class="ithr"><tbody>${th.map(t => `<tr><td class="l">${esc(t.name || '—')}</td><td>${t.tid}</td><td>${t.total != null ? num(t.total) + ' s in all' : pct((t.cpu || 0) * 100)}</td><td class="l">${esc(WAIT_LABEL[t.doing] || t.doing || '')}</td></tr>`).join('')}</tbody></table></div>` : '';
   return `<div class="insp">${head}${note}${wait}<div class="insp-grid">${cards.map(([h, rows]) => `<div class="icard"><h4>${h}</h4>${rows.filter(Boolean).join('')}</div>`).join('')}${threads}</div></div>`;
 }
+
+
+/* ---------- Panels, find, back and forward ---------- */
+// The panel you're in (tree, page, docked Details) has a soft outline; ⌘F searches that panel.
+function panelOf(t){ if (!t || !t.closest) return null; if (t.closest('.dpanel')) return 'details'; if (t.closest('aside.side')) return 'tree'; if (t.closest('#main')) return 'main'; return null; }
+function markPanel(){
+  const side = document.querySelector('aside.side'), main = $('main'); if (!side || !main) return;
+  const wrap = main.querySelector(':scope > .split > .wrap'), dp = main.querySelector('.dpanel');
+  side.classList.toggle('pactive', PANEL === 'tree');
+  main.classList.toggle('pactive', PANEL === 'main' && !wrap);
+  if (wrap) wrap.classList.toggle('pactive', PANEL === 'main');
+  if (dp) dp.classList.toggle('pactive', PANEL === 'details');
+}
+function notePanel(e){ const p = panelOf(e.target); if (p && p !== PANEL){ PANEL = p; markPanel(); } }
+document.addEventListener('pointerdown', notePanel, true);
+document.addEventListener('focusin', notePanel);
+
+// The tree: matching nodes and their ancestors
+function treeMatches(rootList, q){
+  const want = q.trim().toLowerCase(), keep = new Set();
+  (function w(list, path){ list.forEach(n => {
+    const kids = n.children || [];
+    if ((n.name || '').toLowerCase().includes(want)){ keep.add(n.id); path.forEach(a => keep.add(a.id)); }
+    w(kids, path.concat([n]));
+  }); })(rootList, []);
+  return keep;
+}
+function openTreeFind(){
+  const box = $('tfind'), q = $('tfq'); if (!box || !q) return false;
+  TF.open = true; box.hidden = false; q.focus(); q.select(); PANEL = 'tree'; markPanel(); return true;
+}
+function closeTreeFind(){ TF.open = false; TF.q = ''; const q = $('tfq'); if (q) q.value = ''; $('tfind').hidden = true; renderTree(); const r = document.querySelector('#tree .row.sel') || document.querySelector('#tree .row'); if (r) r.focus && r.focus(); }
+
+// The page: rows and cards that contain the text, highlighted; Enter steps through them
+function findScope(){ const m = $('main'); return m.querySelector(':scope > .split > .wrap') || m; }
+function findTargets(){ return [...findScope().querySelectorAll('tbody tr, [data-select], [data-lcpu], [data-gsel], [data-dsel], [data-isel], .mcard-h')].filter(e => !e.closest('.dpanel') && !(e.matches('[data-select]') && e.closest('tbody tr'))); }
+function applyFind(scroll){
+  findScope().querySelectorAll('.fmatch, .fcur').forEach(e => e.classList.remove('fmatch', 'fcur'));
+  const q = FIND.q.trim().toLowerCase(), cnt = $('mfcount');
+  if (!q){ FIND.n = 0; if (cnt) cnt.textContent = ''; return; }
+  const ms = findTargets().filter(e => e.textContent.toLowerCase().includes(q));
+  FIND.n = ms.length; FIND.i = ms.length ? Math.min(FIND.i, ms.length - 1) : 0;
+  ms.forEach((e, i) => e.classList.add('fmatch', ...(i === FIND.i ? ['fcur'] : [])));
+  if (cnt) cnt.textContent = ms.length ? `${FIND.i + 1} of ${ms.length}` : 'none';
+  if (scroll && ms[FIND.i]) ms[FIND.i].scrollIntoView({block:'center', inline:'nearest'});
+}
+function placeFind(){ const box = $('mfind'), r = findScope().getBoundingClientRect(); if (!box) return; box.style.top = (r.top + 10) + 'px'; box.style.right = Math.max(12, innerWidth - r.right + 18) + 'px'; }
+function openFind(){
+  const box = $('mfind'), q = $('mfq'); if (!box || !q) return false;
+  box.hidden = false; placeFind(); q.focus(); q.select(); PANEL = 'main'; markPanel(); if (FIND.q) applyFind(true); return true;
+}
+function closeFind(){ FIND.q = ''; FIND.i = 0; const q = $('mfq'); if (q) q.value = ''; $('mfind').hidden = true; applyFind(false); }
+function stepFind(d){ if (!FIND.n) return; FIND.i = (FIND.i + d + FIND.n) % FIND.n; applyFind(true); }
+addEventListener('resize', () => { if (!$('mfind').hidden) placeFind(); });
+document.addEventListener('input', e => {
+  if (e.target.id === 'tfq'){ TF.q = e.target.value; renderTree(); }
+  if (e.target.id === 'mfq'){ FIND.q = e.target.value; FIND.i = 0; applyFind(true); }
+});
+document.addEventListener('keydown', e => {
+  if (e.target.id === 'mfq' && e.key === 'Enter'){ e.preventDefault(); stepFind(e.shiftKey ? -1 : 1); }
+  if (e.target.id === 'mfq' && (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'g'){ e.preventDefault(); stepFind(e.shiftKey ? -1 : 1); }
+});
+
+// Back and Forward: every change of where you are (space, selection, tree, view, metric) is a step
+const NAV_KEYS = ['space', 'sel', 'tree', 'netSel', 'view', 'metric'];
+function navState(){ const o = {}; NAV_KEYS.forEach(k => { o[k] = S[k]; }); return o; }
+function navRecord(){
+  if (NAV.applying) return;
+  const cur = navState(), top = NAV.stack[NAV.i];
+  if (top && NAV_KEYS.every(k => top[k] === cur[k])) return;
+  NAV.stack = NAV.stack.slice(0, NAV.i + 1).concat([cur]).slice(-200);
+  NAV.i = NAV.stack.length - 1;
+  renderNav();
+}
+function navGo(d){
+  const j = NAV.i + d; if (j < 0 || j >= NAV.stack.length) return false;
+  NAV.i = j; NAV.applying = true;
+  Object.assign(S, NAV.stack[j]);
+  for (let p = nodes[S.sel] && nodes[S.sel].parent; p; p = p.parent) S.open[p.id] = true;
+  save(); NAV.applying = false;
+  lastMainHTML = ''; renderAll(); renderNav(); refreshNow();
+  return true;
+}
+function renderNav(){ const b = document.querySelector('[data-nav="back"]'), f = document.querySelector('[data-nav="fwd"]'); if (b) b.disabled = NAV.i <= 0; if (f) f.disabled = NAV.i >= NAV.stack.length - 1; }
+document.addEventListener('mouseup', e => { if (e.button === 3 || e.button === 4){ e.preventDefault(); navGo(e.button === 3 ? -1 : 1); } });
+navRecord();
