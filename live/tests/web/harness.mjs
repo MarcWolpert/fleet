@@ -59,6 +59,7 @@ export function startServer(fx){
       if (u.pathname === '/api/procs') return json((fx.procs || {})[mid] || {procs: []});
       if (u.pathname === '/api/cpus') return json((fx.cpus || {})[mid] || {});
       if (u.pathname === '/api/disks') return json((fx.disks || {})[mid] || {disks: [], per_process: true});
+      if (u.pathname === '/api/ifs') return json((fx.ifs || {})[mid] || {ifs: [], per_process: true});
       if (u.pathname === '/api/net') return json(fx.net || {tailnet: 'tailnet', machines: []});
       if (u.pathname === '/api/proc'){  // the Details drop-down: fx.proc(machine, pid, call number) answers
         const pid = +u.searchParams.get('pid'); fx.procCalls = (fx.procCalls || []).concat([mid + ':' + pid]);

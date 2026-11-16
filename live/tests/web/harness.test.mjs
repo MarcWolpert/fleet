@@ -110,3 +110,22 @@ test('a space and a tile pinned on the page are still pinned after the next poll
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
 });
+
+test('the fixture server answers /api/ifs from fx.ifs, so a machine\'s interfaces show and pick processes (#123)', async () => {
+  const fx = fixture(), h = v => new Array(60).fill(v);
+  // an interface as /api/ifs sends it
+  const nic = (name, kind, over) => Object.assign({name, kind, state: 'up', speed: '', addrs: [], rx: 0, tx: 0, master: '', hrx: h(0), htx: h(0), vm: '', dnet: '', members: 0, containers: 0}, over);
+  fx.ifs = {lx: {ifs: [nic('docker0', 'bridge', {containers: 1, addrs: ['172.17.0.1/16']}),
+                       nic('eth0', 'physical', {speed: '1000', addrs: ['10.0.0.2/24'], rx: 1.5, tx: 0.25, hrx: h(1.5), htx: h(0.25)})], per_process: true}};
+  const p = await browser.page(fx, {ui: ui({sel: 'lx', metric: 'net', ifView: 'each'})});
+  const TILES = `[...document.querySelectorAll('.kgrid .kcell')].map(c => [c.querySelector('[data-isel]').dataset.isel, c.querySelector('.kb').textContent, c.querySelector('.km').textContent, c.querySelector('.ks').textContent])`;
+  const USING = `(() => { const t = [...document.querySelectorAll('h3.cpuproc')].find(x => x.textContent === 'Using this interface'); return t ? [...t.parentElement.querySelectorAll('h3.cpuproc ~ div tbody tr')].map(r => +r.children[1].textContent) : null; })()`;
+  try {
+    await p.waitFor(`document.querySelectorAll('.kgrid .kcell').length === 2`);
+    assert.deepEqual(await p.eval(TILES), [['eth0', '1 Gb/s', 'physical', '10.0.0.2/24'], ['docker0', '', 'bridge · 1 container', '172.17.0.1/16']]);
+    await p.click('[data-isel="eth0"]');
+    await p.waitFor(`(${USING} || []).length`);
+    assert.deepEqual(await p.eval(USING), [105, 101, 102, 107]);   // lx's processes with traffic via eth0, busiest first
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
