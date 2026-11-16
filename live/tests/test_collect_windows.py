@@ -341,5 +341,116 @@ class DockerStatsRunsAlongside(unittest.TestCase):
         self.assertTrue(self.SRC.index("Wait-Bounded $ds") < self.SRC.index(line))
 
 
+def ps_unbalanced(src):
+    """What doesn't pair up in a PowerShell script: brackets, quotes, here-strings and block comments, by line.
+    Strings, here-strings and comments are skipped; code inside "...$(...)..." is checked like any other code.
+    An empty list means it all pairs up (this is not a parser: it catches the slips an edit makes)."""
+    n, problems = len(src), []
+    pairs = {")": "(", "]": "[", "}": "{"}
+
+    def ln(k):
+        return src.count("\n", 0, k) + 1
+
+    def dq(i):   # i is just past an opening "; returns the index past its closing "
+        start = i - 1
+        while i < n:
+            if src[i] == "`":
+                i += 2
+            elif src.startswith('""', i):
+                i += 2
+            elif src[i] == '"':
+                return i + 1
+            elif src.startswith("$(", i):
+                i = code(i + 2, ")")
+            else:
+                i += 1
+        problems.append('unterminated "..." from line %d' % ln(start))
+        return n
+
+    def code(i, closer=None):   # scans code until an unmatched closer (returns the index past it) or the end
+        start, stack = i, []
+        while i < n:
+            c = src[i]
+            here = re.match(r"@(['\"])\r?\n", src[i:i + 4])
+            if c == "`":
+                i += 2
+                continue
+            if src.startswith("<#", i):
+                j = src.find("#>", i + 2)
+                if j < 0:
+                    problems.append("unterminated <# from line %d" % ln(i))
+                    return n
+                i = j + 2
+                continue
+            if c == "#" and (i == 0 or src[i - 1] in " \t\r\n;"):
+                j = src.find("\n", i)
+                i = n if j < 0 else j
+                continue
+            if here:
+                j = src.find("\n" + here.group(1) + "@", i)
+                if j < 0:
+                    problems.append("unterminated here-string from line %d" % ln(i))
+                    return n
+                i = j + 3
+                continue
+            if c == "'":
+                j = i + 1
+                while True:
+                    j = src.find("'", j)
+                    if j < 0:
+                        problems.append("unterminated '...' from line %d" % ln(i))
+                        return n
+                    if src.startswith("''", j):
+                        j += 2
+                        continue
+                    break
+                i = j + 1
+                continue
+            if c == '"':
+                i = dq(i + 1)
+                continue
+            if c in "([{":
+                stack.append((c, i))
+            elif c in ")]}":
+                if not stack and c == closer:
+                    return i + 1
+                if not stack:
+                    problems.append("%s at line %d closes nothing" % (c, ln(i)))
+                else:
+                    o, k = stack.pop()
+                    if o != pairs[c]:
+                        problems.append("%s at line %d closes %s from line %d" % (c, ln(i), o, ln(k)))
+            i += 1
+        problems.extend("%s from line %d is never closed" % (o, ln(k)) for o, k in stack)
+        if closer:
+            problems.append("$( from line %d is never closed" % ln(start))
+        return n
+
+    code(0)
+    return problems
+
+
+class ScriptPairsUp(unittest.TestCase):
+    """#176 (part): until the tests can run PowerShell, every bracket, quote, here-string and $(...) in the collector
+    pairs up, so an edit that drops one is caught here and not on a Windows host."""
+    SRC = open(os.path.join(LIVE, "collect_windows.ps1"), encoding="utf-8").read()
+
+    def test_the_collector_pairs_up(self):
+        self.assertEqual(ps_unbalanced(self.SRC), [])
+        self.assertEqual(ps_unbalanced(fl.ps_compact(self.SRC)), [], "as sent, too")
+
+    def test_a_dropped_brace_quote_or_paren_is_caught(self):
+        self.assertEqual(ps_unbalanced(self.SRC.replace("$o.procs = $plist\n", "$o.procs = $plist\n{\n")), ["{ from line 41 is never closed"])
+        self.assertEqual(ps_unbalanced(self.SRC.replace('"$($_.IPAddress)/', '"$($_.IPAddress/'))[:2],
+                         ['unterminated "..." from line 204', "$( from line 159 is never closed"])
+        self.assertEqual(ps_unbalanced("$a = @(1, 2"), ["( from line 1 is never closed"])
+        self.assertEqual(ps_unbalanced("$a = 'it''s"), ["unterminated '...' from line 1"])
+        self.assertEqual(ps_unbalanced("$a = @'\nC# with } and \"\n"), ["unterminated here-string from line 1"])
+        self.assertEqual(ps_unbalanced("$a = (1]"), ["] at line 1 closes ( from line 1"])
+
+    def test_what_is_not_code_is_skipped(self):
+        self.assertEqual(ps_unbalanced("$a = 'it''s (' + \"`\" {\" + \"$(@{ b = '}' }.b)\"  # )\n<# ] #>\n$c = @'\n{ \"\n'@"), [])
+
+
 if __name__ == "__main__":
     unittest.main()
