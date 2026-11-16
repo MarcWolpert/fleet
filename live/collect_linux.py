@@ -11,6 +11,7 @@ import base64, glob, json, os, re, subprocess, sys, time, zlib
 
 PAGE = os.sysconf("SC_PAGE_SIZE")
 HZ = os.sysconf("SC_CLK_TCK")
+ROOT = ""  # where /proc, /sys and /usr/local/sbin are read from: "" on a host, a recorded snapshot in tests
 
 
 def rd(path):
@@ -193,7 +194,7 @@ UNRAID = {"t": 0.0, "map": {}, "role": {}}
 
 def unraid_map():
     """Unraid's array driver hides which physical disk is behind /dev/mdNp1; mdcmd status (read-only) says."""
-    if time.time() - UNRAID["t"] < 60 or not os.path.exists("/usr/local/sbin/mdcmd"):
+    if time.time() - UNRAID["t"] < 60 or not os.path.exists(ROOT + "/usr/local/sbin/mdcmd"):
         return
     UNRAID["t"] = time.time()
     st = run(["/usr/local/sbin/mdcmd", "status"], timeout=5)
@@ -215,7 +216,7 @@ def disks_of(majmin):
     if majmin in RESOLVE:
         return RESOLVE[majmin]
     out = set()
-    path = os.path.realpath("/sys/dev/block/" + majmin)
+    path = os.path.realpath(ROOT + "/sys/dev/block/" + majmin)
     if os.path.exists(path):
         name = os.path.basename(path)
         if name in UNRAID["map"]:
@@ -225,7 +226,7 @@ def disks_of(majmin):
         slaves = os.path.join(base, "slaves")
         if os.path.isdir(slaves) and os.listdir(slaves):
             for sl in os.listdir(slaves):
-                out |= disks_of(rd("/sys/class/block/%s/dev" % sl).strip())
+                out |= disks_of(rd(ROOT + "/sys/class/block/%s/dev" % sl).strip())
         elif PHYS.match(os.path.basename(base)):
             out.add(os.path.basename(base))
         elif PHYS.match(name):
@@ -237,18 +238,18 @@ def disks_of(majmin):
 def disk_info(procs, containers):
     unraid_map()
     disks = []
-    for line in rd("/proc/diskstats").splitlines():
+    for line in rd(ROOT + "/proc/diskstats").splitlines():
         f = line.split()
         if len(f) < 14 or not PHYS.match(f[2]):
             continue
         n = f[2]
-        b = "/sys/block/%s/" % n
+        b = ROOT + "/sys/block/%s/" % n
         size = rd(b + "size").strip()
         disks.append({"name": n, "r": int(f[5]) * 512, "w": int(f[9]) * 512, "ms": int(f[12]),
                       "model": (rd(b + "device/model").strip() or rd(b + "device/name").strip()), "size": int(size) * 512 if size.isdigit() else 0,
                       "rot": rd(b + "queue/rotational").strip() == "1", "mounts": [], "role": UNRAID["role"].get(n, "")})
     by = {d["name"]: d for d in disks}
-    for line in rd("/proc/self/mountinfo").splitlines():
+    for line in rd(ROOT + "/proc/self/mountinfo").splitlines():
         f = line.split()
         if len(f) > 4 and f[2] and not f[2].startswith("0:"):
             for dn in disks_of(f[2]):
@@ -266,12 +267,12 @@ def disk_info(procs, containers):
     for pid in busy[:300]:
         found = set()
         try:
-            fds = os.listdir("/proc/%d/fd" % pid)[:2000]
+            fds = os.listdir(ROOT + "/proc/%d/fd" % pid)[:2000]
         except Exception:
             continue
         for fd in fds:
             try:
-                st = os.stat("/proc/%d/fd/%s" % (pid, fd))
+                st = os.stat(ROOT + "/proc/%d/fd/%s" % (pid, fd))
             except Exception:
                 continue
             if st.st_dev and os.major(st.st_dev):
@@ -289,11 +290,11 @@ def disk_info(procs, containers):
         if p[9] and p[9] not in first:
             first[p[9]] = p[0]
     for cid, pid in first.items():
-        m = re.search(r"0::(\S+)", rd("/proc/%d/cgroup" % pid))
+        m = re.search(r"0::(\S+)", rd(ROOT + "/proc/%d/cgroup" % pid))
         if not m:
             continue
         acc = {}
-        for line in rd("/sys/fs/cgroup%s/io.stat" % m.group(1)).splitlines():
+        for line in rd(ROOT + "/sys/fs/cgroup%s/io.stat" % m.group(1)).splitlines():
             f = line.split()
             if not f:
                 continue
@@ -589,16 +590,17 @@ def snapshot():
     return out
 
 
-try:
-    INTERVAL
-except NameError:
-    INTERVAL = 3.0
-while True:
-    began = time.time()
-    data = json.dumps(snapshot(), separators=(",", ":")).encode()
+if __name__ == "__main__":   # also true for `python3 -` and `python3 -c`, as the server runs it; tests import it
     try:
-        sys.stdout.write(base64.b64encode(zlib.compress(data, 3)).decode() + "\n")
-        sys.stdout.flush()
-    except (BrokenPipeError, OSError):
-        os._exit(0)  # Fleet Live went away: stop
-    time.sleep(max(0.2, INTERVAL - (time.time() - began)))
+        INTERVAL
+    except NameError:
+        INTERVAL = 3.0
+    while True:
+        began = time.time()
+        data = json.dumps(snapshot(), separators=(",", ":")).encode()
+        try:
+            sys.stdout.write(base64.b64encode(zlib.compress(data, 3)).decode() + "\n")
+            sys.stdout.flush()
+        except (BrokenPipeError, OSError):
+            os._exit(0)  # Fleet Live went away: stop
+        time.sleep(max(0.2, INTERVAL - (time.time() - began)))
