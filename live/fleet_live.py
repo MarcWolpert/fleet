@@ -276,14 +276,16 @@ class Machine:
     def loop(self):
         backoff = 5
         while True:
+            began = self.last_ok
             try:
                 if self.cfg.get("kind") == "local":
                     self.local_loop()
                 else:
                     self.ssh_loop()
-                backoff = 5
             except Exception as e:  # never die; show it
                 self.set_status("offline", "collector error: %s" % e)
+            if self.last_ok > began:
+                backoff = 5   # that session brought a reading: start over; a machine that's down or refuses the key waits longer each time
             self.wake.wait(backoff)
             self.wake.clear()
             backoff = min(60, backoff * 2)
@@ -306,7 +308,7 @@ class Machine:
 
     def ssh_loop(self):
         cmd, stdin = self.ssh_cmd()
-        self.set_status("connecting")
+        self.set_status("connecting", self.error)   # the last failure stays on the offline card until a reading or the next failure
         p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         self.proc = p
         if stdin:
