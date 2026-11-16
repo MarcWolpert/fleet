@@ -334,7 +334,7 @@ class WhichInspector(unittest.TestCase):
             "this computer, Windows": ("powershell", "inspect_windows.ps1"),   # was this Python running inspect_linux.py (#287)
             "this computer, Linux": ("this Python", "inspect_linux.py"),
             "this computer, macOS": ("in Fleet's process", "inspect_mac"),
-            "Windows over SSH": ("ssh powershell", "?"),                      # the script goes in -EncodedCommand, not on stdin
+            "Windows over SSH": ("ssh powershell", "inspect_windows.ps1"),    # the short bootstrap, the script on stdin (#304)
             "Linux over SSH": ("ssh python3", "inspect_linux.py"),
             "a Mac over SSH": ("ssh python3", "the Mac reader"),
             "no os given, over SSH": ("ssh python3", "inspect_linux.py"),
