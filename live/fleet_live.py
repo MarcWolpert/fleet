@@ -76,6 +76,37 @@ def size_bytes(s):
 
 GB = 2**30
 MB = 1e6
+# Every collector SSH session starts with exactly these options, so leftovers from an
+# earlier Fleet Live run can be found (and only those) by their command line.
+SSH_MARK = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=15",
+            "-o", "ServerAliveCountMax=2", "-o", "LogLevel=ERROR"]
+
+
+def reap_leftover_collectors():
+    """Stop collector SSH sessions left by an earlier run (orphaned, or children of this pid from before an exec)."""
+    if platform.system() == "Windows":
+        return 0
+    mark = "ssh " + " ".join(SSH_MARK) + " "
+    killed = 0
+    for line in run(["ps", "-axo", "pid=,ppid=,command="]).splitlines():
+        f = line.strip().split(None, 2)
+        if len(f) == 3 and f[2].startswith(mark) and int(f[1]) in (1, os.getpid()):
+            try:
+                os.kill(int(f[0]), 15)
+                killed += 1
+            except OSError:
+                pass
+    return killed
+
+
+def stop_collectors(fleet):
+    for m in fleet.machines.values():
+        p = m.proc
+        if p and p.poll() is None:
+            try:
+                p.terminate()
+            except Exception:
+                pass
 
 
 # ---------------------------------------------------------------- machine
@@ -92,6 +123,105 @@ class Machine:
         self.cum = {}             # cumulative counters from the previous reading
         self.disk_peak = 500 * MB
         self.lock = threading.Lock()
+        self.proc = None
+        self.last_ok = 0.0          # when the last good reading arrived
+        self.wake = threading.Event()  # Retry now
+        self.thread = threading.Thread(target=self.loop, daemon=True, name="fleet-" + self.id)
+
+    # One thread per machine; reconnect with backoff.
+    def loop(self):
+        backoff = 5
+        while True:
+            try:
+                if self.cfg.get("kind") == "local":
+                    self.local_loop()
+                else:
+                    self.ssh_loop()
+                backoff = 5
+            except Exception as e:  # never die; show it
+                self.set_status("offline", "collector error: %s" % e)
+            self.wake.wait(backoff)
+            self.wake.clear()
+            backoff = min(60, backoff * 2)
+
+    def got(self, view):
+        with self.lock:
+            self.view, self.status, self.error, self.last_ok = view, "ok", "", time.time()
+
+    def set_status(self, status, error=""):
+        with self.lock:
+            self.status, self.error = status, error
+
+    def ssh_cmd(self):
+        base = ["ssh"] + SSH_MARK + [self.cfg["ssh"]]
+        if self.cfg.get("os") == "windows":
+            script = "$FleetInterval=%s\n" % self.interval + open(os.path.join(HERE, "collect_windows.ps1"), encoding="utf-8").read()
+            enc = base64.b64encode(script.encode("utf-16-le")).decode()
+            return base + ["powershell -NoProfile -NonInteractive -EncodedCommand " + enc], None
+        script = "INTERVAL=%s\n" % self.interval + open(os.path.join(HERE, "collect_linux.py"), encoding="utf-8").read()
+        return base + ["python3 -"], script.encode()
+
+    def ssh_loop(self):
+        cmd, stdin = self.ssh_cmd()
+        self.set_status("connecting")
+        p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.proc = p
+        if stdin:
+            p.stdin.write(stdin)
+            p.stdin.close()  # Linux: the script itself; python3 - runs it at EOF
+        # Windows: stdin stays open and unused; the collector exits when it closes (its lifeline)
+        err_tail = collections.deque(maxlen=5)
+        threading.Thread(target=lambda: [err_tail.append(l.decode("utf-8", "replace").strip()) for l in p.stderr], daemon=True).start()
+        for line in p.stdout:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                if self.cfg.get("os") == "windows":
+                    s = line.decode("utf-8", "replace")
+                    if not s.startswith("{"):
+                        continue
+                    raw = json.loads(s)
+                    view = self.derive_windows(raw)
+                else:
+                    raw = json.loads(zlib.decompress(base64.b64decode(line)))
+                    view = self.derive_linux(raw)
+            except Exception as e:
+                err_tail.append("bad reading: %s" % e)
+                continue
+            if view:
+                self.got(view)
+        p.wait()
+        msg = " ".join(x for x in err_tail if x) or "connection closed (exit %s)" % p.returncode
+        self.set_status("offline", msg[:300])
+
+    def local_loop(self):
+        if platform.system() == "Darwin":
+            c = MacCollector()
+            while True:
+                began = time.time()
+                view = self.derive_generic(c.snapshot())
+                if view:
+                    self.got(view)
+                time.sleep(max(0.3, self.interval - (time.time() - began)))
+        elif platform.system() == "Linux":
+            env = dict(os.environ)
+            p = subprocess.Popen([sys.executable, "-c", "INTERVAL=%s\n" % self.interval + open(os.path.join(HERE, "collect_linux.py")).read()],
+                                 stdout=subprocess.PIPE)
+            for line in p.stdout:
+                view = self.derive_linux(json.loads(zlib.decompress(base64.b64decode(line.strip()))))
+                if view:
+                    self.got(view)
+        elif platform.system() == "Windows":
+            script = "$FleetInterval=%s\n" % self.interval + open(os.path.join(HERE, "collect_windows.ps1"), encoding="utf-8").read()
+            enc = base64.b64encode(script.encode("utf-16-le")).decode()
+            p = subprocess.Popen(["powershell", "-NoProfile", "-NonInteractive", "-EncodedCommand", enc], stdout=subprocess.PIPE)
+            for line in p.stdout:
+                s = line.decode("utf-8", "replace").strip()
+                if s.startswith("{"):
+                    view = self.derive_windows(json.loads(s))
+                    if view:
+                        self.got(view)
 
     def rate(self, key, value, t):
         """Per-second rate of a cumulative counter since the previous reading."""
@@ -316,6 +446,130 @@ class Machine:
             cutoff = t - 30
             self.cum = {k: v for k, v in self.cum.items() if v[1] >= cutoff}
 
+    # ------------------------------------------------------------ windows
+    def derive_windows(self, r):
+        for k in ("lcpus", "topo", "gpus", "nvidia", "videoNames", "gproc", "procs", "ifs", "wsl", "containers", "dstats", "tasks", "disks"):
+            r[k] = aslist(r.get(k))
+        for a in r["ifs"]:
+            a["addrs"] = [x for x in aslist(a.get("addrs")) if isinstance(x, str) and x]  # an empty list arrives as {}
+        for tk in r["tasks"]:
+            tk["triggers"] = aslist(tk.get("triggers"))
+        t = r["t"]
+        ncpu = r["ncpu"]
+        lc = sorted(r.get("lcpus", []), key=lambda x: x["n"])
+        topo = r.get("topo") or []
+        if topo:
+            self.cum["__topo"] = (topo, 0)
+        topo = self.cum.get("__topo", ([], 0))[0]
+        tmap = {}
+        for s in topo:
+            n, core, eff, l3 = (int(x) for x in s.split(":"))
+            tmap[n] = (core, eff, l3)
+        lcpus = [{"n": c["n"], "pct": c["pct"], "mhz": c.get("mhz", 0), "core": str(tmap.get(c["n"], ("",))[0]),
+                  "eff": tmap.get(c["n"], (0, 0, -1))[1], "l3": str(tmap.get(c["n"], (0, 0, -1))[2])} for c in lc]
+        groups = group_lcpus_windows(lcpus)
+        host_cpu = sum(c["pct"] for c in lc) / 100.0
+        mem_used = (r["mem"][0] - r["mem"][1]) / GB
+        disk = float(r.get("diskBps") or 0) / MB
+        self.disk_peak = max(self.disk_peak, disk * MB * 1.25)
+        ifs, net, speed = [], 0.0, 0.0
+        for a in r.get("ifs", []):
+            rx, tx = self.rate("ifrx." + a["name"], a["rx"], t) / MB, self.rate("iftx." + a["name"], a["tx"], t) / MB
+            kind = "virtual" if a.get("virtual") else "physical"
+            ifs.append({"name": a["name"], "kind": kind, "rx": rx, "tx": tx, "addrs": a.get("addrs") or [], "master": "",
+                        "state": a.get("status", ""), "speed": a.get("speed", ""), "desc": a.get("desc", "")})
+            if kind == "physical" and a.get("status") == "Up":
+                net += rx + tx
+                m = re.match(r"([\d.]+)\s*([GMK])bps", a.get("speed", ""))
+                if m:
+                    speed += float(m.group(1)) * {"G": 1000, "M": 1, "K": 0.001}[m.group(2)]
+        # GPUs: adapters ordered by dedicated memory; NVIDIA names from nvidia-smi when present.
+        nv = [x.split(", ") for x in r.get("nvidia", []) if x and x.count(",") >= 4]
+        names = [x[1] for x in nv] + [n for n in r.get("videoNames", []) if not any(n == x[1] for x in nv)]
+        gpus, luid_idx = [], {}
+        for i, g in enumerate(r.get("gpus", [])):
+            luid_idx[g["luid"]] = i
+            mem = ""
+            if i < len(nv) and nv[i][4].strip().isdigit():
+                mem = "%d GB VRAM" % round(int(nv[i][4]) / 1024)
+            gpus.append({"name": names[i] if i < len(names) else "GPU %d" % i, "mem": mem, "util": min(100.0, g.get("util", 0))})
+        gpu_by_pid = {}
+        for pid, luid, pct in r.get("gproc", []):
+            if luid in luid_idx:
+                gpu_by_pid.setdefault(pid, {})[luid_idx[luid]] = gpu_by_pid.get(pid, {}).get(luid_idx[luid], 0) + pct
+        procs, vm_u = [], [0.0] * 5
+        for p in r.get("procs", []):
+            pid, ppid, name, c_secs, ws, threads, io, cmd = p
+            c = self.rate("wp.%d" % pid, c_secs, t)  # cumulative CPU seconds -> cores
+            io = max(0.0, io)
+            g = sum(gpu_by_pid.get(pid, {}).values())
+            row = [pid, ppid, name, "", "", c, ws / GB, io / MB, g, threads, cmd, "base", -1, sorted(gpu_by_pid.get(pid, {})), [],
+                   aslist((r.get("pnet") or {}).get(str(pid))), -1.0]
+            if name.lower() in ("vmmem", "vmmemwsl"):
+                row[11] = "vm:WSL"
+                for i, v in enumerate((c, ws / GB, g, io / MB)):
+                    vm_u[i] += v
+            procs.append(row)
+        containers = []
+        stats = {}
+        for line in r.get("dstats", []):
+            try:
+                s = json.loads(line)
+            except Exception:
+                continue
+            nio = s.get("NetIO", "0B / 0B").split("/")
+            bio = s.get("BlockIO", "0B / 0B").split("/")
+            stats[s.get("ID", "")[:12]] = (float(s.get("CPUPerc", "0%").rstrip("%") or 0) / 100.0,
+                                           size_bytes(s.get("MemUsage", "0B").split("/")[0]) / GB,
+                                           sum(size_bytes(x) for x in bio), sum(size_bytes(x) for x in nio))
+        for line in r.get("containers", []):
+            try:
+                c = json.loads(line)
+            except Exception:
+                continue
+            labels = dict(kv.split("=", 1) for kv in c.get("Labels", "").split(",") if "=" in kv)
+            cid = c.get("ID", "")[:12]
+            st = stats.get(cid, (0, 0, 0, 0))
+            u = [st[0], st[1], 0.0, self.rate("cb." + cid, st[2], t) / MB, self.rate("cn." + cid, st[3], t) / MB]
+            containers.append({"id": cid, "name": c.get("Names", ""), "image": c.get("Image", ""), "status": c.get("Status", ""),
+                               "project": labels.get("com.docker.compose.project", ""), "service": labels.get("com.docker.compose.service", ""),
+                               "file": labels.get("com.docker.compose.project.config_files", ""), "networks": c.get("Networks", ""), "u": u})
+        # The WSL utility VM also runs Docker Desktop's containers: they are listed on their own, the rest is the VM's.
+        for i in range(5):
+            vm_u[i] = max(0.0, vm_u[i] - sum(c["u"][i] for c in containers))
+        running = [w["name"] for w in r.get("wsl", []) if w.get("state") == "Running"]
+        vms = []
+        if r.get("wsl"):
+            vms.append({"name": "WSL", "u": vm_u, "running": bool(running), "ifs": [], "distros": r.get("wsl", []), "cpus": ""})
+        jobs = []
+        for tk in r.get("tasks", []):
+            trig = ", ".join(tk.get("triggers") or []) or "on demand"
+            jobs.append({"name": tk["name"], "sched": trig, "human": trig, "cmd": tk.get("cmd", ""), "src": tk.get("path", "\\"),
+                         "last": tk.get("last", ""), "next": tk.get("next", ""), "running": tk.get("state") == "Running",
+                         "state": tk.get("state", ""), "u": [0.0] * 5})
+        return {
+            "t": t, "os": r.get("os", "Windows"), "arch": r.get("arch", ""), "cpu_model": r.get("cpu_model", ""), "ncpu": ncpu,
+            "uptime": r.get("uptime", 0), "host": [host_cpu, mem_used, sum(g["util"] for g in gpus), disk, net],
+            "cap": [ncpu, r["mem"][0] / GB, 100.0 * len(gpus), self.disk_peak / MB, (speed / 8.0) if speed else 125.0],
+            "gpus": gpus, "lcpus": lcpus, "groups": groups, "containers": containers, "vms": vms, "jobs": jobs,
+            "procs": procs, "ifs": ifs, "dockernets": [], "cronLabel": "Scheduled tasks",
+            "gpu_procs": bool(gpus),  # GPU engine counters name each process's adapters (p[13])
+            "disks": [{"name": d.get("name", ""), "model": d.get("model", ""), "size": d.get("size", 0), "rot": bool(d.get("rot")), "role": "",
+                       "mounts": [x for x in str(d.get("letters", "")).split() if x], "read": float(d.get("read") or 0) / MB,
+                       "write": float(d.get("write") or 0) / MB, "busy": min(100.0, float(d.get("busy") or 0))} for d in r["disks"]],
+        }
+
+    # ------------------------------------------------------------ macOS (already rates)
+    def derive_generic(self, r):
+        return r
+
+
+def aslist(x):
+    """PowerShell's ConvertTo-Json turns one-item arrays into a bare value; undo that."""
+    if x is None or x == "":
+        return []
+    return x if isinstance(x, list) else [x]
+
 
 def job_name(cmd):
     toks = [x for x in re.split(r"\s+", cmd) if x and not x.startswith("-") and x not in ("cd", "&&", "test", "-x", "||", "{", "}", "/", "sh", "bash", "-c")]
@@ -346,6 +600,21 @@ def group_lcpus_linux(lcpus):
             key = "All processors"
         if len({x["pkg"] for x in lcpus}) > 1:
             key = "Socket %s · %s" % (c["pkg"], key)
+        groups.setdefault(key, []).append(c["n"])
+    return [{"name": k, "cpus": v} for k, v in groups.items()]
+
+
+def group_lcpus_windows(lcpus):
+    groups = collections.OrderedDict()
+    effs = sorted({c.get("eff", 0) for c in lcpus})
+    l3s = sorted({c["l3"] for c in lcpus if c["l3"] not in ("", "-1")})
+    for c in lcpus:
+        if len(effs) > 1:
+            key = "P-cores" if c.get("eff", 0) == effs[-1] else "E-cores"
+        elif len(l3s) > 1:
+            key = "CCD %d" % l3s.index(c["l3"]) if c["l3"] in l3s else "CCD ?"
+        else:
+            key = "All processors"
         groups.setdefault(key, []).append(c["n"])
     return [{"name": k, "cpus": v} for k, v in groups.items()]
 

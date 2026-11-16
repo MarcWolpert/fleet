@@ -29,6 +29,13 @@ def nv(index, name):
     return {"index": index, "name": name, "util": 10.0, "memUsed": 100.0, "memTotal": 16384.0}
 
 
+def windows_reading(gpus, gproc):
+    procs = [[pid, 4, name, 0.1, 1 << 20, 3, 0, "C:\\" + name] for pid, name in ((10, "game.exe"), (11, "dwm.exe"), (12, "obs64.exe"), (13, "explorer.exe"), (14, "svchost.exe"))]
+    return {"t": 1000.0, "ncpu": 4, "lcpus": [{"n": n, "pct": 5.0, "mhz": 3000} for n in range(4)], "topo": [], "gpus": gpus,
+            "nvidia": [], "videoNames": ["NVIDIA GeForce RTX 3090", "NVIDIA RTX A2000"][:len(gpus)], "gproc": gproc, "procs": procs, "ifs": [], "wsl": [],
+            "containers": [], "dstats": [], "tasks": [], "mem": [16 << 30, 8 << 30], "diskBps": 0, "os": "Windows"}
+
+
 def by_pid(view):
     return {p[0]: p for p in view["procs"]}
 
@@ -57,6 +64,17 @@ class LinuxGpusPerProcess(unittest.TestCase):
         v = self.derive([], [])
         self.assertEqual({pid: on(p) for pid, p in by_pid(v).items()}, {104: [], 105: [], 106: [], 109: [], 110: []})
         self.assertIs(v.get("gpu_procs"), False)
+
+
+class WindowsGpusPerProcess(unittest.TestCase):
+    def test_luids_map_to_the_adapters_with_their_own_memory(self):
+        a, b, igpu = "0x0_0x1a", "0x0_0x2b", "0x0_0x3c"
+        v = fleet_live.Machine({"id": "w", "name": "w", "os": "windows"}, 3).derive_windows(windows_reading(
+            [{"luid": a, "util": 50.0, "dedicated": 24 << 30}, {"luid": b, "util": 2.0, "dedicated": 8 << 30}],
+            [[10, a, 50.0], [11, b, 0.0], [12, a, 1.0], [12, b, 2.0], [13, igpu, 9.0]]))
+        self.assertEqual({pid: on(p) for pid, p in by_pid(v).items()}, {10: [0], 11: [1], 12: [0, 1], 13: [], 14: []})
+        self.assertEqual({pid: p[8] for pid, p in by_pid(v).items()}, {10: 50.0, 11: 0.0, 12: 3.0, 13: 0.0, 14: 0.0}, "GPU % unchanged")
+        self.assertIs(v.get("gpu_procs"), True)
 
 
 if __name__ == "__main__":
