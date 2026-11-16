@@ -35,7 +35,14 @@ test('a container\'s processes from Docker\'s VM: listed under it, PID with a VM
     assert.match(panel, /Runs in\s*web/);
     assert.match(panel, /Threads\s*1/);
     assert.match(panel, /inside that VM/);
-    assert.deepEqual(fx.procCalls || [], [], 'no /api/proc for a VM process');
+    assert.deepEqual(fx.procCalls || [], [], 'no /api/proc for a VM process until you choose how to look');
+    // #218: choose how to look inside; the full drop-down follows from that answer
+    assert.deepEqual(await p.eval(`[...document.querySelectorAll('tr.pinsp [data-vmlook]')].map(b => b.dataset.vmlook)`), ['helper', 'exec']);
+    fx.proc = (mid, pid) => ({pid: 7, name: 'node', cmdline: 'node server.js', waits: {cpu: 3, sleep: 7}, samples: 10, dt: 1.5, cpu: {run_s: 0.3, runq_s: 0}});
+    await p.eval(`(document.querySelector('tr.pinsp [data-vmlook="helper"]').click(), true)`);
+    await p.waitFor(`(fx => fx)(true) && /through a helper container/.test(document.querySelector('tr.pinsp').textContent)`);
+    await p.waitFor(`!document.querySelector('tr.pinsp [data-vmlook]')`);
+    assert.deepEqual(fx.procCalls.slice(0, 1), ['mac:d:abc123:7:helper']);
     await p.eval(`(document.querySelector('tr[data-pid="d:abc123:7"] td').click(), true)`);
     await p.waitFor(`!document.querySelector('tr.pinsp')`);
     // sorting by PID uses the number

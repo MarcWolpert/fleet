@@ -51,5 +51,38 @@ class DockerTop(unittest.TestCase):
         self.assertEqual([r[1] for r in second], ["s6-svscan", "gitea", "sshd"])
 
 
+class LookInside(unittest.TestCase):
+    """#218: a helper container, or the inspector run inside the process's own container."""
+    def test_a_helper_container_sees_the_vm_and_runs_fleets_inspector(self):
+        cmd, stdin = fl.docker_vm_inspect_cmd("abc123def456", 3615, "helper", "/usr/local/bin/gitea web", 52660)
+        self.assertEqual(cmd[:3], ["docker", "run", "--rm"])
+        for a in ("--pid=host", "--cap-add=SYS_PTRACE", "--network=none", "-i"):
+            self.assertIn(a, cmd)
+        self.assertEqual(cmd[-5:], [fl.HELPER_IMAGE, "python3", "-", "3615", str(fl.INSPECT_SECS)])
+        self.assertEqual(stdin, open(os.path.join(LIVE, "inspect_linux.py"), "rb").read())
+
+    def test_exec_finds_the_process_in_its_container_by_command_line_and_age(self):
+        cmd, stdin = fl.docker_vm_inspect_cmd("abc123def456", 3615, "exec", "/usr/local/bin/gitea web", 52660)
+        self.assertEqual(cmd, ["docker", "exec", "-i", "abc123def456", "python3", "-"])
+        text = stdin.decode()
+        self.assertIn("WANT_CMD = '/usr/local/bin/gitea web'", text)
+        self.assertIn("WANT_AGE = 52660", text)
+        self.assertTrue(text.endswith(open(os.path.join(LIVE, "inspect_linux.py")).read()))
+        compile(text, "<exec>", "exec")   # one valid script
+
+    def test_a_container_without_python3_says_so(self):
+        real = 'OCI runtime exec failed: exec failed: unable to start container process: exec: "python3": executable file not found in $PATH'
+        self.assertEqual(fl.vm_inspect_error("exec", real), "This container has no python3 to run Fleet's inspector. Look with a helper container instead.")
+        self.assertEqual(fl.vm_inspect_error("helper", "docker: Error response from daemon: x\n"), "docker: Error response from daemon: x")
+        self.assertEqual(fl.vm_inspect_error("helper", ""), "no answer from Docker")
+
+    def test_only_a_docker_desktop_key_and_a_known_way(self):
+        self.assertEqual(fl.parse_vm_key("d:abc123def456:3615"), ("abc123def456", 3615))
+        for bad in ("d:abc:1", "d:ABC123DEF456:1", "d:abc123def456:x", "d:abc123def456:0", "3615", "d:abc123def456:1;rm"):
+            self.assertIsNone(fl.parse_vm_key(bad), bad)
+        with self.assertRaises(ValueError):
+            fl.docker_vm_inspect_cmd("abc123def456", 1, "ssh", "", 0)
+
+
 if __name__ == "__main__":
     unittest.main()
