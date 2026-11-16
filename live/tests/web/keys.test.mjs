@@ -163,3 +163,39 @@ test('⌘F and Go to\'s Find a process select a leftover filter, and a refresh k
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
 });
+
+// Go to's Find a process, typed into Go to and run
+async function findProcess(p){
+  await press(p, 'k', {mod: true, code: 'KeyK'});
+  await p.waitFor(`document.activeElement && document.activeElement.id === 'gotoq'`);
+  await p.eval(`(() => { const i = document.getElementById('gotoq'); i.value = 'find a process'; i.dispatchEvent(new Event('input', {bubbles: true})); return true; })()`);
+  await press(p, 'Enter');
+}
+const WHERE = `(() => { const f = document.activeElement; return {tree: S.tree, view: S.view, docked: !!S.detailsDocked,
+  pressed: [...document.querySelectorAll('[data-tree]')].filter(b => b.getAttribute('aria-pressed') === 'true').map(b => b.dataset.tree),
+  netRows: document.querySelectorAll('#tree .row[data-netsel]').length, machineRows: document.querySelectorAll('#tree .row[data-select]').length > 0,
+  focus: f && f.id === 'pfilter' ? (f.closest('.dpanel') ? 'docked filter' : 'Details filter') : (f && (f.id || f.tagName))}; })()`;
+
+test('Find a process with Details docked and the network tree showing: the machine tree, the docked panel\'s filter (regression)', async () => {
+  const p = await open({tree: 'network', detailsDocked: true, sel: 'lx'});
+  try {
+    await p.waitFor(`document.querySelectorAll('#tree .row[data-netsel]').length > 0`);
+    await findProcess(p);
+    await p.waitFor(`document.activeElement && document.activeElement.id === 'pfilter'`, 1500).catch(() => {});
+    const w = await p.eval(WHERE);
+    assert.deepEqual(w, {tree: 'machines', view: 'overview', docked: true, pressed: ['machines'], netRows: 0, machineRows: true, focus: 'docked filter'});
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
+test('Find a process with Details docked and nothing selected: the full Details view\'s filter (regression)', async () => {
+  const p = await open({detailsDocked: true, sel: 'fleet'});
+  try {
+    await p.waitFor(`document.querySelector('.dpanel .dhead')`);
+    await findProcess(p);
+    await p.waitFor(`document.activeElement && document.activeElement.id === 'pfilter'`, 1500).catch(() => {});
+    const w = await p.eval(WHERE);
+    assert.deepEqual(w, {tree: 'machines', view: 'details', docked: false, pressed: ['machines'], netRows: 0, machineRows: true, focus: 'Details filter'});
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});

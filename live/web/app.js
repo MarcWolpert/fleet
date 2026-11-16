@@ -1791,8 +1791,13 @@ function fleetCommand(name, arg){
     case 'back': return navGo(-1) || true;
     case 'fwd': return navGo(1) || true;
     case 'findproc': {
-      if (S.tree === 'network'){ S.tree = 'machines'; }
-      if (!S.detailsDocked && S.view !== 'details'){ S.view = 'details'; save(); lastMainHTML = ''; renderAll(); refreshNow(); }
+      // the docked panel's filter when it lists processes, else the full Details view's (as ⌘D opens it)
+      const net = S.tree === 'network';
+      if (net) S.tree = 'machines';
+      if (net || !shownDetails()){
+        if (!shownDetails()){ S.view = 'details'; S.detailsDocked = false; }
+        save(); lastMainHTML = ''; renderAll(); refreshNow();
+      }
       const f = $('pfilter'); if (f){ f.focus(); f.select(); }
       return true;
     }
