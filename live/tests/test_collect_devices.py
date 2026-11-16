@@ -408,5 +408,66 @@ class NetUsers(unittest.TestCase):
         self.assertEqual(self.m.net_users(IFADDR), {})
 
 
+
+def conn(local, peer, comm, pid, fd, sent, received):
+    """One established connection as ss -tinpH prints it."""
+    return ('0      0   %s   %s users:(("%s",pid=%d,fd=%d))\n'
+            "\t cubic wscale:7,7 rto:204 rtt:0.4/0.2 mss:1448 cwnd:10 bytes_sent:%d bytes_acked:%d bytes_received:%d segs_out:9 segs_in:9\n"
+            % (local, peer, comm, pid, fd, sent, sent, received))
+
+
+A = ("192.168.1.20:8096", "192.168.1.31:40112")   # a stream, open throughout
+B = ("192.168.1.20:8096", "192.168.1.32:51000")   # a 5 MB download that finishes after the first reading
+D = ("192.168.1.20:8096", "192.168.1.33:51800")   # short requests, each gone by the next reading
+E = ("192.168.1.20:8096", "192.168.1.33:51802")
+F = ("192.168.1.20:8096", "192.168.1.34:52000")
+C = ("127.0.0.1:5432", "127.0.0.1:41000")         # postgres; closed and reopened on the same ports before reading 4
+READINGS = [
+    conn(*A, "nginx", 2200, 21, 990000, 10000) + conn(*B, "nginx", 2200, 22, 4999000, 1000) + conn(*C, "postgres", 300, 9, 700, 300),
+    conn(*A, "nginx", 2200, 21, 3990000, 10000) + conn(*D, "nginx", 2200, 23, 19000, 1000) + conn(*C, "postgres", 300, 9, 700, 300),
+    conn(*A, "nginx", 2200, 21, 6990000, 10000) + conn(*E, "nginx", 2200, 23, 29000, 1000) + conn(*C, "postgres", 300, 9, 700, 300),
+    conn(*C, "postgres", 300, 9, 150, 50),                                       # nginx has no connection now
+    conn(*F, "nginx", 2200, 24, 400, 100) + conn(*C, "postgres", 300, 9, 700, 300),
+]
+
+
+class NetBytes(unittest.TestCase):
+    """A process's TCP bytes only grow: what each of its connections moved since the last reading is added to them."""
+    def readings(self):
+        m = load()
+        out = []
+        for text in READINGS:
+            m.run = commands({SS_CMD: text})
+            out.append(m.net_users(IFADDR))
+        return out
+
+    def test_closed_connections_keep_their_bytes_in_the_total(self):
+        self.assertEqual([{pid: u["b"] for pid, u in r.items()} for r in self.readings()], [
+            {"2200": 6000000, "300": 1000},              # what's open now counts once, as the baseline
+            {"2200": 9020000, "300": 1000},              # +3 MB on the stream, +20 kB from a new one; the download closed
+            {"2200": 12050000, "300": 1000},
+            {"300": 1200},                               # a new connection on the same ports: all its bytes are new
+            {"2200": 12050500, "300": 2000},             # nginx picks up where it left off
+        ])
+
+    def test_the_rate_fleet_live_shows(self):
+        argv, sys.argv = sys.argv, ["fleet_live.py"]
+        try:
+            spec = importlib.util.spec_from_file_location("fleet_live_net_test", os.path.join(LIVE, "fleet_live.py"))
+            fl = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(fl)
+        finally:
+            sys.argv = argv
+        machine, rates = fl.Machine({"id": "lx", "name": "lx"}, 3), []
+        for i, pnet in enumerate(self.readings()[:3]):
+            view = machine.derive_linux({
+                "t": 1000.0 + 3 * i, "ncpu": 1, "hz": 100, "cpu": [10, 0, 10, 100, 0, 0, 0, 0],
+                "lcpus": [{"n": 0, "t": [1, 0, 1, 10, 0, 0, 0, 0], "core": "0", "l3": "0", "kind": "", "pkg": "0"}],
+                "mem": [16 << 30, 8 << 30], "disk": 0, "ifs": {}, "procs": [proc(2200, "nginx"), proc(300, "postgres")], "containers": [],
+                "vms": [], "cron": [], "timers": [], "gpus": [], "gproc": [], "os": "Linux", "pnet": pnet})
+            rates.append({p[0]: round(p[16], 6) for p in view["procs"]})
+        self.assertEqual(rates, [{2200: 0.0, 300: 0.0}, {2200: 1.006667, 300: 0.0}, {2200: 1.01, 300: 0.0}])   # MB/s
+
+
 if __name__ == "__main__":
     unittest.main()

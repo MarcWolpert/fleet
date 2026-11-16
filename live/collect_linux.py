@@ -369,8 +369,11 @@ def disk_info(procs, containers):
 
 
 # ---- Network: which interface each process talks through, and its TCP bytes (from ss -ti) ----
+CONNS, PNET_B = {}, {}  # each connection's bytes at the last reading; each process's TCP bytes, added up over readings
+
+
 def net_users(ifaddr):
-    users, cur = {}, None
+    users, cur, seen = {}, None, {}
     for line in run(["ss", "-tinpH", "state", "established"], timeout=8).splitlines():
         if line[:1] not in (" ", "\t"):
             addrs = [x for x in line.split() if ":" in x and not x.startswith("users:")]
@@ -381,18 +384,26 @@ def net_users(ifaddr):
                     ip, ifn = ip.split("%", 1)
                 ifn = ifn or ifaddr.get(ip.replace("::ffff:", ""), "")
             pids = re.findall(r"pid=(\d+)", line)
-            cur = pids
+            cur, key = pids, " ".join(addrs[:2])
             for pid in pids:
-                u = users.setdefault(pid, {"ifs": [], "b": 0})
+                u = users.setdefault(pid, {"ifs": [], "b": PNET_B.get(pid, 0)})
                 if ifn and ifn not in u["ifs"]:
                     u["ifs"].append(ifn)
         elif cur:
             sent = re.search(r"bytes_(?:sent|acked):(\d+)", line)
             got = re.search(r"bytes_received:(\d+)", line)
             b = (int(sent.group(1)) if sent else 0) + (int(got.group(1)) if got else 0)
+            # Add what this connection moved since the last reading (all of it if it's new), so a process's total only
+            # grows: a connection that closes doesn't take its bytes back out, and Fleet Live can diff it as a counter.
+            prev, seen[key] = CONNS.get(key, 0), b
             for pid in cur:
-                users[pid]["b"] += b
+                PNET_B[pid] = users[pid]["b"] = PNET_B.get(pid, 0) + (b - prev if b >= prev else b)
             cur = None
+    CONNS.clear()
+    CONNS.update(seen)
+    if len(PNET_B) > 20000:
+        for pid in [p for p in PNET_B if p not in users and not os.path.isdir(ROOT + "/proc/" + p)]:
+            del PNET_B[pid]
     return users
 
 
