@@ -833,7 +833,7 @@ def group_lcpus_windows(lcpus):
 
 # ---------------------------------------------------------------- macOS collector
 class MacCollector:
-    """This Mac, read directly: ps, host_processor_info, vm_stat, iostat, netstat, ioreg, docker, crontab, launchd."""
+    """This Mac, read directly: ps, host_processor_info, vm_stat, netstat, ioreg, docker, crontab, launchd."""
 
     def __init__(self):
         self.prev = {}
@@ -851,14 +851,16 @@ class MacCollector:
         self.disk_names = {}
         self.vz_owners = {}
 
-    def disk_info(self, dn):
-        if dn not in self.disk_names:
+    def disk_info(self, dn, rid=None):
+        """diskutil's facts about a disk, kept per disk and registry entry (a disk name is reused when an image is ejected)."""
+        if (dn, rid) not in self.disk_names:
             try:
                 pl = plistlib.loads(subprocess.run(["diskutil", "info", "-plist", dn], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=8).stdout)
-                self.disk_names[dn] = {"model": pl.get("MediaName", ""), "size": pl.get("TotalSize") or pl.get("Size") or 0, "rot": pl.get("SolidState") is False}
+                self.disk_names[(dn, rid)] = {"model": pl.get("MediaName", ""), "size": pl.get("TotalSize") or pl.get("Size") or 0, "rot": pl.get("SolidState") is False,
+                                              "image": pl.get("BusProtocol") == "Disk Image" or pl.get("VirtualOrPhysical") == "Virtual"}
             except Exception:
-                self.disk_names[dn] = {}
-        return self.disk_names[dn]
+                self.disk_names[(dn, rid)] = {}
+        return self.disk_names[(dn, rid)]
 
     def vz_owner(self, pid):
         """Whose Virtualization.framework VM a process runs, from the files it holds open: "docker" for Docker
@@ -961,18 +963,26 @@ class MacCollector:
         if used <= 0:
             used = (pages("Pages active") + pages("Pages wired down") + pages("Pages occupied by compressor")) * page
         mem_used = used / GB
-        io = run(["iostat", "-Id"]).split("\n")
-        disk_mb, mac_disks = 0.0, []
-        if len(io) >= 3:
-            names, nums = io[0].split(), io[2].split()
-            for k, dn in enumerate(names):
-                if 3 * k + 2 < len(nums) and re.match(r"^[\d.]+$", nums[3 * k + 2]):
-                    mb = float(nums[3 * k + 2])
-                    disk_mb += mb
-                    info = self.disk_info(dn)
-                    mac_disks.append({"name": dn, "model": info.get("model", ""), "size": info.get("size", 0), "rot": info.get("rot", False), "role": "",
-                                      "mounts": [], "read": self.rate("dk." + dn, mb, t), "write": 0.0, "busy": -1})
-        disk = self.rate("disk", disk_mb, t)
+        # Disks: every drive's block storage driver counts its bytes since boot (iostat shows only the first few
+        # by name). Disk images are left out: their I/O is already counted on the drive that holds their files.
+        try:
+            drivers = plistlib.loads(subprocess.run(["ioreg", "-r", "-l", "-c", "IOBlockStorageDriver", "-d", "2", "-w", "0", "-a"],
+                                                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10).stdout)
+        except Exception:
+            drivers = []
+        disk_b, mac_disks = 0, []
+        for drv in drivers:
+            st = drv.get("Statistics") or {}
+            for media in drv.get("IORegistryEntryChildren") or []:
+                dn = media.get("BSD Name")
+                info = self.disk_info(dn, media.get("IORegistryEntryID")) if dn else {}
+                if not dn or info.get("image"):
+                    continue
+                b = st.get("Bytes (Read)", 0) + st.get("Bytes (Write)", 0)
+                disk_b += b
+                mac_disks.append({"name": dn, "model": info.get("model", ""), "size": info.get("size", 0), "rot": info.get("rot", False), "role": "",
+                                  "mounts": [], "read": self.rate("dk." + dn, b, t) / MB, "write": 0.0, "busy": -1})
+        disk = self.rate("disk", disk_b, t) / MB
         self.disk_peak = max(self.disk_peak, disk * MB * 1.25)
         ifs, net = [], 0.0
         for line in run(["netstat", "-ib"]).splitlines()[1:]:

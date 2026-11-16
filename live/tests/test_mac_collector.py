@@ -264,5 +264,86 @@ class VirtualizationVms(unittest.TestCase):
         self.assertEqual([v["name"] for v in c.snapshot()["vms"]], ["VM 600", "VM 700", "nas-lab"])
 
 
+IOREG_DISKS = "ioreg -r -l -c IOBlockStorageDriver -d 2 -w 0 -a"
+
+
+def block_drivers(*disks):
+    """ioreg's block storage drivers: each one's byte counters since boot and its whole-disk media, from
+    (BSD name, registry id, bytes read, bytes written) rows; a row with no name is an empty bay."""
+    return plistlib.dumps([{"IOObjectClass": "IOBlockStorageDriver",
+                            "Statistics": {"Bytes (Read)": r, "Bytes (Write)": w, "Operations (Read)": r // 4096, "Operations (Write)": w // 4096},
+                            "IORegistryEntryChildren": [{"IOObjectClass": "IOMedia", "BSD Name": dn, "Whole": True, "IORegistryEntryID": rid}] if dn else []}
+                           for dn, rid, r, w in disks], fmt=plistlib.FMT_XML)
+
+
+def diskutil(dn, model, size, bus, kind, ssd):
+    return {"diskutil info -plist " + dn: plistlib.dumps({"DeviceIdentifier": dn, "MediaName": model, "TotalSize": size, "BusProtocol": bus,
+                                                          "VirtualOrPhysical": kind, "SolidState": ssd}, fmt=plistlib.FMT_XML)}
+
+
+def iostat(*disks):
+    """iostat -Id as it prints on a Mac with more devices than fit in 80 columns: only the first four by name."""
+    disks = sorted(disks)[:4]
+    return ("".join("%21s" % dn for dn, _ in disks) + " \n" + "    KB/t  xfrs     MB " * len(disks) + "\n" +
+            "".join("   %5.2f %5d %8.2f" % (64.0, b // 65536, b / MIB) for _, b in disks) + "\n")
+
+
+DISKUTIL = dict(diskutil("disk0", "APPLE SSD AP1024Z", 1000555581440, "Apple Fabric", "Unknown", True),
+                **diskutil("disk4", "Extreme SSD", 2000398934016, "USB", "Physical", True),
+                **diskutil("disk6", "Backup HDD", 4000787030016, "USB", "Physical", False),
+                **diskutil("disk11", "Disk Image", 524288000, "Disk Image", "Virtual", True),
+                **diskutil("disk13", "Disk Image", 209715200, "Disk Image", "Virtual", True),
+                **diskutil("disk14", "Disk Image", 104857600, "Disk Image", "Virtual", True))
+
+
+def disks_at(step):
+    """Every drive's counters, `step` readings in: per reading disk0 reads 40 MB and writes 20 MB, disk4 reads
+    10 MB, disk6 writes 8 MB; the disk images move 6, 4 and 2 MB (already counted on disk0, which holds them)."""
+    return [(None, 0, 0, 0), ("disk0", 1001, 100000000000 + 40000000 * step, 50000000000 + 20000000 * step),
+            ("disk4", 1004, 2000000000000 + 10000000 * step, 400000000000), ("disk6", 1006, 5000000000, 1000000000 + 8000000 * step),
+            ("disk11", 1011, 3000000000 + 6000000 * step, 0), ("disk13", 1013, 2000000000 + 4000000 * step, 0), ("disk14", 1014, 1000000000, 2000000 * step)]
+
+
+def disk_readings(step):
+    d = disks_at(step)
+    return {IOREG_DISKS: block_drivers(*d), "iostat -Id": iostat(*((dn, r + w) for dn, _, r, w in d if dn))}
+
+
+class EachDisk(unittest.TestCase):
+    """#104: every drive is read, not only the first four by name, and disk images are left out (their I/O
+    is already on the drive that holds their files), as the Linux reader leaves out loop devices."""
+
+    def disk(self, name, model, size, rot, read, write):
+        return {"name": name, "model": model, "size": size, "rot": rot, "role": "", "mounts": [], "read": read, "write": write, "busy": -1}
+
+    def two_readings(self, mac):
+        c = mac.collector(self)
+        c.snapshot()
+        mac.out.update(disk_readings(1))
+        mac.now += 2
+        return c, c.snapshot()
+
+    def test_every_drive_and_no_disk_image(self):
+        mac = Mac(dict(DISKUTIL, **disk_readings(0)))
+        c, snap = self.two_readings(mac)
+        self.assertEqual(snap["disks"], [self.disk("disk0", "APPLE SSD AP1024Z", 1000555581440, False, 30.0, 0.0),
+                                         self.disk("disk4", "Extreme SSD", 2000398934016, False, 5.0, 0.0),
+                                         self.disk("disk6", "Backup HDD", 4000787030016, True, 4.0, 0.0)])
+        self.assertEqual(snap["host"][3], 39.0, "MB/s over the drives: (60 + 10 + 8) MB in 2 s")
+
+    def test_a_drive_that_takes_an_ejected_images_name_is_read(self):
+        mac = Mac(dict(DISKUTIL, **disk_readings(0)))
+        c, _ = self.two_readings(mac)
+        d = [x for x in disks_at(1) if x[0] != "disk11"] + [("disk11", 2011, 7000000000, 0)]  # a new USB drive is disk11 now
+        mac.out.update({IOREG_DISKS: block_drivers(*d)}, **diskutil("disk11", "Card Reader", 128043712512, "USB", "Physical", True))
+        mac.now += 2
+        c.snapshot()
+        d[-1] = ("disk11", 2011, 7000000000 + 3000000, 0)
+        mac.out[IOREG_DISKS] = block_drivers(*d)
+        mac.now += 2
+        self.assertEqual([(x["name"], x["model"], x["read"]) for x in c.snapshot()["disks"]],
+                         [("disk0", "APPLE SSD AP1024Z", 0.0), ("disk4", "Extreme SSD", 0.0), ("disk6", "Backup HDD", 0.0), ("disk11", "Card Reader", 1.5)])
+
+
 if __name__ == "__main__":
     unittest.main()
