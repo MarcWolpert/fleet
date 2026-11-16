@@ -340,6 +340,7 @@ class Machine:
         self.view = None          # derived, see derive_*()
         self.fresh = False        # a reading arrived in this run (a view restored at start has no processes)
         self.cum = {}             # cumulative counters from the previous reading
+        self.nv_pair = {}         # Windows: each adapter's (LUID's) nvidia-smi index, as the last reading paired them
         self.disk_peak = 500 * MB
         self.lock = threading.Lock()
         self.proc = None
@@ -816,7 +817,8 @@ class Machine:
     def windows_gpus(self, r):
         """Adapters by VRAM size, largest first, each named by its LUID (DXGI's adapter list), with its engines by
         type (the GPU Engine counters), dedicated and shared memory, and NVIDIA's own numbers from the nvidia-smi
-        row of the same name (two cards of one model pair in order: nvidia-smi's index, DXGI's)."""
+        row of the same card: one of the same name, and of two cards of one model the one whose memory.used is the
+        adapter's dedicated VRAM in use."""
         nv = [[x.strip() for x in line.split(",")] for line in r.get("nvidia", []) if line and line.count(",") >= 4]
         num = lambda x: float(x) if re.match(r"^-?\d+(\.\d+)?$", x or "") else None
         key = lambda s: tuple(int(x, 16) for x in s.split("_")) if re.match(r"^0x[0-9a-fA-F]+_0x[0-9a-fA-F]+$", str(s)) else str(s).lower()
@@ -825,20 +827,31 @@ class Machine:
             dx.setdefault(key(a.get("luid")), (i, str(a.get("name") or ""), float(a.get("vram") or 0)))
         info = lambda g: dx.get(key(g.get("luid")))
         lone = len(r.get("gpus", [])) == 1 and not dx   # no adapter list: a lone adapter can only be the one nvidia-smi or Windows names
-        free = list(nv)
-        def nv_row(name):
-            for x in free:
-                if x[1].lower() == name.lower():
-                    free.remove(x)
-                    return x
-            return []
         gpus, luid_idx = [], {}
         order = lambda g: (-info(g)[2], info(g)[0], "") if info(g) else (0.0, len(dx), str(g.get("luid")).lower())
-        for i, g in enumerate(sorted(r.get("gpus", []), key=order)):
+        ordered = sorted(r.get("gpus", []), key=order)
+        # Each adapter's nvidia-smi row. Older GeForce and Quadro drivers leave "NVIDIA " out of nvidia-smi's name. Cards
+        # of one model share a name, and DXGI lists the primary display's first, whatever nvidia-smi's index: WDDM reports
+        # one VRAM-in-use number to both, so a row goes to the adapter whose dedicated use is its memory.used. Within
+        # 64 MiB (both idle, say) that can't tell them apart: the pairing the last reading found holds, else Fleet's order.
+        model = lambda s: re.sub(r"^nvidia ", "", " ".join(s.lower().split()))
+        near = []
+        for i, g in enumerate(ordered):
+            for j, x in enumerate(nv):
+                if info(g) and model(x[1]) == model(info(g)[1]):
+                    used, ded = num(x[3]), g.get("dedicated")
+                    d = abs(used * MIB - float(ded)) if used is not None and isinstance(ded, (int, float)) else float("inf")
+                    near.append((d if d > 64 * MIB else 0.0, self.nv_pair.get(key(g["luid"])) != x[0], i, j))
+        rows = {}
+        for _, _, i, j in sorted(near):
+            if i not in rows and j not in rows.values():
+                rows[i] = j
+        self.nv_pair = {key(ordered[i]["luid"]): nv[j][0] for i, j in rows.items()}
+        for i, g in enumerate(ordered):
             luid_idx[g["luid"]] = i
             a, videos = info(g), r.get("videoNames", [])
             if a:
-                name, size, row = a[1] or "GPU %d" % i, a[2], nv_row(a[1])
+                name, size, row = a[1] or "GPU %d" % i, a[2], nv[rows[i]] if i in rows else []
             elif lone:
                 row = nv[0] if len(nv) == 1 else []
                 name, size = row[1] if row else videos[0] if len(videos) == 1 else "GPU 0", 0.0

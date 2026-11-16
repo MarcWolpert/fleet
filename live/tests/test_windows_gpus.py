@@ -96,6 +96,70 @@ class NamedByLuid(unittest.TestCase):
         self.assertEqual(derive(r)["gpus"], [RTX3090])
 
 
+LTWIN_A, LTWIN_B = "0x00000000_0x0000a001", "0x00000000_0x0000b002"
+# Two RTX 3090s. nvidia-smi's GPU 0 (A) runs a training job; GPU 1 (B) drives the monitor, so DXGI lists B first.
+NV_TWIN_A = "0, NVIDIA GeForce RTX 3090, 98, 20000, 24576, 60, 80, 350.00, 350.00, 1900, 2100, 9750, 85, 0, 0"
+NV_TWIN_B = "1, NVIDIA GeForce RTX 3090, 5, 1500, 24576, 3, 45, 60.00, 350.00, 300, 2100, 405, 30, 0, 0"
+
+
+def twins(a_used, b_used, nvidia=(NV_TWIN_A, NV_TWIN_B), t=1000.0):
+    r = reading([counted(LTWIN_A, a_used, 98.0, {"Compute_0": 98.0}), counted(LTWIN_B, b_used, 5.0, {"3D": 5.0})],
+                [{"luid": LTWIN_B, "name": "NVIDIA GeForce RTX 3090", "vram": 25390219264.0},
+                 {"luid": LTWIN_A, "name": "NVIDIA GeForce RTX 3090", "vram": 25390219264.0}],
+                nvidia=nvidia, video=["NVIDIA GeForce RTX 3090", "NVIDIA GeForce RTX 3090"], gproc=[[10, LTWIN_A, 98.0], [11, LTWIN_B, 5.0]])
+    r["t"] = t
+    return r
+
+
+def nv_shown(v):
+    """Each GPU, in Fleet's order: its name, VRAM in use (MiB, from the counters) and nvidia-smi's temperature and power."""
+    return [(g["name"], g["m"]["vram"] / MIB, g["m"].get("temp"), g["m"].get("power")) for g in v["gpus"]]
+
+
+class IdenticalCards(unittest.TestCase):
+    """#307: two cards of one model have one name, and DXGI's order (the primary display's adapter first) needn't be
+    nvidia-smi's. Each nvidia-smi row goes to the adapter whose dedicated VRAM in use is its memory.used (WDDM reports
+    one number to both); when that can't tell them apart, the pairing the last reading found holds."""
+
+    def test_the_card_driving_the_monitor_is_nvidia_smis_gpu_1(self):
+        v = derive(twins(20000 * MIB, 1500 * MIB))
+        self.assertEqual(nv_shown(v), [("NVIDIA GeForce RTX 3090", 1500.0, 45.0, 60.0), ("NVIDIA GeForce RTX 3090", 20000.0, 80.0, 350.0)])
+        self.assertEqual({p[0]: p[13] for p in v["procs"]}, {10: [1], 11: [0], 12: []}, "the training job on its own card, GPU 1")
+
+    def test_the_pairing_holds_when_their_use_is_the_same(self):
+        m = fleet_live.Machine({"id": "w", "name": "w", "os": "windows"}, 3)
+        derive(twins(20000 * MIB, 1500 * MIB), m)
+        # the job ends: both cards hold 1500 MiB; A cools down, and nvidia-smi still calls it GPU 0
+        later = derive(twins(1500 * MIB, 1500 * MIB, nvidia=(NV_TWIN_A.replace(", 20000,", ", 1500,").replace(", 80,", ", 50,"), NV_TWIN_B),
+                             t=1003.0), m)
+        self.assertEqual(nv_shown(later), [("NVIDIA GeForce RTX 3090", 1500.0, 45.0, 60.0), ("NVIDIA GeForce RTX 3090", 1500.0, 50.0, 350.0)])
+
+    def test_cards_that_nothing_tells_apart_pair_in_order(self):
+        # the control: the first reading, both cards alike: DXGI's first takes nvidia-smi's first, as before
+        v = derive(twins(1500 * MIB, 1500 * MIB, nvidia=(NV_TWIN_A.replace(", 20000,", ", 1500,"), NV_TWIN_B)))
+        self.assertEqual(nv_shown(v), [("NVIDIA GeForce RTX 3090", 1500.0, 80.0, 350.0), ("NVIDIA GeForce RTX 3090", 1500.0, 45.0, 60.0)])
+
+
+class NamesWithoutTheVendor(unittest.TestCase):
+    """#307: older GeForce and Quadro drivers name a card without "NVIDIA " in nvidia-smi, while Windows' adapter name has
+    it; they are one card. Another model is still another card."""
+    L1080, LP2000 = "0x00000000_0x0000c003", "0x00000000_0x0000c004"
+
+    def test_older_drivers(self):
+        r = reading([counted(self.L1080, 2000 * MIB, 40.0, {"3D": 40.0}), counted(self.LP2000, 500 * MIB, 2.0, {"3D": 2.0})],
+                    [{"luid": self.L1080, "name": "NVIDIA GeForce GTX 1080", "vram": 8589934592.0},
+                     {"luid": self.LP2000, "name": "NVIDIA Quadro P2000", "vram": 5368709120.0}],
+                    nvidia=["0, GeForce GTX 1080, 40, 2000, 8192, 20, 70, 120.00, 180.00, 1600, 1900, 5000, 50, 0, 0",
+                            "1, Quadro P2000, 2, 500, 5120, 1, 40, 18.00, 75.00, 300, 1480, 3500, 30, 0, 0"])
+        self.assertEqual(nv_shown(derive(r)), [("NVIDIA GeForce GTX 1080", 2000.0, 70.0, 120.0), ("NVIDIA Quadro P2000", 500.0, 40.0, 18.0)])
+
+    def test_another_model_is_not_this_card(self):
+        r = reading([counted(self.L1080, 2000 * MIB, 40.0, {"3D": 40.0})],
+                    [{"luid": self.L1080, "name": "NVIDIA GeForce GTX 1080 Ti", "vram": 11811160064.0}],
+                    nvidia=["0, GeForce GTX 1080, 40, 2000, 8192, 20, 70, 120.00, 180.00, 1600, 1900, 5000, 50, 0, 0"])
+        self.assertEqual(nv_shown(derive(r)), [("NVIDIA GeForce GTX 1080 Ti", 2000.0, None, None)])
+
+
 class WithoutAdapterList(unittest.TestCase):
     """DXGI couldn't be read: a name or nvidia-smi row is used only where it can't belong to another adapter."""
 
