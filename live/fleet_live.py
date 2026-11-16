@@ -348,3 +348,321 @@ def group_lcpus_linux(lcpus):
             key = "Socket %s · %s" % (c["pkg"], key)
         groups.setdefault(key, []).append(c["n"])
     return [{"name": k, "cpus": v} for k, v in groups.items()]
+
+
+# ---------------------------------------------------------------- macOS collector
+class MacCollector:
+    """This Mac, read directly: ps, host_processor_info, vm_stat, iostat, netstat, ioreg, docker, crontab, launchd."""
+
+    def __init__(self):
+        self.prev = {}
+        self.ncpu = int(run(["sysctl", "-n", "hw.logicalcpu"]).strip() or os.cpu_count())
+        self.memsize = int(run(["sysctl", "-n", "hw.memsize"]).strip() or 0)
+        self.model = run(["sysctl", "-n", "machdep.cpu.brand_string"]).strip()
+        self.osver = "macOS " + platform.mac_ver()[0]
+        self.groups = self.read_groups()
+        self.libc = ctypes.CDLL(ctypes.util.find_library("c"))
+        self.disk_peak = 500 * MB
+        self.last_slow = 0
+        self.jobs_cache = []
+        self.docker_cache = ([], {})
+        self.gpu_info = self.read_gpus()
+        self.disk_names = {}
+
+    def disk_info(self, dn):
+        if dn not in self.disk_names:
+            try:
+                pl = plistlib.loads(subprocess.run(["diskutil", "info", "-plist", dn], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=8).stdout)
+                self.disk_names[dn] = {"model": pl.get("MediaName", ""), "size": pl.get("TotalSize") or pl.get("Size") or 0, "rot": pl.get("SolidState") is False}
+            except Exception:
+                self.disk_names[dn] = {}
+        return self.disk_names[dn]
+
+    def read_gpus(self):
+        """Every GPU in this Mac (Apple silicon's, or an Intel Mac's integrated and discrete ones), in IOAccelerator order."""
+        try:
+            d = json.loads(run(["system_profiler", "SPDisplaysDataType", "-json"], timeout=20) or "{}")
+            out = []
+            for g in d.get("SPDisplaysDataType", []):
+                vram = g.get("spdisplays_vram") or g.get("spdisplays_vram_shared") or ""
+                out.append({"name": g.get("sppci_model") or g.get("_name") or "GPU",
+                            "mem": "unified memory" if "Apple" in (g.get("sppci_model") or "") else (vram.replace("_", " ") if vram else "")})
+            return out or [{"name": self.model + " GPU", "mem": "unified memory"}]
+        except Exception:
+            return [{"name": self.model + " GPU", "mem": "unified memory"}]
+
+    def read_groups(self):
+        levels = {}
+        for i in range(int(run(["sysctl", "-n", "hw.nperflevels"]).strip() or 0)):
+            name = run(["sysctl", "-n", "hw.perflevel%d.name" % i]).strip()
+            per_l2 = int(run(["sysctl", "-n", "hw.perflevel%d.cpusperl2" % i]).strip() or 0)
+            count = int(run(["sysctl", "-n", "hw.perflevel%d.logicalcpu" % i]).strip() or 0)
+            levels[i] = (name, per_l2, count)
+        try:
+            rows = plistlib.loads(subprocess.run(["ioreg", "-rd1", "-c", "IOPlatformDevice", "-k", "cluster-type", "-a"],
+                                                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10).stdout)
+            ctype = {}
+            for x in rows:
+                cid = x.get("cpu-id")
+                cid = int.from_bytes(cid, "little") if isinstance(cid, bytes) else int(cid)
+                ctype[cid] = x.get("cluster-type", b"").decode().strip("\0")
+        except Exception:
+            ctype = {}
+        if not ctype:
+            return [{"name": "All processors", "cpus": list(range(self.ncpu))}]
+        # Match cluster types to perf levels by count (largest-performance level first).
+        by_type = collections.OrderedDict()
+        for n in sorted(ctype):
+            by_type.setdefault(ctype[n], []).append(n)
+        groups = []
+        for ct, cpus in by_type.items():
+            lvl = next((v for v in levels.values() if v[2] == len(cpus)), (ct, len(cpus), len(cpus)))
+            name, per_l2 = lvl[0] or ct, lvl[1] or len(cpus)
+            chunks = [cpus[i:i + per_l2] for i in range(0, len(cpus), per_l2)]
+            for k, ch in enumerate(chunks):
+                groups.append({"name": "%s cores%s" % (name, (" · cluster %d" % k) if len(chunks) > 1 else ""), "cpus": ch})
+        return groups
+
+    def cpu_ticks(self):
+        host = self.libc.mach_host_self()
+        count = ctypes.c_uint()
+        info = ctypes.POINTER(ctypes.c_int)()
+        n_info = ctypes.c_uint()
+        rc = self.libc.host_processor_info(host, 2, ctypes.byref(count), ctypes.byref(info), ctypes.byref(n_info))
+        if rc != 0:
+            return []
+        ticks = [[info[i * 4 + j] for j in range(4)] for i in range(count.value)]  # user, system, idle, nice
+        return ticks
+
+    def rate(self, key, value, t):
+        prev = self.prev.get(key)
+        self.prev[key] = (value, t)
+        if not prev or t <= prev[1] or value < prev[0]:
+            return 0.0
+        return (value - prev[0]) / (t - prev[1])
+
+    def snapshot(self):
+        t = time.time()
+        lcpus = []
+        busy_tot = 0.0
+        for n, tk in enumerate(self.cpu_ticks()):
+            b, a = self.rate("lb%d" % n, tk[0] + tk[1] + tk[3], t), self.rate("la%d" % n, sum(tk), t)
+            pct = 100.0 * b / a if a else 0.0
+            busy_tot += pct / 100.0
+            lcpus.append({"n": n, "pct": pct, "mhz": 0})
+        vm = run(["vm_stat"])
+        page = int((re.search(r"page size of (\d+)", vm) or re.search(r"(16384)", "16384")).group(1))
+        def pages(label):
+            m = re.search(r"%s:\s+(\d+)" % re.escape(label), vm)
+            return int(m.group(1)) if m else 0
+        used = (pages("Anonymous pages") - pages("Pages purgeable") + pages("Pages wired down") + pages("Pages occupied by compressor")) * page
+        if used <= 0:
+            used = (pages("Pages active") + pages("Pages wired down") + pages("Pages occupied by compressor")) * page
+        mem_used = used / GB
+        io = run(["iostat", "-Id"]).split("\n")
+        disk_mb, mac_disks = 0.0, []
+        if len(io) >= 3:
+            names, nums = io[0].split(), io[2].split()
+            for k, dn in enumerate(names):
+                if 3 * k + 2 < len(nums) and re.match(r"^[\d.]+$", nums[3 * k + 2]):
+                    mb = float(nums[3 * k + 2])
+                    disk_mb += mb
+                    info = self.disk_info(dn)
+                    mac_disks.append({"name": dn, "model": info.get("model", ""), "size": info.get("size", 0), "rot": info.get("rot", False), "role": "",
+                                      "mounts": [], "read": self.rate("dk." + dn, mb, t), "write": 0.0, "busy": -1})
+        disk = self.rate("disk", disk_mb, t)
+        self.disk_peak = max(self.disk_peak, disk * MB * 1.25)
+        ifs, net = [], 0.0
+        for line in run(["netstat", "-ib"]).splitlines()[1:]:
+            f = line.split()
+            if len(f) >= 10 and f[2].startswith("<Link#"):
+                name = f[0]
+                if f[0].rstrip("*") in [x["name"] for x in ifs]:
+                    continue
+                rxb, txb = int(f[-5]) if f[-5].isdigit() else 0, int(f[-2]) if f[-2].isdigit() else 0
+                rx, tx = self.rate("rx" + name, rxb, t) / MB, self.rate("tx" + name, txb, t) / MB
+                kind = "physical" if re.match(r"^en\d+$", name) else "loopback" if name.startswith("lo") else "bridge" if name.startswith("bridge") else "virtual"
+                ifs.append({"name": name, "kind": kind, "rx": rx, "tx": tx, "addrs": [], "master": "", "state": "", "speed": ""})
+                if kind == "physical":
+                    net += rx + tx
+        for line in run(["ifconfig"]).splitlines():
+            m = re.match(r"^(\S+):", line)
+            if m:
+                cur_if = m.group(1)
+            m6 = re.search(r"inet6 ([0-9a-f:]+)(?:%\S+)? prefixlen (\d+)", line)
+            if m6:
+                for x in ifs:
+                    if x["name"] == cur_if:
+                        x.setdefault("addrs6", []).append(m6.group(1))
+            m = re.search(r"inet (\d+\.\d+\.\d+\.\d+) netmask (0x[0-9a-f]+)", line)
+            if m:
+                bits = bin(int(m.group(2), 16)).count("1")
+                for x in ifs:
+                    if x["name"] == cur_if:
+                        x["addrs"].append("%s/%d" % (m.group(1), bits))
+        utils = [float(x) for x in re.findall(r'"Device Utilization %"=(\d+)', run(["ioreg", "-r", "-d", "1", "-w", "0", "-c", "IOAccelerator"]))]
+        gpus = [{"name": gi["name"], "mem": gi["mem"], "util": utils[i] if i < len(utils) else 0.0} for i, gi in enumerate(self.gpu_info)]
+        gpu = sum(g["util"] for g in gpus)
+        # Network per process: nettop has each process's bytes in/out; lsof says which local address
+        # (and so which interface) its connections use. (netstat prints nothing when run from Python.)
+        ip_if = {a.split("/")[0]: x["name"] for x in ifs for a in x["addrs"] + x.get("addrs6", [])}
+        mac_net = {}
+        for line in run(["nettop", "-P", "-L", "1", "-x", "-J", "bytes_in,bytes_out"], timeout=10).splitlines()[1:]:
+            f = line.split(",")
+            if len(f) >= 3:
+                _name, _, pid = f[0].rpartition(".")
+                if pid.isdigit() and f[1].isdigit() and f[2].isdigit():
+                    mac_net.setdefault(int(pid), {"ifs": set(), "b": 0})["b"] = int(f[1]) + int(f[2])
+        cur_pid = None
+        for line in run(["lsof", "-nP", "-iTCP", "-sTCP:ESTABLISHED", "-F", "pn"], timeout=10).splitlines():
+            if line.startswith("p"):
+                cur_pid = int(line[1:]) if line[1:].isdigit() else None
+            elif line.startswith("n") and cur_pid:
+                ip = line[1:].split("->")[0].rsplit(":", 1)[0].strip("[]")
+                ifn = ip_if.get(ip)
+                if ifn:
+                    mac_net.setdefault(cur_pid, {"ifs": set(), "b": 0})["ifs"].add(ifn)
+        # Processes: CPU from cumulative cpu time deltas.
+        procs = []
+        args = {}
+        for line in run(["ps", "-A", "-o", "pid=,args="]).splitlines():
+            line = line.strip()
+            if line:
+                pid, _, a = line.partition(" ")
+                args[int(pid)] = a.strip()[:300]
+        for line in run(["ps", "-A", "-o", "pid=,ppid=,user=,state=,rss=,time=,comm="]).splitlines():
+            f = line.split(None, 6)
+            if len(f) < 7:
+                continue
+            pid = int(f[0])
+            secs = parse_cputime(f[5])
+            c = self.rate("p%d" % pid, secs, t)
+            pn = mac_net.get(pid) or {}
+            procs.append([pid, int(f[1]), os.path.basename(f[6]), f[2], f[3], c, int(f[4]) * 1024 / GB, 0.0, 0.0, 0, args.get(pid, f[6]), "base", -1, [], [],
+                          sorted(pn.get("ifs", ())), self.rate("pn%d" % pid, pn.get("b", 0), t) / MB if pn else 0.0])
+        if len(self.prev) > 20000:
+            self.prev = {k: v for k, v in self.prev.items() if v[1] >= t - 30}
+        # VMs: Virtualization.framework, QEMU and Parallels processes (Docker Desktop's VM is not a VM here).
+        by_pid = {p[0]: p for p in procs}
+        def ancestry(p):
+            seen, out = 0, []
+            while p and seen < 20:
+                out.append(p[10])
+                p = by_pid.get(p[1])
+                seen += 1
+            return " ".join(out)
+        vms = {}
+        docker_vm = None
+        for p in procs:
+            a = p[10]
+            if "com.apple.Virtualization.VirtualMachine" in a or re.search(r"qemu-system-\w+", a) or "prl_vm_app" in a:
+                anc = ancestry(p).lower()
+                if "docker" in anc:
+                    docker_vm = p
+                    p[11] = "dockervm"
+                    continue
+                m = re.search(r"([^/]+)\.utm", a) or re.search(r"-name\s+(?:guest=)?([^,\s]+)", a) or re.search(r"([^/]+)\.pvm", a)
+                name = m.group(1) if m else ("UTM VM" if "utm" in anc else "VM %d" % p[0])
+                acc = vms.setdefault(name, {"name": name, "u": [0.0] * 5, "running": True, "ifs": [], "cpus": ""})
+                acc["u"][0] += p[5]
+                acc["u"][1] += p[6]
+                p[11] = "vm:" + name
+        # Docker (Docker Desktop): containers with compose labels, usage from docker stats.
+        if t - self.last_slow > 2.5 * 1:
+            self.last_slow = t
+            if shutil.which("docker"):
+                ps_out = run(["docker", "ps", "--no-trunc", "--format", "{{json .}}"], timeout=8)
+                st_out = run(["docker", "stats", "--no-stream", "--format", "{{json .}}"], timeout=12) if ps_out.strip() else ""
+                self.docker_cache = (ps_out, st_out)
+            self.jobs_cache = self.read_jobs()
+        containers = []
+        stats = {}
+        for line in (self.docker_cache[1] or "").splitlines():
+            try:
+                s = json.loads(line)
+            except Exception:
+                continue
+            stats[s.get("ID", "")[:12]] = s
+        for line in (self.docker_cache[0] or "").splitlines():
+            try:
+                c = json.loads(line)
+            except Exception:
+                continue
+            labels = dict(kv.split("=", 1) for kv in c.get("Labels", "").split(",") if "=" in kv)
+            cid = c.get("ID", "")[:12]
+            s = stats.get(cid, {})
+            nio = s.get("NetIO", "0B / 0B").split("/")
+            bio = s.get("BlockIO", "0B / 0B").split("/")
+            u = [float(s.get("CPUPerc", "0%").rstrip("%") or 0) / 100.0, size_bytes(s.get("MemUsage", "0B").split("/")[0]) / GB, 0.0,
+                 self.rate("cb" + cid, sum(size_bytes(x) for x in bio), t) / MB, self.rate("cn" + cid, sum(size_bytes(x) for x in nio), t) / MB]
+            containers.append({"id": cid, "name": c.get("Names", ""), "image": c.get("Image", ""), "status": c.get("Status", ""),
+                               "project": labels.get("com.docker.compose.project", ""), "service": labels.get("com.docker.compose.service", ""),
+                               "file": labels.get("com.docker.compose.project.config_files", ""), "networks": c.get("Networks", ""), "u": u})
+        jobs = [dict(j, u=[0.0] * 5, running=False) for j in self.jobs_cache]
+        launch = {}
+        for line in run(["launchctl", "list"]).splitlines()[1:]:
+            f = line.split("\t")
+            if len(f) == 3 and f[0].strip().isdigit():
+                launch[f[2]] = int(f[0])
+        for i, j in enumerate(jobs):
+            pid = launch.get(j.get("label", ""))
+            if pid and pid in by_pid:
+                j["running"] = True
+                p = by_pid[pid]
+                j["u"] = [p[5], p[6], 0.0, 0.0, 0.0]
+                p[11] = "job:%d" % i
+        return {
+            "t": t, "os": self.osver, "arch": platform.machine(), "cpu_model": self.model, "ncpu": self.ncpu,
+            "uptime": time.time() - float((re.search(r"sec = (\d+)", run(["sysctl", "-n", "kern.boottime"])) or re.search("(0)", "0")).group(1)),
+            "host": [busy_tot, mem_used, gpu, disk, net],
+            "cap": [self.ncpu, self.memsize / GB, 100.0 * len(gpus), self.disk_peak / MB, 1250.0],
+            "gpus": gpus,
+            "lcpus": lcpus, "groups": self.groups, "containers": containers, "vms": list(vms.values()), "jobs": jobs,
+            "procs": procs, "ifs": ifs, "dockernets": [], "cronLabel": "Cron & launchd jobs", "disks": mac_disks,
+            "note": "Docker Desktop runs containers in its own Linux VM (no GPU passthrough). They are listed here directly; that VM's overhead counts as Base system.",
+        }
+
+    def read_jobs(self):
+        jobs = []
+        for line in run(["crontab", "-l"]).splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or re.match(r"^[A-Z_]+=", line):
+                continue
+            f = line.split()
+            sched = f[0] if f[0].startswith("@") else " ".join(f[:5])
+            cmd = " ".join(f[1:] if f[0].startswith("@") else f[5:])
+            jobs.append({"name": job_name(cmd), "sched": sched, "human": human_cron(sched), "cmd": cmd, "src": "crontab", "last": ""})
+        for path in sorted(glob.glob(os.path.expanduser("~/Library/LaunchAgents/*.plist"))):
+            try:
+                with open(path, "rb") as f:
+                    pl = plistlib.load(f)
+            except Exception:
+                continue
+            if "StartInterval" in pl:
+                human = "every %s" % fmt_secs(int(pl["StartInterval"]))
+            elif "StartCalendarInterval" in pl:
+                ci = pl["StartCalendarInterval"]
+                ci = ci[0] if isinstance(ci, list) and ci else ci
+                human = "at " + ", ".join("%s %s" % (k.lower(), v) for k, v in ci.items()) if isinstance(ci, dict) else "calendar"
+            else:
+                continue
+            prog = pl.get("Program") or " ".join(pl.get("ProgramArguments", []))
+            label = pl.get("Label", os.path.basename(path)[:-6])
+            jobs.append({"name": label, "label": label, "sched": "launchd", "human": human, "cmd": prog[:300], "src": path, "last": ""})
+        return jobs
+
+
+def fmt_secs(s):
+    return "%d h" % (s // 3600) if s % 3600 == 0 and s >= 3600 else "%d min" % (s // 60) if s % 60 == 0 else "%d s" % s
+
+
+def parse_cputime(s):
+    days = 0
+    if "-" in s:
+        d, s = s.split("-", 1)
+        days = int(d)
+    parts = [float(x) for x in s.split(":")]
+    secs = 0.0
+    for x in parts:
+        secs = secs * 60 + x
+    return days * 86400 + secs
