@@ -1170,6 +1170,19 @@ function filterChips(fs){
 }
 // Details groups are collapsed unless opened; open ones are kept per Group-by mode.
 function groupOpen(mode, g){ return !!(S.groupOpen && S.groupOpen[mode] && S.groupOpen[mode].includes(String(g))); }
+// Groups that hold still (#354). GSEL: the group whose header you clicked or moved the focus to; while it's selected
+// the groups keep the order they had then. GHELD: with Hold group order on (prefs.holdGroups), the order each
+// machine's groups have per Group-by mode, kept for this window (a reload keeps it). Either way their numbers update,
+// new groups come in last and ended ones go.
+let GSEL = null;
+const GHELD = (() => { try { const o = JSON.parse(sessionStorage.getItem('fleet-gheld') || '{}'); return Object.fromEntries(Object.entries(o || {}).filter(([, v]) => Array.isArray(v))); } catch (e) { return {}; } })();
+function heldOrder(ordered, keep){ const at = new Map(keep.map((g, i) => [g, i])); return ordered.filter(x => at.has(x[0])).sort((a, b) => at.get(a[0]) - at.get(b[0])).concat(ordered.filter(x => !at.has(x[0]))); }
+function rememberGroups(key, gs){
+  const old = GHELD[key] || [], add = gs.filter(g => !old.includes(g));
+  if (GHELD[key] && !add.length) return;
+  GHELD[key] = old.concat(add);
+  try { sessionStorage.setItem('fleet-gheld', JSON.stringify(GHELD)); } catch (e) {}
+}
 function setGroupsOpen(mode, names){ S.groupOpen = Object.assign({}, S.groupOpen, {[mode]:names}); save(); renderMain(); }
 function detailsView(n, docked){
   const mid = procMachineFor(n);
@@ -1216,7 +1229,7 @@ function detailsView(n, docked){
   if (holding){ const pos = new Map(INSP.order.map((pid, i) => [pid, i])); list = list.filter(p => pos.has(p[0])).sort((a, b) => pos.get(a[0]) - pos.get(b[0])).concat(list.filter(p => !pos.has(p[0]))); }
   const groupBy = {none:null, cpugroup:groupOf, owner:p => nodes[p[10]] ? p[10] : '—', user:p => p[2] || '—', state:p => stateLabel(p[3]) || '—'}[S.group];
   const LIMIT = 400;
-  let body = '', shown = 0, more = '';
+  let body = '', shown = 0, more = '', gselOn = false;
   const isInsp = p => INSP.pid === p[0] && INSP.mid === mid;
   let inspShown = false;
   // a column with a width of its own (#334) is that wide whatever its cells hold; the rest size to their content
@@ -1232,7 +1245,12 @@ function detailsView(n, docked){
     const names = S.group === 'owner' ? [...groups.keys()].map(ownerName) : [];
     const label = g => { const o = S.group === 'owner' && nodes[g]; if (!o) return g; const par = o.kind === 'cron' ? ownerOf(o) : o.parent; return names.filter(x => x === o.name).length > 1 && par ? o.name + ' · ' + par.name : o.name; };
     let ordered = [...groups.entries()].sort((a, b) => b[1].reduce((s, p) => s + p[4], 0) - a[1].reduce((s, p) => s + p[4], 0));
-    if (holding && INSP.gorder){ const gp = new Map(INSP.gorder.map((g, i) => [g, i])); ordered = ordered.filter(x => gp.has(x[0])).sort((a, b) => gp.get(a[0]) - gp.get(b[0])).concat(ordered.filter(x => !gp.has(x[0]))); }
+    // the groups hold still: Hold group order is on, a process is open, or a group is selected (#354)
+    const gkey = mid + '|' + S.group;
+    gselOn = !!(GSEL && GSEL.mid === mid && GSEL.mode === S.group && groups.has(GSEL.g));
+    const keep = (PREFS.holdGroups && GHELD[gkey]) || (holding && INSP.gorder) || (gselOn && GSEL.order);
+    if (keep) ordered = heldOrder(ordered, keep);
+    if (PREFS.holdGroups && all) rememberGroups(gkey, ordered.map(x => x[0]));
     const isOpen = g => groupOpen(S.group, g);
     const nOpen = ordered.filter(([g]) => isOpen(g)).length;
     const per = nOpen ? Math.max(10, Math.floor(LIMIT / nOpen)) : 0;
@@ -1240,7 +1258,11 @@ function detailsView(n, docked){
     ordered.forEach(([g, ps]) => {
       const c = ps.reduce((s, p) => s + p[4], 0), mem = ps.reduce((s, p) => s + p[5], 0), open = isOpen(g);
       const dk = ps.reduce((s, p) => s + (p[6] || 0), 0), nt = ps.reduce((s, p) => s + Math.max(0, p[16] || 0), 0);
-      body += `<tr class="gh"><td colspan="${COLS.length}"><button type="button" class="ghbtn" data-gtoggle="${esc(g)}" aria-expanded="${open}" aria-label="${open ? 'Collapse' : 'Expand'} ${esc(label(g))}">${icon('chev', 2.4)}${esc(label(g))}<span>${ps.length} process${ps.length === 1 ? '' : 'es'} · CPU ${pct(c / ncpu * 100)} · ${memText(mem)}${dk > 0 ? ' · disk ' + rateText(dk) : ''}${nt > 0 ? ' · net ' + rateText(nt) : ''}</span></button></td></tr>`;
+      // the selected one says it holds the groups, small, in its own row (on the right, in sight however wide the table):
+      // nothing moves when it comes and goes. Tab goes from header to header; Esc lets go, so Resume is for the mouse.
+      // The rest of the row stays the header's button, so a second click on it still toggles that group.
+      const sel = gselOn && GSEL.g === g, note = sel && !holding && !PREFS.holdGroups;
+      body += `<tr class="gh${sel ? ' gsel' : ''}"><td colspan="${COLS.length}"><div class="ghrow"><button type="button" class="ghbtn" data-gtoggle="${esc(g)}" aria-expanded="${open}"${sel ? ' aria-current="true"' : ''}${note ? ' aria-describedby="ghhold"' : ''} aria-label="${open ? 'Collapse' : 'Expand'} ${esc(label(g))}">${icon('chev', 2.4)}${esc(label(g))}<span>${ps.length} process${ps.length === 1 ? '' : 'es'} · CPU ${pct(c / ncpu * 100)} · ${memText(mem)}${dk > 0 ? ' · disk ' + rateText(dk) : ''}${nt > 0 ? ' · net ' + rateText(nt) : ''}</span></button>${note ? `<div class="ghhold" title="The groups hold their places while this one is selected; Esc or Resume lets go">${icon('pin')}<span id="ghhold">Order held</span><button type="button" class="btn" data-gselclose="1" tabindex="-1" title="Resume live order (Esc)">Resume</button></div>` : ''}</div></td></tr>`;
       if (!open){ closedN += ps.length; closedG++; return; }
       ps.slice(0, per).forEach(p => { body += rowHTML(p); shown++; });
       cut += Math.max(0, ps.length - per);
@@ -1262,7 +1284,7 @@ function detailsView(n, docked){
   const head = docked
     ? `<div class="dhead"><div class="dtitle"><b>Details · ${esc(n.name)}${FS.length ? ' · ' + esc(FS.map(f => f.label).join(' · ')) : ''}</b><span>${count} on ${esc(m ? m.name : '')}</span></div><button type="button" class="iconbtn" data-undock="1" title="Pop out to the full Details view" aria-label="Pop out Details">${icon('layers')}</button><button type="button" class="iconbtn" data-closedock="1" title="Close the Details panel" aria-label="Close the Details panel">${icon('x', 2.2)}</button></div>`
     : `<div class="hero"><span class="tile" style="background:var(--track);color:var(--ink-2)">${icon('chip')}</span><div><h1>Details · ${esc(n.name)}${FS.length ? ' · ' + esc(FS.map(f => f.label).join(' · ')) : ''}</h1><div class="facts"><span>${count}</span><span>on ${esc(m ? m.name : '')}</span>${hasGroups ? `<span>CPU groups: ${esc(m.groups.map(g => g.name).join(', '))}</span>` : ''}</div></div><button type="button" class="btn" data-dock="1" style="margin-left:auto" title="Or drag the Details pill onto the right side">${icon('layers')}Dock to the right</button></div>`;
-  const tools = `<div class="dtools"><input type="search" id="pfilter" placeholder="Filter by name, PID, user or command" value="${esc(S.filter)}" aria-label="Filter processes"><label>Group by <select id="pgroup"><option value="none"${S.group==='none'?' selected':''}>Nothing</option><option value="cpugroup"${S.group==='cpugroup'?' selected':''}>CPU group (CCD, P-/E-cores)</option><option value="owner"${S.group==='owner'?' selected':''}>Where it runs (tree node)</option><option value="user"${S.group==='user'?' selected':''}>User</option><option value="state"${S.group==='state'?' selected':''}>Status</option></select></label>${groupBy ? `<span class="gall"><button type="button" class="btn" data-gall="open">Expand all</button><button type="button" class="btn" data-gall="close">Collapse all</button></span>` : ''}</div>`;
+  const tools = `<div class="dtools"><input type="search" id="pfilter" placeholder="Filter by name, PID, user or command" value="${esc(S.filter)}" aria-label="Filter processes"><label>Group by <select id="pgroup"><option value="none"${S.group==='none'?' selected':''}>Nothing</option><option value="cpugroup"${S.group==='cpugroup'?' selected':''}>CPU group (CCD, P-/E-cores)</option><option value="owner"${S.group==='owner'?' selected':''}>Where it runs (tree node)</option><option value="user"${S.group==='user'?' selected':''}>User</option><option value="state"${S.group==='state'?' selected':''}>Status</option></select></label>${groupBy ? `<label class="ghold" title="Groups keep their places while their numbers update; new ones go last. Without it, a group you select holds them while it’s selected."><input type="checkbox" id="pghold"${PREFS.holdGroups ? ' checked' : ''}>Hold group order</label>` : ''}${groupBy ? `<span class="gall"><button type="button" class="btn" data-gall="open">Expand all</button><button type="button" class="btn" data-gall="close">Collapse all</button></span>` : ''}</div>`;
   // each header ends in a divider: drag it (or ←/→ on it) to resize the column, double-click it (or Delete) for automatic width
   const grip = c => `<span class="colgrip" data-colgrip="${c.k}" role="separator" aria-orientation="vertical" tabindex="0" aria-label="Resize the ${esc(c.label)} column" ${CW[c.k] ? `aria-valuenow="${CW[c.k]}" aria-valuemin="${COL_MIN}" aria-valuemax="${COL_MAX}"` : 'aria-valuetext="automatic width"'} title="Drag to resize; double-click for automatic width"></span>`;
   const thead = `<tr>${COLS.map(c => `<th class="${c.l ? 'l' : ''}${CW[c.k] ? ' fw' : ''}" data-colk="${c.k}" ${CW[c.k] ? `style="width:${CW[c.k]}px;min-width:${CW[c.k]}px;max-width:${CW[c.k]}px" ` : ''}${c.k === SORT.k ? `aria-sort="${dir < 0 ? 'descending' : 'ascending'}"` : ''}><button type="button" data-sort="${c.k}" title="Sort; drag to move (${ALTK}← ${ALTK}→); right-click to choose and arrange columns">${c.label}${c.k === SORT.k ? (dir < 0 ? ' ↓' : ' ↑') : ''}</button>${grip(c)}</th>`).join('')}</tr>`;
@@ -2066,6 +2088,46 @@ document.addEventListener('keydown', e => {
   }
   const b = e.altKey && !e.shiftKey && side && e.target.closest('.ptbl thead [data-sort]');
   if (b){ e.preventDefault(); e.stopPropagation(); moveCol(b.dataset.sort, colLayout().indexOf(b.dataset.sort) + side); }
+}, true);
+
+
+/* ---------- Details groups hold still (#354) ---------- */
+// A click on a group header, or the focus moving to one, selects it; a click or the focus anywhere else, Esc, Resume
+// live order or another Group by lets go. Focus a redraw puts back (no relatedTarget) is no choice of yours.
+function selectGroup(b, draw){
+  const tbl = b.closest('.ptbl'), mid = tbl.dataset.mid, same = GSEL && GSEL.mid === mid && GSEL.mode === S.group;
+  GSEL = {mid, mode:S.group, g:b.dataset.gtoggle, order:same ? GSEL.order : [...tbl.querySelectorAll('[data-gtoggle]')].map(x => x.dataset.gtoggle)};
+  if (draw){ lastMainHTML = ''; renderMain(); }
+}
+function releaseGroup(){ if (!GSEL) return; GSEL = null; lastMainHTML = ''; renderMain(); }
+document.addEventListener('click', e => {
+  const b = e.target.closest && e.target.closest('.ptbl [data-gtoggle]');
+  if (b) selectGroup(b, false);   // the toggle that follows draws it
+  else releaseGroup();
+}, true);
+// focus that comes with a press is left to the click that ends it: a redraw now would take the button away under the
+// pointer, and the click (the toggle) with it
+let gPress = false;
+document.addEventListener('pointerdown', () => { gPress = true; }, true);
+['pointerup', 'pointercancel'].forEach(t => document.addEventListener(t, () => setTimeout(() => { gPress = false; }, 0), true));
+document.addEventListener('focusin', e => {
+  if (!e.relatedTarget || gPress) return;
+  const b = e.target.closest && e.target.closest('.ptbl [data-gtoggle]');
+  if (b){ if (!GSEL || GSEL.g !== b.dataset.gtoggle) selectGroup(b, true); }
+  else if (!e.target.closest('[data-gselclose]')) releaseGroup();   // a click on Resume lets go (as a click)
+});
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Escape' || !GSEL || typingIn(e.target) || overlayOpen()) return;
+  if (INSP.pid && !(e.target.closest && e.target.closest('[data-gtoggle]'))) return;   // the open process is nearer
+  e.preventDefault(); e.stopPropagation(); releaseGroup();
+}, true);
+document.addEventListener('change', e => {
+  if (e.target.id === 'pgroup') GSEL = null;
+  if (e.target.id !== 'pghold') return;
+  PREFS = Object.assign({}, PREFS, {holdGroups:e.target.checked});
+  if (!e.target.checked){ Object.keys(GHELD).forEach(k => delete GHELD[k]); try { sessionStorage.removeItem('fleet-gheld'); } catch (x) {} }
+  lastMainHTML = ''; renderMain();
+  savePrefs('Hold group order');
 }, true);
 
 

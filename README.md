@@ -62,7 +62,9 @@ with the columns you choose, docked beside the overview if you like. Drag the di
 headers to resize a column (double-click it for automatic width), or drag a header onto another to move its
 column; each detail type keeps its own (from the keyboard: ←/→ on a divider, ⌥←/⌥→ on a header). Click a
 process for what it mostly waits on (CPU, disk, memory, GPU, locks, network), its cache misses over a
-lookback, limits, sockets, files and threads; the list holds still while it's open.
+lookback, limits, sockets, files and threads; the list holds still while it's open. Groups hold their places
+while you have one selected (click or focus its header; Esc lets go), and **Hold group order**, by Group by,
+stops them moving at all while their numbers keep updating.
 
 **Containers and VMs, counted once.** A VM on its host costs what the host gives it (its QEMU process, as
 `htop` shows it, plus guest memory on huge pages, which `htop` leaves out); its own page shows what the guest
