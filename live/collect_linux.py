@@ -11,6 +11,7 @@ import base64, glob, json, os, re, subprocess, sys, time, zlib
 
 PAGE = os.sysconf("SC_PAGE_SIZE")
 HZ = os.sysconf("SC_CLK_TCK")
+ROOT = ""  # where /proc, /sys and /usr/local/sbin are read from: "" on a host, a recorded snapshot in tests
 
 
 def rd(path):
@@ -224,11 +225,12 @@ def gpu_clients(cards):
 PHYS = re.compile(r"^(sd[a-z]+|vd[a-z]+|xvd[a-z]+|hd[a-z]+|nvme\d+n\d+|mmcblk\d+)$")
 PREV_IO, RESOLVE = {}, {}
 UNRAID = {"t": 0.0, "map": {}, "role": {}}
+BTRFS, ZPOOLS = {}, {"t": 0.0, "pools": {}}
 
 
 def unraid_map():
     """Unraid's array driver hides which physical disk is behind /dev/mdNp1; mdcmd status (read-only) says."""
-    if time.time() - UNRAID["t"] < 60 or not os.path.exists("/usr/local/sbin/mdcmd"):
+    if time.time() - UNRAID["t"] < 60 or not os.path.exists(ROOT + "/usr/local/sbin/mdcmd"):
         return
     UNRAID["t"] = time.time()
     st = run(["/usr/local/sbin/mdcmd", "status"], timeout=5)
@@ -250,7 +252,7 @@ def disks_of(majmin):
     if majmin in RESOLVE:
         return RESOLVE[majmin]
     out = set()
-    path = os.path.realpath("/sys/dev/block/" + majmin)
+    path = os.path.realpath(ROOT + "/sys/dev/block/" + majmin)
     if os.path.exists(path):
         name = os.path.basename(path)
         if name in UNRAID["map"]:
@@ -260,7 +262,7 @@ def disks_of(majmin):
         slaves = os.path.join(base, "slaves")
         if os.path.isdir(slaves) and os.listdir(slaves):
             for sl in os.listdir(slaves):
-                out |= disks_of(rd("/sys/class/block/%s/dev" % sl).strip())
+                out |= disks_of(rd(ROOT + "/sys/class/block/%s/dev" % sl).strip())
         elif PHYS.match(os.path.basename(base)):
             out.add(os.path.basename(base))
         elif PHYS.match(name):
@@ -269,26 +271,78 @@ def disks_of(majmin):
     return out
 
 
+def zfs_pools():
+    """Each ZFS pool's devices, from zpool status (read-only), at most once a minute."""
+    if time.time() - ZPOOLS["t"] >= 60:
+        ZPOOLS["t"], pools, pool, spare = time.time(), {}, "", False
+        for line in run(["zpool", "status", "-P"], timeout=5).splitlines():
+            f = line.split()
+            if f[:1] == ["pool:"] and len(f) > 1:
+                pool, spare = f[1], False
+            elif f[:1] == ["spares"]:
+                spare = True  # a hot spare holds nothing until it replaces a disk
+            elif f and f[0].startswith("/dev/") and pool and not spare:
+                pools.setdefault(pool, []).append(f[0])
+        ZPOOLS["pools"] = pools
+    return ZPOOLS["pools"]
+
+
+def mount_disks(majmin, fstype, source):
+    """The physical disks under one mount. btrfs and ZFS have anonymous device numbers (major 0): the mount's source
+    names its device (and /sys/fs/btrfs the others of a multi-device btrfs), and a ZFS dataset's pool its devices."""
+    if not majmin.startswith("0:"):
+        return disks_of(majmin)
+    if fstype == "zfs":
+        devs = zfs_pools().get(source.split("/")[0], [])
+    elif source.startswith("/dev/"):
+        devs = [source]
+    else:
+        return set()  # tmpfs, overlay, NFS, SMB, FUSE: no disk of this machine
+    out = set()
+    for d in devs:
+        name = os.path.basename(os.path.realpath(ROOT + d))  # /dev/mapper/x, /dev/disk/by-id/y -> dm-0, sdb1
+        for n in BTRFS.get(name, [name]):
+            mm = rd(ROOT + "/sys/class/block/%s/dev" % n).strip()
+            if mm:
+                out |= disks_of(mm)
+    return out
+
+
+def mounts_in(text):
+    """mountinfo -> [(mount id, mount point, the physical disks under it)]"""
+    out = []
+    for line in text.splitlines():
+        f = line.split()
+        if len(f) > 4 and f[2]:
+            fs = f[f.index("-", 6) + 1:] if "-" in f[6:] else []
+            out.append((f[0], f[4], mount_disks(f[2], fs[0] if fs else "", fs[1] if len(fs) > 1 else "")))
+    return out
+
+
 def disk_info(procs, containers):
     unraid_map()
     disks = []
-    for line in rd("/proc/diskstats").splitlines():
+    for line in rd(ROOT + "/proc/diskstats").splitlines():
         f = line.split()
         if len(f) < 14 or not PHYS.match(f[2]):
             continue
         n = f[2]
-        b = "/sys/block/%s/" % n
+        b = ROOT + "/sys/block/%s/" % n
         size = rd(b + "size").strip()
         disks.append({"name": n, "r": int(f[5]) * 512, "w": int(f[9]) * 512, "ms": int(f[12]),
                       "model": (rd(b + "device/model").strip() or rd(b + "device/name").strip()), "size": int(size) * 512 if size.isdigit() else 0,
                       "rot": rd(b + "queue/rotational").strip() == "1", "mounts": [], "role": UNRAID["role"].get(n, "")})
     by = {d["name"]: d for d in disks}
-    for line in rd("/proc/self/mountinfo").splitlines():
-        f = line.split()
-        if len(f) > 4 and f[2] and not f[2].startswith("0:"):
-            for dn in disks_of(f[2]):
-                if dn in by and len(by[dn]["mounts"]) < 4 and f[4] not in by[dn]["mounts"]:
-                    by[dn]["mounts"].append(f[4])
+    BTRFS.clear()
+    for fs in glob.glob(ROOT + "/sys/fs/btrfs/*/devices"):  # every device of each btrfs, by name
+        devs = sorted(os.listdir(fs))
+        BTRFS.update((d, devs) for d in devs)
+    mnt = {}  # mount id -> the disks under it, for the open files below
+    for mid, point, under in mounts_in(rd(ROOT + "/proc/self/mountinfo")):
+        mnt[mid] = under
+        for dn in under:
+            if dn in by and len(by[dn]["mounts"]) < 4 and point not in by[dn]["mounts"]:
+                by[dn]["mounts"].append(point)
     # Processes that did I/O since the last reading: which disks hold the files they have open.
     pdisks = {}
     busy = []
@@ -299,18 +353,26 @@ def disk_info(procs, containers):
             if prev is not None and p[8] > prev and not p[9]:
                 busy.append(p[0])
     for pid in busy[:300]:
-        found = set()
+        found, own = set(), False
         try:
-            fds = os.listdir("/proc/%d/fd" % pid)[:2000]
+            fds = os.listdir(ROOT + "/proc/%d/fd" % pid)[:2000]
         except Exception:
             continue
         for fd in fds:
+            # The fd's fdinfo names the mount its file is on. stat() would ask the file's own filesystem instead: a round
+            # trip to an NFS, SMB or FUSE server for no disk, and a reading that never returns when that server is gone.
             try:
-                st = os.stat("/proc/%d/fd/%s" % (pid, fd))
+                if not os.readlink(ROOT + "/proc/%d/fd/%s" % (pid, fd)).startswith("/"):
+                    continue  # a socket, pipe or anon inode: never on a disk
             except Exception:
                 continue
-            if st.st_dev and os.major(st.st_dev):
-                found |= disks_of("%d:%d" % (os.major(st.st_dev), os.minor(st.st_dev)))
+            m = re.search(r"^mnt_id:\s*(\d+)", rd(ROOT + "/proc/%d/fdinfo/%s" % (pid, fd)), re.M)
+            if not m:
+                continue
+            if m.group(1) not in mnt and not own:  # its own mount namespace (systemd's ProtectSystem, PrivateTmp); mount ids are global
+                own = True
+                mnt.update((mid, under) for mid, _, under in mounts_in(rd(ROOT + "/proc/%d/mountinfo" % pid)))
+            found |= mnt.get(m.group(1), set())
         if found:
             pdisks[pid] = sorted(found)
     if len(PREV_IO) > 20000:
@@ -324,11 +386,11 @@ def disk_info(procs, containers):
         if p[9] and p[9] not in first:
             first[p[9]] = p[0]
     for cid, pid in first.items():
-        m = re.search(r"0::(\S+)", rd("/proc/%d/cgroup" % pid))
+        m = re.search(r"0::(\S+)", rd(ROOT + "/proc/%d/cgroup" % pid))
         if not m:
             continue
         acc = {}
-        for line in rd("/sys/fs/cgroup%s/io.stat" % m.group(1)).splitlines():
+        for line in rd(ROOT + "/sys/fs/cgroup%s/io.stat" % m.group(1)).splitlines():
             f = line.split()
             if not f:
                 continue
@@ -342,9 +404,21 @@ def disk_info(procs, containers):
 
 
 # ---- Network: which interface each process talks through, and its TCP bytes (from ss -ti) ----
+CONNS, PNET_B = {}, {}  # each connection's bytes at the last reading; each process's TCP bytes, added up over readings
+OWNERS, NETSCAN = {}, {"n": 0, "cost": 0.0}  # each connection's processes, from the last ss -p
+
+
 def net_users(ifaddr):
-    users, cur = {}, None
-    for line in run(["ss", "-tinpH", "state", "established"], timeout=8).splitlines():
+    # ss -p finds each socket's process by reading every open file of every process: only as often as it's cheap
+    NETSCAN["n"] += 1
+    walk = NETSCAN["cost"] < 0.15 or NETSCAN["n"] % 10 == 1
+    began = time.time()
+    text = run(["ss", "-tinpH" if walk else "-tinH", "state", "established"], timeout=8)
+    if walk:
+        NETSCAN["cost"] = time.time() - began
+        OWNERS.clear()
+    users, cur, seen = {}, None, {}
+    for line in text.splitlines():
         if line[:1] not in (" ", "\t"):
             addrs = [x for x in line.split() if ":" in x and not x.startswith("users:")]
             ifn = ""
@@ -353,19 +427,31 @@ def net_users(ifaddr):
                 if "%" in ip:
                     ip, ifn = ip.split("%", 1)
                 ifn = ifn or ifaddr.get(ip.replace("::ffff:", ""), "")
-            pids = re.findall(r"pid=(\d+)", line)
+            key = " ".join(addrs[:2])
+            if walk:
+                pids = OWNERS[key] = re.findall(r"pid=(\d+)", line)
+            else:  # a connection newer than the last walk has no owner yet: its bytes all count once it has one
+                pids = OWNERS.get(key, [])
             cur = pids
             for pid in pids:
-                u = users.setdefault(pid, {"ifs": [], "b": 0})
+                u = users.setdefault(pid, {"ifs": [], "b": PNET_B.get(pid, 0)})
                 if ifn and ifn not in u["ifs"]:
                     u["ifs"].append(ifn)
         elif cur:
             sent = re.search(r"bytes_(?:sent|acked):(\d+)", line)
             got = re.search(r"bytes_received:(\d+)", line)
             b = (int(sent.group(1)) if sent else 0) + (int(got.group(1)) if got else 0)
+            # Add what this connection moved since the last reading (all of it if it's new), so a process's total only
+            # grows: a connection that closes doesn't take its bytes back out, and Fleet Live can diff it as a counter.
+            prev, seen[key] = CONNS.get(key, 0), b
             for pid in cur:
-                users[pid]["b"] += b
+                PNET_B[pid] = users[pid]["b"] = PNET_B.get(pid, 0) + (b - prev if b >= prev else b)
             cur = None
+    CONNS.clear()
+    CONNS.update(seen)
+    if len(PNET_B) > 20000:
+        for pid in [p for p in PNET_B if p not in users and not os.path.isdir(ROOT + "/proc/" + p)]:
+            del PNET_B[pid]
     return users
 
 
@@ -660,7 +746,7 @@ def snapshot():
     return out
 
 
-if __name__ == "__main__":  # piped to `python3 -` by Fleet Live; importing it (the tests) takes no reading
+if __name__ == "__main__":  # true for `python3 -` and `python3 -c`, as Fleet Live runs it; importing it (the tests) takes no reading
     try:
         INTERVAL
     except NameError:
