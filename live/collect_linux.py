@@ -369,6 +369,47 @@ def net_users(ifaddr):
     return users
 
 
+def netns(pid):
+    """The network namespace a process is in ("net:[4026531840]"), or "" if it can't be read."""
+    try:
+        return os.readlink("/proc/%s/ns/net" % pid)
+    except Exception:
+        return ""
+
+
+def docker_containers(first_pid_of, started):
+    """Docker: containers with compose labels; per-container network from its namespace."""
+    containers, by_ns = [], {}
+    for line in run(["docker", "ps", "--no-trunc", "--format", "{{json .}}"]).splitlines():
+        try:
+            c = json.loads(line)
+        except Exception:
+            continue
+        labels = dict(kv.split("=", 1) for kv in c.get("Labels", "").split(",") if "=" in kv)
+        cid = c.get("ID", "")[:12]
+        host_ns = netns(1)
+        own_ns = netns(first_pid_of[cid]) if cid in first_pid_of else ""
+        # network_mode: host shares the host's namespace; its traffic is the host's, so don't count it again here
+        net = netdev(rd("/proc/%s/net/dev" % first_pid_of[cid])) if cid in first_pid_of and own_ns and own_ns != host_ns else {}
+        rx = sum(v[0] for k, v in net.items() if k != "lo")
+        tx = sum(v[1] for k, v in net.items() if k != "lo")
+        containers.append({"id": cid, "name": c.get("Names", ""), "image": c.get("Image", ""), "status": c.get("Status", ""),
+                           "project": labels.get("com.docker.compose.project", ""),
+                           "service": labels.get("com.docker.compose.service", ""),
+                           "file": labels.get("com.docker.compose.project.config_files", ""),
+                           "networks": c.get("Networks", ""), "rx": rx, "tx": tx})
+        if net:
+            by_ns.setdefault(own_ns, []).append(containers[-1])
+    # network_mode: service:<name> or container:<name> joins another container's namespace, whose counters are the same
+    # again: only its owner counts them, the container that started first (Docker starts a joiner once its owner runs)
+    for group in by_ns.values():
+        owner = min(group, key=lambda c: started.get(c["id"], 0))
+        for c in group:
+            if c is not owner:
+                c["rx"] = c["tx"] = 0
+    return containers
+
+
 def qemu_vm(cmdline):
     """The libvirt VM a QEMU process runs: the guest= key of its -name argument (guest=Windows 10,debug-threads=on),
     from the NUL-separated command line /proc/<pid>/cmdline has. A name may hold spaces; QEMU writes a comma in it as two."""
@@ -499,7 +540,7 @@ def snapshot():
         if len(f) > 2:
             users[f[2]] = f[0]
 
-    procs, first_pid_of = [], {}
+    procs, first_pid_of, started = [], {}, {}
     for pid in os.listdir("/proc"):
         if not pid.isdigit():
             continue
@@ -532,33 +573,13 @@ def snapshot():
                 out.setdefault("vm_cpus", {})[vm] = m.group(1) if m else ""
         if cid and cid not in first_pid_of:
             first_pid_of[cid] = pid
+        if cid:  # when the container's first process started (ticks since boot)
+            started[cid] = min(started.get(cid, int(f[19])), int(f[19]))
         procs.append([int(pid), int(f[1]), comm, f[0], int(f[11]) + int(f[12]), int(f[21]) * PAGE,
                       int(f[17]), users.get(uid, uid), iob, cid, vm, unit, cmd[:300], int(f[36]) if len(f) > 36 else -1])
     out["procs"] = procs
 
-    # Docker: containers with compose labels; per-container network from its namespace.
-    containers = []
-    for line in run(["docker", "ps", "--no-trunc", "--format", "{{json .}}"]).splitlines():
-        try:
-            c = json.loads(line)
-        except Exception:
-            continue
-        labels = dict(kv.split("=", 1) for kv in c.get("Labels", "").split(",") if "=" in kv)
-        cid = c.get("ID", "")[:12]
-        host_ns = os.readlink("/proc/1/ns/net") if os.path.exists("/proc/1/ns/net") else ""
-        try:
-            own_ns = os.readlink("/proc/%s/ns/net" % first_pid_of[cid]) if cid in first_pid_of else ""
-        except Exception:
-            own_ns = ""
-        # network_mode: host shares the host's namespace; its traffic is the host's, so don't count it again here
-        net = netdev(rd("/proc/%s/net/dev" % first_pid_of[cid])) if cid in first_pid_of and own_ns and own_ns != host_ns else {}
-        rx = sum(v[0] for k, v in net.items() if k != "lo")
-        tx = sum(v[1] for k, v in net.items() if k != "lo")
-        containers.append({"id": cid, "name": c.get("Names", ""), "image": c.get("Image", ""), "status": c.get("Status", ""),
-                           "project": labels.get("com.docker.compose.project", ""),
-                           "service": labels.get("com.docker.compose.service", ""),
-                           "file": labels.get("com.docker.compose.project.config_files", ""),
-                           "networks": c.get("Networks", ""), "rx": rx, "tx": tx})
+    containers = docker_containers(first_pid_of, started)
     out["containers"] = containers
     try:
         out["pnet"] = net_users(ifaddr)

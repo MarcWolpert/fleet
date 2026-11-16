@@ -1,13 +1,13 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """collect_linux.py's parsers, fed the text each source prints (/proc/net/dev, sysfs CPU lists, crontabs, virsh,
 QEMU command lines, nvidia-smi,
-DRM debugfs clients).
+DRM debugfs clients, docker ps with each container's network namespace).
 Importing the collector reads nothing from this machine: its reading loop runs only when the file runs as a
 script, the way Fleet Live pipes it to `python3 -`. Every assertion is the exact result.
 
 Run: python3 -m unittest discover -s live/tests -p 'test_*.py'   (or live/tests/run.sh)
 """
-import importlib.util, os, subprocess, sys, unittest
+import importlib.util, json, os, subprocess, sys, unittest
 from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -290,6 +290,66 @@ class DebugfsClients(unittest.TestCase):
     def test_no_clients(self):
         self.assertEqual([collector().debugfs_pids(clients_file([])), collector().debugfs_pids("")], [set(), set()])
 
+
+def ps_line(name, cid, image, project, service, networks):
+    """One line of `docker ps --no-trunc --format '{{json .}}'`."""
+    labels = ",".join("%s=%s" % kv for kv in (("com.docker.compose.project", project), ("com.docker.compose.service", service),
+                                                ("com.docker.compose.project.config_files", "/srv/%s/compose.yaml" % project)) if project)
+    return json.dumps({"Command": "\"/init\"", "ID": cid, "Image": image, "Labels": labels, "Names": name, "Networks": networks,
+                       "State": "running", "Status": "Up 2 days"})
+
+
+def container(name, cid, image, project, service, networks, rx, tx):
+    """The collector's entry for that docker ps line."""
+    return {"id": cid[:12], "name": name, "image": image, "status": "Up 2 days", "project": project, "service": service,
+            "file": "/srv/%s/compose.yaml" % project if project else "", "networks": networks, "rx": rx, "tx": tx}
+
+
+def netdev_text(rx, tx):
+    return ("Inter-|   Receive                                                |  Transmit\n"
+            " face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed\n"
+            "    lo:    5000      50    0    0    0     0          0         0     5000      50    0    0    0     0       0          0\n"
+            "  eth0: %d    1000    0    0    0     0          0         0 %d     900    0    0    0     0       0          0\n" % (rx, tx))
+
+
+HOST_NS, VPN_NS, PLEX_NS = "net:[4026531840]", "net:[4026532900]", "net:[4026533000]"
+VPN, QBIT, ARR, PLEX, HA, GONE = ("%02x" % n * 32 for n in (0xa1, 0xb2, 0xc3, 0xd4, 0xe5, 0xf6))
+# docker ps lists the newest first
+QBIT_C = ("qbittorrent", QBIT, "linuxserver/qbittorrent", "media", "qbittorrent", "")
+ARR_C = ("sonarr", ARR, "linuxserver/sonarr", "media", "sonarr", "")
+VPN_C = ("gluetun", VPN, "qmcgaw/gluetun", "media", "gluetun", "media_default")
+PLEX_C = ("plex", PLEX, "plexinc/pms-docker", "", "", "bridge")
+HA_C = ("homeassistant", HA, "homeassistant/home-assistant", "", "", "host")
+GONE_C = ("exited", GONE, "busybox", "", "", "bridge")
+
+
+class DockerContainers(unittest.TestCase):
+    """qbittorrent and sonarr join gluetun's namespace (network_mode: service:gluetun), plex has its own, homeassistant is
+    on the host network, and one container has no process left to read."""
+    FIRST = {VPN[:12]: "2000", QBIT[:12]: "2100", ARR[:12]: "2200", PLEX[:12]: "3000", HA[:12]: "4000"}
+    STARTED = {VPN[:12]: 51000, QBIT[:12]: 51900, ARR[:12]: 51400, PLEX[:12]: 40000, HA[:12]: 30000}
+    NS = {"1": HOST_NS, "2000": VPN_NS, "2100": VPN_NS, "2200": VPN_NS, "3000": PLEX_NS, "4000": HOST_NS}
+    DEV = {VPN_NS: netdev_text(9000000, 700000), PLEX_NS: netdev_text(120000, 4400000), HOST_NS: netdev_text(77000000, 66000000)}
+
+    def containers(self, ps, first, started):
+        c = collector()
+        out = "".join(ps_line(*x) + "\n" for x in ps)
+        with mock.patch.object(c, "run", lambda cmd, timeout=8: out if cmd[:2] == ["docker", "ps"] else ""), \
+             mock.patch.object(c, "netns", lambda pid: self.NS.get(str(pid), "")), \
+             mock.patch.object(c, "rd", lambda path: self.DEV.get(self.NS.get(path.split("/")[2], ""), "") if path.endswith("/net/dev") else ""):
+            return c.docker_containers(first, started)
+
+    def test_a_shared_namespace_counts_once_at_its_owner(self):
+        self.assertEqual(self.containers([QBIT_C, ARR_C, VPN_C, PLEX_C, HA_C, GONE_C], self.FIRST, self.STARTED), [
+            container(*QBIT_C, 0, 0), container(*ARR_C, 0, 0), container(*VPN_C, 9000000, 700000),
+            container(*PLEX_C, 120000, 4400000), container(*HA_C, 0, 0), container(*GONE_C, 0, 0)])
+
+    def test_a_joiner_left_alone_in_the_namespace_counts_it(self):
+        # the only container seen in its namespace counts it
+        self.assertEqual(self.containers([ARR_C], {ARR[:12]: "2200"}, {ARR[:12]: 51400}), [container(*ARR_C, 9000000, 700000)])
+
+    def test_no_docker(self):
+        self.assertEqual(self.containers([], self.FIRST, self.STARTED), [])
 
 if __name__ == "__main__":
     unittest.main()
