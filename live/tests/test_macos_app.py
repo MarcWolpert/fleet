@@ -34,6 +34,12 @@ class PageHooks(unittest.TestCase):
         self.assertIn("window.fleetMenu && window.fleetMenu(", func("pageCommand"))
         self.assertNotIn("fleetCommand", SWIFT)
 
+    def test_the_page_knows_the_text_size(self):
+        # #189: a CSS px is pageZoom points; told the zoom, the page reports its title bar in points
+        self.assertIn("window.fleetNativeZoom && window.fleetNativeZoom(\\(Double(web.pageZoom)))", func("tellZoom"))
+        self.assertIn("tellZoom()", func("zoom"))
+        self.assertRegex(SWIFT, r"didFinish n: WKNavigation!\) \{[^\n]*tellZoom\(\)")
+
 
 if __name__ == "__main__":
     unittest.main()
