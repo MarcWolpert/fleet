@@ -89,3 +89,19 @@ test('the tree footer: Auto on the left, Add a machine on the right edge', async
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
 });
+
+test('a VM stopped on its host reads stopped, not off; off means only that its connection is turned off (#215)', async () => {
+  const fx = fx1();
+  Object.assign(fx.fleet.machines.find(m => m.id === 'lx2'), {status: 'off', has_data: false});
+  const p = await browser.page(fx, {ui: ui({sel: 'fleet'})});
+  const TITLE = `document.querySelector('#tree [data-conn="lx2"]').title`;
+  try {
+    await p.waitFor(`document.querySelector('#tree [data-conn="lx2"]')`);
+    assert.match(await p.eval(`document.querySelector('#tree .row[data-select="lx2"]').textContent`), /stopped/);
+    assert.doesNotMatch(await p.eval(`document.querySelector('#tree .row[data-select="lx2"]').textContent`), /\boff\b/);
+    assert.equal(await p.eval(TITLE), 'stopped on its host · click to disconnect');
+    await p.eval(`(document.querySelector('#tree [data-conn="lx2"]').click(), true)`);
+    await p.waitFor(`${TITLE} === 'off · click to connect'`);
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});

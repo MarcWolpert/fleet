@@ -227,7 +227,8 @@ function hasData(n){ return n.kind !== 'machine' || n.hasData || n.status === 'o
 function isStale(n){ return n.kind === 'machine' && n.status !== 'ok' && n.status !== 'hostonly' && n.hasData; }
 function staleFor(n){ return n.lastOk ? Math.max(0, Date.now() / 1000 - n.lastOk) : 0; }
 function statusClass(n){ return isLive(n) ? 'ok' : n.status === 'hostonly' ? 'hostonly' : isStale(n) ? 'stale' : n.status === 'off' ? 'off' : n.status === 'connecting' ? 'connecting' : 'offline'; }
-function statusText(n){ return n.status === 'ok' ? 'live' : n.status === 'off' || n.status === 'disabled' ? 'off' : n.status === 'hostonly' ? 'seen from host' : isStale(n) ? 'reconnecting' : n.status === 'connecting' ? 'connecting' : 'offline'; }
+// 'off' means only that a machine's connection is turned off; a VM its host reports as not running is 'stopped'
+function statusText(n){ return n.status === 'ok' ? 'live' : n.status === 'disabled' ? 'off' : n.status === 'off' ? 'stopped' : n.status === 'hostonly' ? 'seen from host' : isStale(n) ? 'reconnecting' : n.status === 'connecting' ? 'connecting' : 'offline'; }
 function stalePill(n){ return isStale(n) ? `<span class="spill" title="Showing the last reading until ${esc(n.name)} answers again">reconnecting · ${ago(staleFor(n)).replace(' ago', '')}</span>` : ''; }
 function pinBtn(id){ const on = PINS.includes(id); return `<button type="button" class="pinbtn${on ? ' on' : ''}" data-pin="${esc(id)}" aria-pressed="${on}" aria-label="${on ? 'Unpin' : 'Pin'} ${esc(nodes[id] ? nodes[id].name : id)} as a space" title="${on ? 'Unpin from the space bar' : 'Pin to the space bar'}">${icon('pin')}</button>`; }
 
@@ -477,7 +478,7 @@ function updateTree(){
   document.querySelectorAll('[data-val]').forEach(e => { const n = nodes[e.dataset.val]; if (n) e.textContent = rowVal(n); });
   document.querySelectorAll('[data-spark]').forEach(e => { const n = nodes[e.dataset.spark]; if (n) e.firstElementChild.setAttribute('points', sparkPts(n.series[S.metric], 60, 16)); });
   document.querySelectorAll('[data-dot]').forEach(e => { const n = nodes[e.dataset.dot]; if (n) e.classList.toggle('on', !!n.running); });
-  document.querySelectorAll('[data-sdot]').forEach(e => { const n = nodes[e.dataset.sdot]; if (n){ e.className = 'sdot ' + statusClass(n); e.title = statusText(n) + (e.dataset.conn ? (n.on ? ' · click to disconnect' : ' · click to connect') : ''); if (e.dataset.conn){ e.setAttribute('aria-pressed', String(n.on)); e.setAttribute('aria-label', (n.on ? 'Disconnect ' : 'Connect ') + n.name); } } });
+  document.querySelectorAll('[data-sdot]').forEach(e => { const n = nodes[e.dataset.sdot]; if (n){ e.className = 'sdot ' + statusClass(n); e.title = e.dataset.conn ? connTitle(n) : statusText(n); if (e.dataset.conn){ e.setAttribute('aria-pressed', String(n.on)); e.setAttribute('aria-label', (n.on ? 'Disconnect ' : 'Connect ') + n.name); } } });
   document.querySelectorAll('[data-val]').forEach(e => { const n = nodes[e.dataset.val]; if (n && n.kind === 'machine') e.classList.toggle('dim', !isLive(n)); });
 }
 
@@ -899,7 +900,7 @@ function diagnose(m){
   const e = (m.error || '').toLowerCase(), host = esc(m.ssh || m.name), name = esc(m.name);
   const retry = 'Press <b>Retry now</b>.';
   if (m.status === 'disabled') return {kind:'off', ic:'power', title:'Not connected', text:`Fleet isn’t connecting to ${name}: its connection was turned off, or it isn’t in the machines <b>Connect automatically</b> connects to when Fleet starts. Connect to read it now.`, steps:[]};
-  if (m.status === 'off') return {kind:'off', ic:'power', title:`${name} is turned off`, text:'Its host reports this VM as not running. Start it there and Fleet picks it up within a few seconds.', steps:[]};
+  if (m.status === 'off') return {kind:'off', ic:'power', title:`${name} is stopped`, text:'Its host reports this VM as not running. Start it there and Fleet picks it up within a few seconds.', steps:[]};
   if (m.status === 'connecting' && !e) return {kind:'wait', ic:'refresh', title:`Connecting to ${name}…`, text:'Waiting for its first reading.', steps:[]};
   if (/host key verification failed|remote host identification has changed/.test(e)) return {kind:'key', ic:'key', title:`Fleet can’t confirm this is really ${name}`,
     text:`SSH has no trusted host key for <code>${host}</code> yet, so it refused to connect. That’s SSH protecting you from an impostor; trusting the key once fixes it.`,
@@ -2626,7 +2627,11 @@ async function openAddMachine(){
 /* ---------- connections: on and off by hand, and which connect when Fleet starts ---------- */
 const AC = {naming:false};
 function connDot(n){
-  return `<button type="button" class="sdot ${statusClass(n)}" data-sdot="${esc(n.id)}" data-conn="${esc(n.id)}" aria-pressed="${n.on}" aria-label="${n.on ? 'Disconnect' : 'Connect'} ${esc(n.name)}" title="${statusText(n)} · click to ${n.on ? 'disconnect' : 'connect'}"></button>`;
+  return `<button type="button" class="sdot ${statusClass(n)}" data-sdot="${esc(n.id)}" data-conn="${esc(n.id)}" aria-pressed="${n.on}" aria-label="${n.on ? 'Disconnect' : 'Connect'} ${esc(n.name)}" title="${connTitle(n)}"></button>`;
+}
+function connTitle(n){
+  if (!n.on) return 'off · click to connect';
+  return (n.status === 'off' ? 'stopped on its host' : statusText(n)) + ' · click to disconnect';
 }
 async function setConnected(id, on){
   const n = nodes[id];
