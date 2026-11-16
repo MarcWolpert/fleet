@@ -3032,27 +3032,32 @@ FONT_WEIGHTS = {"thin": 100, "hairline": 100, "extralight": 200, "ultralight": 2
 FONT_INFO = {}   # (path, mtime, size) -> what font_info read from it
 
 
+FONT_TABLE_MAX = 1 << 20   # a name or OS/2 table is a few KB: never read or inflate more than this of one (#408)
+
+
 def font_tables(data):
-    """A font file's tables by tag: TrueType, OpenType, or WOFF (zlib-compressed tables); {} for anything else."""
-    out = {}
+    """A font file's name and OS/2 tables, all Fleet reads of it: from TrueType, OpenType or WOFF (zlib-compressed
+    tables). Each is bounded, and the others aren't read or inflated, so a file made to take memory can't (#408)."""
+    out, want = {}, (b"name", b"OS/2")
     try:
         if data[:4] == b"wOFF":
-            for i in range(int.from_bytes(data[12:14], "big")):
+            for i in range(min(int.from_bytes(data[12:14], "big"), 4096)):
                 tag, off, clen, olen = struct.unpack_from(">4sIII", data, 44 + 20 * i)
-                raw = data[off:off + clen]
-                out[tag] = zlib.decompress(raw) if clen < olen else raw
+                if tag in want and tag not in out:
+                    raw = data[off:off + min(clen, FONT_TABLE_MAX)]
+                    out[tag] = zlib.decompressobj().decompress(raw, min(olen, FONT_TABLE_MAX)) if clen < olen else raw
         elif data[:4] in FONT_MAGIC[:3]:
-            for i in range(int.from_bytes(data[4:6], "big")):
+            for i in range(min(int.from_bytes(data[4:6], "big"), 4096)):
                 tag, _, off, length = struct.unpack_from(">4sIII", data, 12 + 16 * i)
-                out[tag] = data[off:off + length]
+                if tag in want and tag not in out:
+                    out[tag] = data[off:off + min(length, FONT_TABLE_MAX)]
     except (struct.error, zlib.error):
         return {}
     return out
 
 
-def font_info(name, data):
-    """(family, weight, style) of a font file, from its name and OS/2 tables where it has them (a WOFF2's are
-    Brotli-compressed, which Python can't read), else from its file name: Iosevka-BoldItalic.woff2 is Iosevka, 700, italic."""
+def font_name_info(name):
+    """(family, weight, italic) from a font file's name: Iosevka-BoldItalic.woff2 is Iosevka, 700, italic."""
     stem = re.sub(r"(\.(ttf|otf))?\.(ttf|otf|woff2?)$", "", name, flags=re.I)
     fam, tail = (stem.rsplit("-", 1) + [""])[:2] if "-" in stem else (stem, "")
     t = tail.lower()
@@ -3060,7 +3065,18 @@ def font_info(name, data):
     w = re.sub(r"(italic|oblique|it)$", "", t) if italic else t
     if w and w not in FONT_WEIGHTS:   # not a weight or a style: the name is all family
         fam, w, italic = stem, "", False
-    weight = FONT_WEIGHTS.get(w, 400)
+    return fam, FONT_WEIGHTS.get(w, 400), italic
+
+
+def font_face(fam, weight, italic):
+    fam = re.sub(r"[^A-Za-z0-9 _.\-]", "", fam).strip()[:80] or "Font"
+    return fam, str(max(1, min(1000, weight))), "italic" if italic else "normal"
+
+
+def font_info(name, data):
+    """(family, weight, style) of a font file, from its name and OS/2 tables where it has them (a WOFF2's are
+    Brotli-compressed, which Python can't read), else from its file name (font_name_info)."""
+    fam, weight, italic = font_name_info(name)
     tb, names = font_tables(data), {}
     nt = tb.get(b"name", b"")
     try:
@@ -3082,14 +3098,14 @@ def font_info(name, data):
     if len(os2) >= 64:
         weight = int.from_bytes(os2[4:6], "big") or weight
         italic = bool(int.from_bytes(os2[62:64], "big") & 1)
-    fam = re.sub(r"[^A-Za-z0-9 _.\-]", "", fam).strip()[:80] or "Font"
-    return fam, str(max(1, min(1000, weight))), "italic" if italic else "normal"
+    return font_face(fam, weight, italic)
 
 
 def own_fonts(folder):
-    """[(file, (family, weight, style))] of the fonts installed in folder."""
+    """[(file, (family, weight, style), version)] of the fonts installed in folder. One Fleet can't read is named from
+    its file, so it's still listed, and can be removed; what was read is kept till the file changes."""
     try:
-        files = sorted(n for n in os.listdir(folder) if FONT_FILE.match(n) and os.path.isfile(os.path.join(folder, n)))
+        files = sorted(n for n in os.listdir(folder) if FONT_FILE.fullmatch(n) and os.path.isfile(os.path.join(folder, n)))
     except OSError:
         return []
     out = []
@@ -3097,13 +3113,16 @@ def own_fonts(folder):
         p = os.path.join(folder, n)
         try:
             st = os.stat(p)
-            key = (p, st.st_mtime_ns, st.st_size)
-            if key not in FONT_INFO:
-                with open(p, "rb") as f:
-                    FONT_INFO[key] = font_info(n, f.read(MAX_FONT))
-            out.append((n, FONT_INFO[key]))
         except OSError:
             continue
+        key = (p, st.st_mtime_ns, st.st_size)
+        if key not in FONT_INFO:
+            try:
+                with open(p, "rb") as f:
+                    FONT_INFO[key] = font_info(n, f.read(MAX_FONT))
+            except Exception:
+                FONT_INFO[key] = font_face(*font_name_info(n))
+        out.append((n, FONT_INFO[key], st.st_mtime_ns // 1000))
     return out
 
 
@@ -3111,8 +3130,8 @@ def font_catalog(folder=None):
     """The fonts the terminals can use: the ones Fleet carries, then yours (one of yours by a carried one's name takes
     its place), each with its faces' URLs, weights and styles."""
     own = {}
-    for n, (fam, w, st) in own_fonts(folder or FONTS_DIR):
-        own.setdefault(fam, []).append({"url": "/api/font?f=" + urllib.parse.quote(n), "weight": w, "style": st})
+    for n, (fam, w, st), v in own_fonts(folder or FONTS_DIR):   # v: a file installed again has a new address
+        own.setdefault(fam, []).append({"url": "/api/font?f=%s&v=%d" % (urllib.parse.quote(n), v), "weight": w, "style": st})
     out = []
     for fam, base, lic in CARRIED_FONTS:
         faces = [{"url": "/fonts/%s-%s.woff2" % (base, x), "weight": w, "style": "normal"} for x, w in (("Regular", "400"), ("Bold", "700"))
@@ -3127,7 +3146,7 @@ def install_font(name, data, folder=None):
     why, for what isn't a font file."""
     folder = folder or FONTS_DIR
     name = str(name or "")
-    if not FONT_FILE.match(name):
+    if not FONT_FILE.fullmatch(name):
         raise ValueError("A font is a .ttf, .otf, .woff or .woff2 file, named with letters, digits, spaces, dots and dashes.")
     if not data:
         raise ValueError("That file is empty.")
@@ -3135,18 +3154,27 @@ def install_font(name, data, folder=None):
         raise ValueError("That file is over 16 MB, which is more than a font needs.")
     if data[:4] not in FONT_MAGIC:
         raise ValueError("That isn\u2019t a font file.")
+    try:   # read before it's kept: a file Fleet can't read isn't installed
+        fam = font_info(name, data)[0]
+    except Exception:
+        raise ValueError("Fleet couldn\u2019t read that font file.")
     os.makedirs(folder, mode=0o700, exist_ok=True)
     tmp = os.path.join(folder, ".%s.part" % secrets.token_hex(6))
-    with open(tmp, "wb") as f:
-        f.write(data)
-    os.replace(tmp, os.path.join(folder, name))
-    return font_info(name, data)[0]
+    try:
+        with open(tmp, "wb") as f:
+            f.write(data)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, os.path.join(folder, name))
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+    return fam
 
 
 def remove_font(family, folder=None):
     """Removes every file of one of your fonts; returns how many. Fleet's own fonts aren't yours to remove."""
     folder, n = folder or FONTS_DIR, 0
-    for f, (fam, _, _) in own_fonts(folder):
+    for f, (fam, _, _), _ in own_fonts(folder):
         if fam == family:
             try:
                 os.remove(os.path.join(folder, f))
@@ -3206,16 +3234,20 @@ TTYD_BRIDGE_JS = r"""
   }
   // a font's data, which Fleet sends with the font (#408: Fleet's page is on another port, so this one can't fetch it):
   // each face added once; then the font is set again, so the terminal measures its cells with it
-  var FACES = {};
+  // A face sent again from another file (yours, installed again) takes the old one's place. Once faces load, the font
+  // set is the one sent last, which may have come meanwhile (#408).
+  var FACES = {}, want = null;
   function addFaces(list){
     var ps = [];
     (Array.isArray(list) ? list : []).slice(0, 16).forEach(function(f){
       if (!f || typeof f.family !== 'string' || !/^[\w .\-]{1,80}$/.test(f.family) || !(f.data instanceof ArrayBuffer) || !window.FontFace) return;
       var w = /^\d{1,4}$/.test(String(f.weight)) ? String(f.weight) : '400', st = f.style === 'italic' ? 'italic' : 'normal', k = f.family + '|' + w + '|' + st;
-      if (FACES[k]) return;
+      var src = typeof f.src === 'string' ? f.src.slice(0, 300) : '', old = FACES[k];
+      if (old && old.src === src) return;
       try {
-        FACES[k] = new FontFace(f.family, f.data, {weight: w, style: st}).load().then(function(x){ document.fonts.add(x); }, function(){ delete FACES[k]; });
-        ps.push(FACES[k]);
+        var face = new FontFace(f.family, f.data, {weight: w, style: st}), rec = FACES[k] = {src: src, face: face};
+        ps.push(face.load().then(function(x){ if (FACES[k] !== rec) return; if (old && old.face) document.fonts.delete(old.face); document.fonts.add(x); },
+          function(){ if (FACES[k] === rec) FACES[k] = old; }));
       } catch (x) {}
     });
     return ps.length ? Promise.all(ps) : null;
@@ -3225,7 +3257,8 @@ TTYD_BRIDGE_JS = r"""
     var d = e.data; if (d && d.fleet === 'termClear'){ if (window.term && window.term.clear) window.term.clear(); return; }
     if (!d || d.fleet !== 'termFont') return;
     var fam = typeof d.family === 'string' && /^[\w ,"'.\-]{1,260}$/.test(d.family) ? d.family : null, added = addFaces(d.faces);
-    if (added) added.then(function(){ if (fam) family(fam, 0, true); });
+    if (fam) want = fam;
+    if (added) added.then(function(){ if (want) family(want, 0, true); });
     else if (fam) family(fam, 0);
     var n = Number(d.size); if (n >= 6 && n <= 32) apply(n, 0);
   });
@@ -3570,7 +3603,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if u.path == "/api/font":   # one of yours, by its file name
             f = q.get("f", [""])[0]
             p = os.path.join(FONTS_DIR, f)
-            if not FONT_FILE.match(f) or not os.path.isfile(p):
+            if not FONT_FILE.fullmatch(f) or not os.path.isfile(p):
                 return self.send_error(404)
             with open(p, "rb") as fh:
                 body = fh.read(MAX_FONT)
@@ -3688,10 +3721,16 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 m.wake.set()
             return self.send_json({"ok": bool(m)})
         if u.path == "/api/fonts/install":   # #408: ?name=<file name>, the file itself as the body
-            n = int(self.headers.get("Content-Length") or 0)
-            if n > MAX_FONT:
-                self.close_connection = True   # the rest of it isn't read
-            data = self.rfile.read(min(n, MAX_FONT + 1))
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                n = -1
+            if n < 0:
+                return self.send_error(400)
+            if n > MAX_FONT:   # said without reading it; the connection closes, as the rest of it is left unread
+                self.close_connection = True
+                return self.send_json({"ok": False, "error": "That file is over 16 MB, which is more than a font needs."})
+            data = self.rfile.read(n)
             try:
                 return self.send_json({"ok": True, "family": install_font(urllib.parse.parse_qs(u.query).get("name", [""])[0], data)})
             except (ValueError, OSError) as e:

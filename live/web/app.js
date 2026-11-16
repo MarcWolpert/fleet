@@ -3730,7 +3730,7 @@ function sendTermFont(f, fresh){
       const had = FONT_SENT.get(x) || new Set(), more = faces.filter(fc => fc && !had.has(fc.url));
       if (!more.length || !x.isConnected) return;
       more.forEach(fc => had.add(fc.url)); FONT_SENT.set(x, had);
-      post(x, more.map(({family, weight, style, data}) => ({family, weight, style, data})));
+      post(x, more.map(({family, weight, style, url, data}) => ({family, weight, style, src:url, data})));
     })).catch(() => {});
 }
 
@@ -3738,14 +3738,15 @@ function sendTermFont(f, fresh){
 // of your own; kept in ui.json as termFontFamily, a CSS font list ('"Fira Code", monospace' for a picked font). Fleet's
 // page loads the fonts for the preview through @font-face rules; the terminals get their data from sendTermFont.
 const FONTS = {list:[], p:null, data:{}, msg:''};
-const FONT_URL = /^\/(fonts\/[\w.\-]+|api\/font\?f=[\w.()+%\-]+)$/;
+const FONT_URL = /^\/(fonts\/[\w.\-]+|api\/font\?f=[\w.()+%\-]+(&v=\d+)?)$/;   // v: yours, installed again, is fetched anew
 function loadFonts(again){
-  if (!FONTS.p || again) FONTS.p = fetch('/api/fonts').then(r => r.ok ? r.json() : {fonts:[]}).then(d => {
+  // a failed answer keeps the list there was, and the next call asks again
+  if (!FONTS.p || again) FONTS.p = fetch('/api/fonts').then(r => r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status))).then(d => {
     FONTS.list = (Array.isArray(d.fonts) ? d.fonts : []).filter(f => f && /^[\w .\-]{1,80}$/.test(f.family) && Array.isArray(f.faces))
       .map(f => Object.assign({}, f, {faces:f.faces.filter(x => x && FONT_URL.test(x.url))}));
     fontFaceRules();
     return FONTS.list;
-  }).catch(() => FONTS.list);
+  }).catch(() => { FONTS.p = null; return FONTS.list; });
   return FONTS.p;
 }
 function fontFaceRules(){
@@ -3754,11 +3755,23 @@ function fontFaceRules(){
   st.textContent = ['@font-face{font-family:"Fleet Symbols";src:url("/fonts/SymbolsNerdFontMono-Regular.ttf")}'].concat(FONTS.list.flatMap(f => f.faces.map(x =>
     `@font-face{font-family:"${f.family}";src:url("${x.url}");font-weight:${/^\d{1,4}$/.test(x.weight) ? x.weight : 400};font-style:${x.style === 'italic' ? 'italic' : 'normal'};font-display:swap}`))).join('\n');
 }
+// the faces of the fonts in the list Fleet has (named in any case, as CSS does): of each, the four a terminal draws with
+// (regular, bold, italic, bold italic), each the nearest weight in its style
 function termFaces(){
-  const want = termFontFamily().split(',').map(x => x.trim().replace(/^["']|["']$/g, ''));
-  return FONTS.list.filter(f => want.includes(f.family)).flatMap(f => f.faces.map(x => ({family:f.family, url:x.url, weight:String(x.weight || 400), style:x.style === 'italic' ? 'italic' : 'normal'})));
+  const want = termFontFamily().split(',').map(x => x.trim().replace(/^["']|["']$/g, '').toLowerCase());
+  return FONTS.list.filter(f => want.includes(f.family.toLowerCase())).flatMap(f => {
+    const fs = f.faces.map(x => ({family:f.family, url:x.url, weight:String(x.weight || 400), style:x.style === 'italic' ? 'italic' : 'normal'})), out = [];
+    for (const [w, st] of [[400, 'normal'], [700, 'normal'], [400, 'italic'], [700, 'italic']]){
+      const best = fs.filter(x => x.style === st).sort((a, b) => Math.abs(a.weight - w) - Math.abs(b.weight - w))[0];
+      if (best && !out.includes(best)) out.push(best);
+    }
+    return out;
+  });
 }
-function faceData(url){ return FONTS.data[url] || (FONTS.data[url] = fetch(url).then(r => r.ok ? r.arrayBuffer() : null).catch(() => null)); }
+// a face's data, kept once it came: one that didn't (the server restarting) is asked for again next time
+function faceData(url){
+  return FONTS.data[url] || (FONTS.data[url] = fetch(url).then(r => r.ok ? r.arrayBuffer() : null).catch(() => null).then(b => { if (!b) delete FONTS.data[url]; return b; }));
+}
 function fontPicked(){
   const m = /^"([\w .\-]{1,80})", monospace$/.exec(PREFS.termFontFamily || '');
   return m && FONTS.list.some(f => f.family === m[1]) ? m[1] : null;
@@ -3804,11 +3817,13 @@ async function installFonts(files){
 }
 async function removeFont(fam){
   if (!fam) return;
-  FONTS.msg = '';
-  try { await api('/api/fonts/remove', {family:fam}); } catch (e) { FONTS.msg = 'Couldn’t remove ' + fam + ': ' + e.message; }
-  FONTS.list.filter(f => f.family === fam).forEach(f => f.faces.forEach(x => delete FONTS.data[x.url]));
-  if (fontPicked() === fam){ PREFS = Object.assign({}, PREFS, {termFontFamily:''}); savePrefs('the terminal font'); sendTermFont(); }
-  FONTS.msg = FONTS.msg || 'Removed ' + fam + '.';
+  let r = null;
+  try { r = await api('/api/fonts/remove', {family:fam}); } catch (e) { r = {error:e.message}; }
+  if (r && r.removed > 0){   // only what the server removed: your choice falls back to Fleet's default
+    FONTS.msg = 'Removed ' + fam + '.';
+    FONTS.list.filter(f => f.family === fam).forEach(f => f.faces.forEach(x => delete FONTS.data[x.url]));
+    if (fontPicked() === fam){ PREFS = Object.assign({}, PREFS, {termFontFamily:''}); savePrefs('the terminal font'); sendTermFont(); }
+  } else FONTS.msg = 'Fleet didn’t remove ' + fam + (r && r.error ? ': ' + r.error : ': it found no file of it.');
   await loadFonts(true);
   renderTermFont();
 }
