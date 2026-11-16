@@ -49,10 +49,10 @@ class AtStart(unittest.TestCase):
             path = os.path.join(d, "connect.json")
             old, fl.CONNECT_PATH = fl.CONNECT_PATH, path
             try:
-                self.assertEqual(fl.load_connect(), {"auto": "all", "presets": {}})
+                self.assertEqual(fl.load_connect(), {"auto": "none", "presets": {}})   # nothing saved: no SSH machine at start (#224)
                 with open(path, "w") as f:
                     json.dump({"auto": "gone", "presets": {"lab": ["b", 3], "bad": "x"}}, f)
-                self.assertEqual(fl.load_connect(), {"auto": "all", "presets": {"lab": ["b", "3"]}})
+                self.assertEqual(fl.load_connect(), {"auto": "none", "presets": {"lab": ["b", "3"]}})
             finally:
                 fl.CONNECT_PATH = old
 
@@ -103,9 +103,9 @@ class Api(unittest.TestCase):
         r = self.f.api_connect({"auto": "Lab boxes"})
         self.assertEqual(r["connect"]["auto"], "Lab boxes")
         r = self.f.api_connect({"delete": "Lab boxes"})
-        self.assertEqual(r["connect"], {"auto": "all", "presets": {}, "starts": ["here", "a", "b"]})
+        self.assertEqual(r["connect"], {"auto": "none", "presets": {}, "starts": ["here"]})   # the set it used is gone: None
         with open(fl.CONNECT_PATH) as f:
-            self.assertEqual(json.load(f), {"auto": "all", "presets": {}})
+            self.assertEqual(json.load(f), {"auto": "none", "presets": {}})
 
     def test_save_a_set_of_machines_ticked_by_hand(self):
         r = self.f.api_connect({"save": "Picked", "machines": ["a", "here", "zzz"]})   # a is off now: it can still be picked

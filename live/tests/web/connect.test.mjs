@@ -133,3 +133,16 @@ test('Choose machines…: tick which machines connect at start, VMs under their 
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
 });
+
+test('with nothing saved, Auto reads None (#224)', async () => {
+  const fx = fixture();
+  const p = await browser.page(fx, {ui: ui({sel: 'fleet'})});
+  try {
+    await p.waitFor(`document.querySelector('[data-autoconn]')`);
+    assert.match(await p.eval(`document.querySelector('[data-autoconn]').textContent`), /Auto: None/);
+    await p.eval(`(document.querySelector('[data-autoconn]').click(), true)`);
+    await p.waitFor(`document.querySelector('#ctxmenu [role=menuitem]')`);
+    assert.deepEqual((await p.eval(MENU)).slice(0, 2), ['All machines', '✓ None']);
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});

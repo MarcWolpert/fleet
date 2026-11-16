@@ -57,7 +57,7 @@ def load_prefs():
 
 
 def load_connect():
-    """'Connect automatically': auto is all, none or the name of a saved set of machine ids."""
+    """'Connect automatically': auto is all, none or the name of a saved set of machine ids; none until chosen."""
     try:
         with open(CONNECT_PATH) as f:
             d = json.load(f)
@@ -66,7 +66,7 @@ def load_connect():
     d = d if isinstance(d, dict) else {}
     raw = d.get("presets") if isinstance(d.get("presets"), dict) else {}
     presets = {str(k)[:60]: [str(x)[:200] for x in v][:500] for k, v in raw.items() if isinstance(v, list)}
-    auto = d.get("auto") if d.get("auto") in ["all", "none"] + list(presets) else "all"
+    auto = d.get("auto") if d.get("auto") in ["all", "none"] + list(presets) else "none"   # nothing chosen: no SSH machine at start (#224)
     return {"auto": auto, "presets": presets}
 
 
@@ -1776,7 +1776,7 @@ class Fleet:
         elif "delete" in d:
             conn["presets"].pop(str(d["delete"]), None)
             if conn["auto"] not in conn["presets"] and conn["auto"] not in ("all", "none"):
-                conn["auto"] = "all"
+                conn["auto"] = "none"
         elif "auto" in d:
             if d["auto"] not in ["all", "none"] + list(conn["presets"]):
                 return {"ok": False, "error": "No such set.", "connect": self.connect_state()}

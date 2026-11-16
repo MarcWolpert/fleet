@@ -2809,7 +2809,7 @@ async function setConnected(id, on){
   } catch (e) { toast('Couldn’t change that connection'); }
   lastMainHTML = ''; refreshNow();
 }
-function autoLabel(c){ return !c || c.auto === 'all' ? 'All' : c.auto === 'none' ? 'None' : c.auto; }
+function autoLabel(c){ return !c || c.auto === 'none' ? 'None' : c.auto === 'all' ? 'All' : c.auto; }   // nothing chosen: None (#224)
 function renderAutoConn(){
   const box = $('autoconn'); if (!box || AC.naming) return;
   const c = DATA && DATA.connect, label = autoLabel(c);
@@ -2825,7 +2825,7 @@ async function connApi(body){
   AC.naming = false; renderAutoConn();
 }
 function openAutoConn(btn){
-  const c = (DATA && DATA.connect) || {auto:'all', presets:{}}, names = Object.keys(c.presets || {});
+  const c = (DATA && DATA.connect) || {auto:'none', presets:{}}, names = Object.keys(c.presets || {});
   const opt = (key, label) => ({label:(c.auto === key ? '✓ ' : '') + label, run:() => connApi({auto:key})});
   const r = btn.getBoundingClientRect();
   openCtx({title:'Connect when Fleet starts', items:[
@@ -2888,7 +2888,7 @@ function machineOS(n){ return n && n.kind === 'machine' ? osKey(n.os) : ''; }
 // Choose machines…: tick which machines Fleet connects to when it starts, VMs indented under their hosts (#216)
 function openChooseMachines(){
   if ($('choosem')) return;
-  const c = (DATA && DATA.connect) || {auto:'all', presets:{}}, inSet = c.presets && c.presets[c.auto];
+  const c = (DATA && DATA.connect) || {auto:'none', presets:{}}, inSet = c.presets && c.presets[c.auto];
   const ticked = id => c.auto === 'all' ? true : c.auto === 'none' ? false : !!(inSet && inSet.includes(id));
   const rows = [];
   (function walk(list, d){ list.forEach(n => {
