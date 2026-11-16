@@ -17,7 +17,9 @@ url() { printf 'file://%s' "$1" | sed -e 's/%/%25/g' -e 's/#/%23/g' -e 's/?/%3F/
 
 # When the img can't load the SVG (truncated, empty, missing), Chrome still screenshots its broken-image
 # placeholder, so the page marks a load and the DOM Chrome dumps must carry that mark before any icon is replaced.
-printf '<!doctype html><html><head><style>html,body{margin:0;background:transparent}img{display:block;width:1024px;height:1024px}</style></head><body><img src="%s" onload="document.body.dataset.loaded=1"></body></html>' \
+# The page says it is UTF-8, as the path in it is: a local file without a charset is read as windows-1252, and a
+# checkout under "Développement" would point the img at ".../DÃ©veloppement/...".
+printf '<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;background:transparent}img{display:block;width:1024px;height:1024px}</style></head><body><img src="%s" onload="document.body.dataset.loaded=1"></body></html>' \
   "$(url "$ICON/fleet.svg")" > "$WORK/render.html"
 # --use-mock-keychain: a fresh profile never asks the macOS keychain for Chrome's Safe Storage key, so a scratch HOME
 # (as the tests use, with no keychain) shows no "Keychain Not Found" dialog (#280).
