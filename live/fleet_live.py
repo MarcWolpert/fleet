@@ -2265,7 +2265,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             d = self.read_json() or {}
             try:
                 argv, title = terminal_target(self.fleet, str(d.get("node", "")))
-                used = open_terminal(self.fleet.cfg.get("terminal", "auto"), argv, title)
+                used = open_terminal(str(d.get("terminal") or self.fleet.cfg.get("terminal", "auto")), argv, title)   # one picked from Open in (#223), or the default
                 return self.send_json({"ok": True, "terminal": used, "title": title})
             except Exception as e:
                 return self.send_json({"ok": False, "error": str(e)[:300]})
