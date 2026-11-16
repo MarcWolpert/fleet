@@ -10,7 +10,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <script>try{var t=JSON.parse(localStorage.getItem('fleet-theme')||'null');if(t&&t.vars){var st=document.documentElement.style;for(var k in t.vars)if(/^#[0-9a-f]{6,8}$/i.test(t.vars[k]))st.setProperty('--'+k,t.vars[k]);st.colorScheme=t.dark?'dark':'light';}}catch(e){}</script>
 <style>
-:root{
+:root{--os-linux:#f6be2c;--os-windows:#3d9bff;--os-macos:var(--ink-2);--os-macos-ink:var(--panel);
   color-scheme: dark;
   --chrome:#141416; --chrome-2:#1e1e21; --win:#1d1d20; --side:#222226; --card:#29292e; --card-2:#313137;
   --hover:#ffffff0d; --sel:#3584e430; --line:#ffffff14; --line-2:#ffffff24;
@@ -50,12 +50,12 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-r
 .tile{width:28px;height:28px;border-radius:8px;display:grid;place-items:center;flex:none}
 .tile svg{width:16px;height:16px}
 .tile.fleet{background:var(--chrome-act);color:var(--ink-2)}
-.tile.laptop{background:#7a4a35;color:#ffe3d6}
-.tile.terminal{background:#15301c;color:#62e48f}
-.tile.server{background:#3a2416;color:var(--warn)}
-.tile.globe{background:#5b5fd6;color:#fff}
-.tile.desktop{background:#16365a;color:#8cc8ff}
-.tile.vm{background:#3d2215;color:var(--warn)}
+/* a machine's tile: its kind's theme colour, tinted (as the app's other tiles are) */
+.tile.laptop{--k:var(--g-flotilla)}.tile.terminal{--k:var(--g-division)}.tile.server{--k:var(--warn)}
+.tile.globe{--k:var(--g-fleet)}.tile.desktop{--k:var(--g-squadron)}.tile.vm{--k:var(--t-vm)}
+.tile.laptop,.tile.terminal,.tile.server,.tile.globe,.tile.desktop,.tile.vm{background:color-mix(in srgb, var(--k) 20%, transparent);color:var(--k)}
+.tile.ostile{display:block;overflow:hidden;padding:0}.tile.ostile svg{width:100%;height:100%;display:block}
+.ico.osico{width:26px;justify-content:start}.ico.osico svg{width:26px;height:20px;display:block}
 .addbtn{width:34px;height:34px;border-radius:9px;display:grid;place-items:center;color:var(--ink-3);flex:none}
 .addbtn svg{width:16px;height:16px}
 .addbtn:hover{background:var(--chrome-2);color:var(--ink)}

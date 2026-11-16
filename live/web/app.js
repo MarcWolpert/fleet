@@ -259,12 +259,12 @@ function miniBar(key){
 function renderSpaces(){
   const pills = [{key:'fleet', name:'All machines', tile:'fleet'}].concat(PINS.map(id => {
     const n = nodes[id];
-    return n ? {key:id, name:n.name, tile:n.kind === 'machine' ? n.tile : iconOf(n), tcol:n.kind === 'machine' ? '' : colOf(n), pinned:true, sub:n.kind === 'machine' || (n.kind === 'division' && !n.parent) ? '' : rootOf(n).name}
+    return n ? {key:id, name:n.name, tile:n.kind === 'machine' ? n.tile : iconOf(n), os:machineOS(n), tcol:n.kind === 'machine' ? '' : colOf(n), pinned:true, sub:n.kind === 'machine' || (n.kind === 'division' && !n.parent) ? '' : rootOf(n).name}
              : {key:id, name:id.split('/').pop(), tile:'cube', pinned:true, gone:true};
   }));
   $('spaces').innerHTML = pills.map(p => `<div class="space${S.space===p.key?' active':''}${p.pinned?' pinned':''}${p.gone?' gone':''}" title="${esc(p.name)}${p.sub ? ' · on ' + esc(p.sub) : ''}${p.gone ? ' · not seen right now' : ''}">`
     + `<button type="button" data-space="${esc(p.key)}" aria-pressed="${S.space===p.key}" style="display:flex;align-items:center;gap:10px;min-width:0;height:100%">`
-    + `<span class="tile ${p.tcol ? '' : p.tile}" ${p.tcol ? `style="background:color-mix(in srgb, ${p.tcol} 22%, transparent);color:${p.tcol}"` : ''}>${icon(p.tile)}</span><span class="nm">${esc(p.name)}</span>`
+    + (p.os ? tileHTML(p.tile, p.os, false) : `<span class="tile ${p.tcol ? '' : p.tile}" ${p.tcol ? `style="background:color-mix(in srgb, ${p.tcol} 22%, transparent);color:${p.tcol}"` : ''}>${icon(p.tile)}</span>`) + `<span class="nm">${esc(p.name)}</span>`
     + `<span class="mini" data-mini="${esc(p.key)}" aria-hidden="true">${p.gone ? '' : miniBar(p.key)}</span><span class="pc" data-pc="${esc(p.key)}">${p.gone ? 'gone' : pillPct(p.key)}</span></button>`
     + (p.pinned ? `<button type="button" class="unpin" data-unpin="${esc(p.key)}" aria-label="Unpin ${esc(p.name)}" title="Unpin">${icon('x', 2.4)}</button>` : '') + `</div>`).join('')
     + `<button type="button" class="addpin" data-addpin="1" aria-haspopup="dialog" aria-expanded="${PICK.open}" aria-label="Pin a grouping to the space bar" title="Pin a grouping">${icon('plus', 2)}</button>`;
@@ -429,7 +429,7 @@ function renderTree(){
     return `<div class="row ${n.kind}${st}${S.sel===n.id?' sel':''}" style="--d:${d}" role="treeitem" aria-level="${d+1}" ${kids?`aria-expanded="${open}"`:''} aria-selected="${S.sel===n.id}" data-select="${esc(n.id)}" data-pk="${esc(pk)}">`
       + `<span class="tdrag" draggable="true" title="Drag into a group" aria-hidden="true">${icon('grip')}</span>`
       + `<button type="button" class="chev${open?' open':''}${kids?'':' leaf'}" ${kids?`data-toggle="${esc(n.id)}" aria-label="${open?'Collapse':'Expand'} ${esc(n.name)}"`:'tabindex="-1" aria-hidden="true"'}>${icon('chev', 2.4)}</button>`
-      + `<span class="ico" style="color:${n.kind==='cronfolder'||n.kind==='cron'?'var(--ink-3)':colOf(n)}">${icon(iconOf(n))}</span>`
+      + `${machineOS(n) ? treeMachineIcon(n) : `<span class="ico" style="color:${n.kind==='cronfolder'||n.kind==='cron'?'var(--ink-3)':colOf(n)}">${icon(iconOf(n))}</span>`}`
       + `<button type="button" class="nm" data-select="${esc(n.id)}">${esc(n.name)}</button>${count}${gtag}${dot}${pin}`
       + `<svg class="spark" data-spark="${esc(n.id)}" viewBox="0 0 60 16" preserveAspectRatio="none" aria-hidden="true"><polyline points="${sparkPts(n.series[S.metric], 60, 16)}" fill="none" stroke="${n.kind==='machine'&&!n.parent?'var(--accent)':colOf(n)}" stroke-width="1.5" vector-effect="non-scaling-stroke" stroke-linejoin="round"/></svg>`
       + `<span class="val${n.kind === 'machine' && !isLive(n) ? ' dim' : ''}" data-val="${esc(n.id)}" title="share of host ${mlabel(S.metric)}">${rowVal(n)}</span></div>`;
@@ -887,7 +887,7 @@ function logicalCard(m){
 
 /* ---------- views ---------- */
 function typeSeries(getBt){ return TYPES.map(t => ({label:t.label, color:TCOL[t.id], data:Array.from({length:H}, (_, i) => getBt(i)[t.id])})).filter(s => s.data.some(v => v > 0)); }
-function heroMachineTile(m){ return `<span class="tile ${m.tile}">${icon(m.tile)}</span>`; }
+function heroMachineTile(m){ return tileHTML(m.tile, machineOS(m), true); }
 
 function fleetView(dv){
   const list = dv ? dv.children : roots, key = dv ? dv.id : 'fleet';
@@ -901,7 +901,7 @@ function fleetView(dv){
     const den = S.mode === 'cap' ? cap : (used || 1);
     const off = !hasData(r);
     const bar = off ? `<div class="sbar empty">${esc(diagnose(r).title)}</div>` : cap ? `<div class="sbar">${TYPES.filter(t => bt[t.id] > 0).map(t => `<span class="s" style="width:${Math.min(100, bt[t.id]/den*100).toFixed(3)}%;background:${TCOL[t.id]}" data-tip="seg|${esc(r.id)}|${S.metric}|${t.id}"></span>`).join('')}</div>` : `<div class="sbar empty">no ${mlabel(S.metric)}</div>`;
-    return `<div class="mrow"><button type="button" class="mbtn" data-select="${esc(r.id)}"><span class="tile ${r.tile}">${icon(r.tile)}</span><span>${esc(r.name)}</span><i class="sdot ${statusClass(r)}" title="${statusText(r)}"></i></button>${bar}<div class="tot">${!off && cap ? pct(used/cap*100) + ' used' : '—'}<small>${off ? '' : pct(used/(fleetUsed||1)*100) + ' of fleet ' + mlabel(S.metric)}</small></div></div>`;
+    return `<div class="mrow"><button type="button" class="mbtn" data-select="${esc(r.id)}">${tileHTML(r.tile, machineOS(r), false)}<span>${esc(r.name)}</span><i class="sdot ${statusClass(r)}" title="${statusText(r)}"></i></button>${bar}<div class="tot">${!off && cap ? pct(used/cap*100) + ' used' : '—'}<small>${off ? '' : pct(used/(fleetUsed||1)*100) + ' of fleet ' + mlabel(S.metric)}</small></div></div>`;
   }).join('');
   const tile = dv ? `<span class="tile" style="background:color-mix(in srgb, ${dv.color} 22%, transparent);color:${dv.color}">${icon(dv.id === 'pins' ? 'pin' : iconOf(dv))}</span>` : `<span class="tile fleet">${icon('fleet')}</span>`;
   return `<div class="hero">${tile}<div><h1>${dv ? esc(dv.name) : 'All machines'}</h1><div class="facts">${dv ? `<span>${dv.id === 'pins' ? 'your pins' : esc(kindLabel(dv))}</span>` : ''}<span>${live} of ${list.length} machines live</span><span>${nVm} VMs</span><span>${cronCount({children:list})} scheduled jobs</span><span>${c.cap('cpu')} cores</span><span>${Math.round(c.cap('mem'))} GB RAM</span></div></div>${heroStats([stat('cpu'), stat('mem'), stat('gpu')])}</div>`
@@ -1583,7 +1583,7 @@ function machineCard(m, i){
   const summary = local ? 'This computer' : [m.ssh || 'no SSH destination yet', m.os === 'windows' ? 'Windows' : m.os === 'macos' ? 'macOS' : 'Linux'].join(' · ') + (m.vm_on ? ' · VM' : '');
   const pill = stn ? `<span class="spill ${stn.status === 'ok' ? 'okp' : ''}">${esc(stn.status === 'ok' ? 'live' : stn.status)}</span>` : '<span class="spill">new</span>';
   const sel = (field, opts, val) => `<select data-field="${i}:${field}">${opts.map(([v, l]) => `<option value="${esc(v)}"${(val || '') === v ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select>`;
-  const head = `<button type="button" class="mcard-h" data-togglecard="${i}" aria-expanded="${open}"><span class="chev${open ? ' open' : ''}">${icon('chev', 2.4)}</span><span class="tile ${esc(tile)}">${icon(tile)}</span><span class="mtitle"><span class="mlabel" data-label="${i}">${esc(m.name || 'New machine')}</span><span class="msum">${esc(summary)}</span></span>${pill}</button>`;
+  const head = `<button type="button" class="mcard-h" data-togglecard="${i}" aria-expanded="${open}"><span class="chev${open ? ' open' : ''}">${icon('chev', 2.4)}</span>${tileHTML(tile, cardOS(m), false)}<span class="mtitle"><span class="mlabel" data-label="${i}">${esc(m.name || 'New machine')}</span><span class="msum">${esc(summary)}</span></span>${pill}</button>`;
   if (!open) return `<div class="mcard" data-card="${i}">${head}</div>`;
   return `<div class="mcard open" data-card="${i}">${head}<div class="mbody">
     <div class="mgrid">
@@ -1666,7 +1666,7 @@ function setField(t){
   const [i, k] = f.split(':'); const v = t.value;
   if (i === '-1') SET.draft[k] = v; else SET.draft.machines[+i][k] = v;
   const card = t.closest('.mcard');
-  if (card && k === 'tile') card.querySelector('.mcard-h .tile').outerHTML = `<span class="tile ${esc(v)}">${icon(v)}</span>`;
+  if (card && (k === 'tile' || k === 'os')){ const m = SET.draft.machines[+i]; card.querySelector('.mcard-h .tile').outerHTML = tileHTML(m.tile || (m.kind === 'local' ? 'laptop' : 'terminal'), cardOS(m), false); }
   if (card && k === 'name'){ const l = card.querySelector('.mlabel'); if (l) l.textContent = v || 'New machine'; }
 }
 $('sheet').addEventListener('input', e => setField(e.target));
@@ -2787,3 +2787,42 @@ function startNaming(){
   });
   i.addEventListener('blur', () => setTimeout(() => { if (AC.naming && document.activeElement !== i){ AC.naming = false; renderAutoConn(); } }, 150));
 }
+
+/* ---------- machine tiles that show the OS (#214: icon set #23, "side tag split") ---------- */
+// A strip down the right in the OS colour, with the OS's glyph on it; the kind icon to its left. The glyphs are plain
+// shapes (a penguin, four panes, an apple without a bite), not the vendors' logos.
+const OSG_PB = 'M12 2.6C9.3 2.6 7.9 4.8 7.9 7.6c0 1.5-.7 2.7-1.6 4C5.1 13.4 4.5 15.4 5 17.6c.4 1.8 1.8 3.2 3.6 3.6h6.8c1.8-.4 3.2-1.8 3.6-3.6.5-2.2-.1-4.2-1.3-6-.9-1.3-1.6-2.5-1.6-4 0-2.8-1.4-5-4.1-5z', OSG_BELLY = '<ellipse cx="12" cy="15.8" rx="3.7" ry="4.7"/>', OSG_APPLE = 'M12 8.2C10.6 7.2 8.8 6.8 7.2 7.5 4.9 8.5 4.2 11.3 4.8 13.9c.6 2.7 2.4 6.1 4.6 6.4 1 .1 1.6-.4 2.6-.4s1.6.5 2.6.4c2.2-.3 4-3.7 4.6-6.4.6-2.6-.1-5.4-2.4-6.4-1.6-.7-3.4-.3-4.8.7z', OSG_LEAF = 'M12.3 6.6c0-2 1.3-3.4 3.3-3.6 0 2-1.3 3.4-3.3 3.6z', OSG_PANES = '<rect x="4" y="4" width="7.3" height="7.3" rx=".9"/><rect x="12.7" y="4" width="7.3" height="7.3" rx=".9"/><rect x="4" y="12.7" width="7.3" height="7.3" rx=".9"/><rect x="12.7" y="12.7" width="7.3" height="7.3" rx=".9"/>';
+function osKey(s){
+  s = String(s || '');
+  if (/windows/i.test(s)) return 'windows';
+  if (/mac ?os|darwin|os x/i.test(s)) return 'macos';
+  if (/linux|ubuntu|debian|unraid|fedora|cent ?os|rhel|red hat|rocky|alma|alpine|arch|manjaro|nixos|suse|mint|pop!?_os|raspbian|gentoo|truenas|proxmox/i.test(s)) return 'linux';
+  return '';
+}
+function osGlyph(os, lo){
+  if (os === 'linux') return `<ellipse cx="9.3" cy="21.1" rx="2.6" ry="1.2" fill="#e07800"/><ellipse cx="14.7" cy="21.1" rx="2.6" ry="1.2" fill="#e07800"/><path d="${OSG_PB}" fill="#18181b"/><g fill="#fafafa">${OSG_BELLY}</g>`
+    + (lo ? '' : `<circle cx="10.5" cy="7.1" r="1.15" fill="#fff"/><circle cx="13.5" cy="7.1" r="1.15" fill="#fff"/><circle cx="10.7" cy="7.3" r=".5" fill="#18181b"/><circle cx="13.3" cy="7.3" r=".5" fill="#18181b"/><path d="M10.4 9.1h3.2L12 11z" fill="#f6be2c"/>`);
+  if (os === 'windows') return `<g fill="#ffffff">${OSG_PANES}</g>`;
+  return `<path d="${OSG_APPLE}" fill="var(--os-macos-ink)"/><path d="${OSG_LEAF}" fill="var(--os-macos-ink)"/>`;
+}
+// the tree keeps its line icons: the kind icon in its usual colour, then the OS tag beside it
+function treeMachineIcon(n){
+  const os = machineOS(n), col = colOf(n);
+  return `<span class="ico osico" data-os="${os}" title="${{linux:'Linux', windows:'Windows', macos:'macOS'}[os]}" style="color:${col}"><svg viewBox="0 0 31 24" aria-hidden="true">`
+    + `<g class="kind-icon" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" transform="translate(0 1) scale(.92)">${IC[n.tile] || IC.terminal}</g>`
+    + `<rect class="os-strip" x="23" y="1.5" width="8" height="21" rx="2.5" fill="var(--os-${os})"/>`
+    + `<g class="os-glyph" transform="translate(23.4 8.4) scale(${(7.2 / 24).toFixed(4)})">${osGlyph(os, true)}</g></svg></span>`;
+}
+// big: the machine page's 46 px tile (set #23 at 40 px); otherwise its small layout (20-28 px tiles)
+function tileHTML(kind, os, big){
+  if (!os) return `<span class="tile ${esc(kind)}">${icon(kind)}</span>`;
+  const w = big ? 11 : 14, s = 21, gs = big ? 9.6 : 11.5, x = big ? 4.5 : 2;   // the icon on the left, the strip right of it
+  const at = (m, cx, cy, size) => `<g transform="translate(${(cx - size / 2).toFixed(2)} ${(cy - size / 2).toFixed(2)}) scale(${(size / 24).toFixed(4)})">${m}</g>`;
+  return `<span class="tile ${esc(kind)} ostile" data-os="${os}" title="${{linux:'Linux', windows:'Windows', macos:'macOS'}[os]}"><svg viewBox="0 0 40 40" aria-hidden="true">`
+    + `<g class="kind-icon" transform="translate(${x} ${20 - s / 2}) scale(${(s / 24).toFixed(4)})" fill="none" stroke="currentColor" stroke-width="${big ? 2 : 2.3}" stroke-linecap="round" stroke-linejoin="round">${IC[kind] || IC.terminal}</g>`
+    + `<rect class="os-strip" x="${40 - w}" width="${w}" height="40" fill="var(--os-${os})"/>`
+    + `<g class="os-glyph">${at(osGlyph(os, !big), 40 - w / 2, 20.2, gs)}</g></svg></span>`;
+}
+// a Settings card's machine: its chosen OS, or this computer's own
+function cardOS(m){ return m.kind === 'local' ? machineOS(nodes[m.id] || Object.values(nodes).find(n => n.kind === 'machine' && n.agent === 'local')) : osKey(m.os || 'linux'); }
+function machineOS(n){ return n && n.kind === 'machine' ? osKey(n.os) : ''; }

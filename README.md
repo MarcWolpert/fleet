@@ -59,6 +59,7 @@ plus an app window.
 | ✅ | Docker Desktop on a Mac: its containers are listed directly and its Linux VM is folded into Base system (never counted twice); Details lists each container's processes from `docker top`, with the VM's PID tagged **VM** |
 | ✅ | Details drop-down: click a process to see what it mostly waits on (CPU, disk, memory, GPU, locks, network…), its cache misses, limits, sockets, files and threads; the list holds still while it's open |
 | ✅ | Connections: the dot on a machine's row (or its right-click menu) turns its SSH connection off and on. **Auto** beside + Add a machine picks which machines Fleet connects to when it starts: All, None, or a set you save (*Save what's connected now as a set…*), so a start at login opens no session and asks for no key you didn't want. Kept in `~/.config/fleet/connect.json` |
+| ✅ | Machine tiles show the OS at a glance: a strip in the OS colour (Linux amber, Windows blue, macOS in the theme's ink) with a penguin, four panes or an apple, beside the machine's kind icon; in the tree, beside its line icon. Tiles take their colours from the theme |
 | ✅ | macOS app and Linux package, with the Fleet icon |
 | ✅ | Right-click anything (a process, a tree row, a CPU, CCD, GPU, disk or interface tile, a space) for what fits it: details, show it in the tree, pin, open a terminal, copy its PID, name, command line or SSH destination; ⇧F10 does the same from the keyboard |
 | ⬜ | Native app (the Mission Center fork) on macOS, Linux and Windows |
