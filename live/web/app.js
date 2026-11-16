@@ -1272,6 +1272,19 @@ function filterChips(fs){
 }
 // Details groups are collapsed unless opened; open ones are kept per Group-by mode.
 function groupOpen(mode, g){ return !!(S.groupOpen && S.groupOpen[mode] && S.groupOpen[mode].includes(String(g))); }
+// Groups that hold still (#354). GSEL: the group whose header you clicked or moved the focus to; while it's selected
+// the groups keep the order they had then. GHELD: with Hold group order on (prefs.holdGroups), the order each
+// machine's groups have per Group-by mode, kept for this window (a reload keeps it). Either way their numbers update,
+// new groups come in last and ended ones go.
+let GSEL = null;
+const GHELD = (() => { try { const o = JSON.parse(sessionStorage.getItem('fleet-gheld') || '{}'); return Object.fromEntries(Object.entries(o || {}).filter(([, v]) => Array.isArray(v))); } catch (e) { return {}; } })();
+function heldOrder(ordered, keep){ const at = new Map(keep.map((g, i) => [g, i])); return ordered.filter(x => at.has(x[0])).sort((a, b) => at.get(a[0]) - at.get(b[0])).concat(ordered.filter(x => !at.has(x[0]))); }
+function rememberGroups(key, gs){
+  const old = GHELD[key] || [], add = gs.filter(g => !old.includes(g));
+  if (GHELD[key] && !add.length) return;
+  GHELD[key] = old.concat(add);
+  try { sessionStorage.setItem('fleet-gheld', JSON.stringify(GHELD)); } catch (e) {}
+}
 function setGroupsOpen(mode, names){ S.groupOpen = Object.assign({}, S.groupOpen, {[mode]:names}); save(); renderMain(); }
 function detailsView(n, docked){
   const mid = procMachineFor(n);
@@ -1318,10 +1331,12 @@ function detailsView(n, docked){
   if (holding){ const pos = new Map(INSP.order.map((pid, i) => [pid, i])); list = list.filter(p => pos.has(p[0])).sort((a, b) => pos.get(a[0]) - pos.get(b[0])).concat(list.filter(p => !pos.has(p[0]))); }
   const groupBy = {none:null, cpugroup:groupOf, owner:p => nodes[p[10]] ? p[10] : '—', user:p => p[2] || '—', state:p => stateLabel(p[3]) || '—'}[S.group];
   const LIMIT = 400;
-  let body = '', shown = 0, more = '';
+  let body = '', shown = 0, more = '', gselOn = false;
   const isInsp = p => INSP.pid === p[0] && INSP.mid === mid;
   let inspShown = false;
-  const rowHTML = p => `<tr data-pid="${esc(p[0])}" aria-expanded="${isInsp(p)}" class="drow${isInsp(p) ? ' open' : ''}">${COLS.map(c => `<td class="${c.l ? 'l' : ''} ${c.cls || ''}">${c.show(p)}</td>`).join('')}</tr>`  // data-pid: columns can move or hide
+  // a column with a width of its own (#334) is that wide whatever its cells hold; the rest size to their content
+  const CW = colWidths(), cellW = c => CW[c.k] ? ` style="max-width:${CW[c.k]}px"` : '';
+  const rowHTML = p => `<tr data-pid="${esc(p[0])}" aria-expanded="${isInsp(p)}" class="drow${isInsp(p) ? ' open' : ''}">${COLS.map(c => `<td class="${c.l ? 'l' : ''} ${c.cls || ''}${CW[c.k] ? ' fw' : ''}"${cellW(c)}>${c.show(p)}</td>`).join('')}</tr>`  // data-pid: columns can move or hide
     + (isInsp(p) ? (inspShown = true, `<tr class="pinsp" data-row="insp:${esc(p[0])}"><td colspan="${COLS.length}">${inspectPanel(p)}</td></tr>`) : '');
   if (groupBy){
     // Groups start collapsed, each header a summary; open ones are remembered per Group-by mode (S.groupOpen)
@@ -1332,7 +1347,12 @@ function detailsView(n, docked){
     const names = S.group === 'owner' ? [...groups.keys()].map(ownerName) : [];
     const label = g => { const o = S.group === 'owner' && nodes[g]; if (!o) return g; const par = o.kind === 'cron' ? ownerOf(o) : o.parent; return names.filter(x => x === o.name).length > 1 && par ? o.name + ' · ' + par.name : o.name; };
     let ordered = [...groups.entries()].sort((a, b) => b[1].reduce((s, p) => s + p[4], 0) - a[1].reduce((s, p) => s + p[4], 0));
-    if (holding && INSP.gorder){ const gp = new Map(INSP.gorder.map((g, i) => [g, i])); ordered = ordered.filter(x => gp.has(x[0])).sort((a, b) => gp.get(a[0]) - gp.get(b[0])).concat(ordered.filter(x => !gp.has(x[0]))); }
+    // the groups hold still: Hold group order is on, a process is open, or a group is selected (#354)
+    const gkey = mid + '|' + S.group;
+    gselOn = !!(GSEL && GSEL.mid === mid && GSEL.mode === S.group && groups.has(GSEL.g));
+    const keep = (PREFS.holdGroups && GHELD[gkey]) || (holding && INSP.gorder) || (gselOn && GSEL.order);
+    if (keep) ordered = heldOrder(ordered, keep);
+    if (PREFS.holdGroups && all) rememberGroups(gkey, ordered.map(x => x[0]));
     const isOpen = g => groupOpen(S.group, g);
     const nOpen = ordered.filter(([g]) => isOpen(g)).length;
     const per = nOpen ? Math.max(10, Math.floor(LIMIT / nOpen)) : 0;
@@ -1340,7 +1360,11 @@ function detailsView(n, docked){
     ordered.forEach(([g, ps]) => {
       const c = ps.reduce((s, p) => s + p[4], 0), mem = ps.reduce((s, p) => s + p[5], 0), open = isOpen(g);
       const dk = ps.reduce((s, p) => s + (p[6] || 0), 0), nt = ps.reduce((s, p) => s + Math.max(0, p[16] || 0), 0);
-      body += `<tr class="gh"><td colspan="${COLS.length}"><button type="button" class="ghbtn" data-gtoggle="${esc(g)}" aria-expanded="${open}" aria-label="${open ? 'Collapse' : 'Expand'} ${esc(label(g))}">${icon('chev', 2.4)}${esc(label(g))}<span>${ps.length} process${ps.length === 1 ? '' : 'es'} · CPU ${pct(c / ncpu * 100)} · ${memText(mem)}${dk > 0 ? ' · disk ' + rateText(dk) : ''}${nt > 0 ? ' · net ' + rateText(nt) : ''}</span></button></td></tr>`;
+      // the selected one says it holds the groups, small, in its own row (on the right, in sight however wide the table):
+      // nothing moves when it comes and goes. Tab goes from header to header; Esc lets go, so Resume is for the mouse.
+      // The rest of the row stays the header's button, so a second click on it still toggles that group.
+      const sel = gselOn && GSEL.g === g, note = sel && !holding && !PREFS.holdGroups;
+      body += `<tr class="gh${sel ? ' gsel' : ''}"><td colspan="${COLS.length}"><div class="ghrow"><button type="button" class="ghbtn" data-gtoggle="${esc(g)}" aria-expanded="${open}"${sel ? ' aria-current="true"' : ''}${note ? ' aria-describedby="ghhold"' : ''} aria-label="${open ? 'Collapse' : 'Expand'} ${esc(label(g))}">${icon('chev', 2.4)}${esc(label(g))}<span>${ps.length} process${ps.length === 1 ? '' : 'es'} · CPU ${pct(c / ncpu * 100)} · ${memText(mem)}${dk > 0 ? ' · disk ' + rateText(dk) : ''}${nt > 0 ? ' · net ' + rateText(nt) : ''}</span></button>${note ? `<div class="ghhold" title="The groups hold their places while this one is selected; Esc or Resume lets go">${icon('pin')}<span id="ghhold">Order held</span><button type="button" class="btn" data-gselclose="1" tabindex="-1" title="Resume live order (Esc)">Resume</button></div>` : ''}</div></td></tr>`;
       if (!open){ closedN += ps.length; closedG++; return; }
       ps.slice(0, per).forEach(p => { body += rowHTML(p); shown++; });
       cut += Math.max(0, ps.length - per);
@@ -1362,14 +1386,16 @@ function detailsView(n, docked){
   const head = docked
     ? `<div class="dhead"><div class="dtitle"><b>Details · ${esc(n.name)}${FS.length ? ' · ' + esc(FS.map(f => f.label).join(' · ')) : ''}</b><span>${count} on ${esc(m ? m.name : '')}</span></div><button type="button" class="iconbtn" data-undock="1" title="Pop out to the full Details view" aria-label="Pop out Details">${icon('layers')}</button><button type="button" class="iconbtn" data-closedock="1" title="Close the Details panel" aria-label="Close the Details panel">${icon('x', 2.2)}</button></div>`
     : `<div class="hero"><span class="tile" style="background:var(--track);color:var(--ink-2)">${icon('chip')}</span><div><h1>Details · ${esc(n.name)}${FS.length ? ' · ' + esc(FS.map(f => f.label).join(' · ')) : ''}</h1><div class="facts"><span>${count}</span><span>on ${esc(m ? m.name : '')}</span>${hasGroups ? `<span>CPU groups: ${esc(m.groups.map(g => g.name).join(', '))}</span>` : ''}</div></div><button type="button" class="btn" data-dock="1" style="margin-left:auto" title="Or drag the Details pill onto the right side">${icon('layers')}Dock to the right</button></div>`;
-  const tools = `<div class="dtools"><input type="search" id="pfilter" placeholder="Filter by name, PID, user or command" value="${esc(S.filter)}" aria-label="Filter processes"><label>Group by <select id="pgroup"><option value="none"${S.group==='none'?' selected':''}>Nothing</option><option value="cpugroup"${S.group==='cpugroup'?' selected':''}>CPU group (CCD, P-/E-cores)</option><option value="owner"${S.group==='owner'?' selected':''}>Where it runs (tree node)</option><option value="user"${S.group==='user'?' selected':''}>User</option><option value="state"${S.group==='state'?' selected':''}>Status</option></select></label>${groupBy ? `<span class="gall"><button type="button" class="btn" data-gall="open">Expand all</button><button type="button" class="btn" data-gall="close">Collapse all</button></span>` : ''}</div>`;
-  const thead = `<tr>${COLS.map(c => `<th class="${c.l ? 'l' : ''}" data-colk="${c.k}" ${c.k === SORT.k ? `aria-sort="${dir < 0 ? 'descending' : 'ascending'}"` : ''}><button type="button" data-sort="${c.k}" title="Sort; right-click to choose and arrange columns">${c.label}${c.k === SORT.k ? (dir < 0 ? ' ↓' : ' ↑') : ''}</button></th>`).join('')}</tr>`;
+  const tools = `<div class="dtools"><input type="search" id="pfilter" placeholder="Filter by name, PID, user or command" value="${esc(S.filter)}" aria-label="Filter processes"><label>Group by <select id="pgroup"><option value="none"${S.group==='none'?' selected':''}>Nothing</option><option value="cpugroup"${S.group==='cpugroup'?' selected':''}>CPU group (CCD, P-/E-cores)</option><option value="owner"${S.group==='owner'?' selected':''}>Where it runs (tree node)</option><option value="user"${S.group==='user'?' selected':''}>User</option><option value="state"${S.group==='state'?' selected':''}>Status</option></select></label>${groupBy ? `<label class="ghold" title="Groups keep their places while their numbers update; new ones go last. Without it, a group you select holds them while it’s selected."><input type="checkbox" id="pghold"${PREFS.holdGroups ? ' checked' : ''}>Hold group order</label>` : ''}${groupBy ? `<span class="gall"><button type="button" class="btn" data-gall="open">Expand all</button><button type="button" class="btn" data-gall="close">Collapse all</button></span>` : ''}</div>`;
+  // each header ends in a divider: drag it (or ←/→ on it) to resize the column, double-click it (or Delete) for automatic width
+  const grip = c => `<span class="colgrip" data-colgrip="${c.k}" role="separator" aria-orientation="vertical" tabindex="0" aria-label="Resize the ${esc(c.label)} column" ${CW[c.k] ? `aria-valuenow="${CW[c.k]}" aria-valuemin="${COL_MIN}" aria-valuemax="${COL_MAX}"` : 'aria-valuetext="automatic width"'} title="Drag to resize; double-click for automatic width"></span>`;
+  const thead = `<tr>${COLS.map(c => `<th class="${c.l ? 'l' : ''}${CW[c.k] ? ' fw' : ''}" data-colk="${c.k}" ${CW[c.k] ? `style="width:${CW[c.k]}px;min-width:${CW[c.k]}px;max-width:${CW[c.k]}px" ` : ''}${c.k === SORT.k ? `aria-sort="${dir < 0 ? 'descending' : 'ascending'}"` : ''}><button type="button" data-sort="${c.k}" title="Sort; drag to move (${ALTK}← ${ALTK}→); right-click to choose and arrange columns">${c.label}${c.k === SORT.k ? (dir < 0 ? ' ↓' : ' ↑') : ''}</button>${grip(c)}</th>`).join('')}</tr>`;
   const applied = FS.filter(f => f.apply);
   // the open process isn't in the list any more (it exited, or the filter hides it): its drop-down goes first
   if (INSP.pid && INSP.mid === mid && !inspShown && all) body = `<tr class="pinsp" data-row="insp:${esc(INSP.pid)}"><td colspan="${COLS.length}">${inspectPanel(null)}</td></tr>` + body;
   if (applied.length && all && !list.length && !INSP.pid) body = `<tr class="empty"><td colspan="${COLS.length}" class="l" style="padding:18px 10px;color:var(--ink-3)">No process matches ${esc(applied.map(f => f.short).concat(q ? ['“' + S.filter.trim() + '”'] : []).join(' + '))} right now.</td></tr>`;
   const hold = holding ? `<div class="holdbar">${icon('pin')}<span>Rows hold their places while <b>${esc(INSP.name || 'PID ' + INSP.pid)}</b> is open</span><button type="button" class="btn" data-inspclose="1">Resume live order</button></div>` : '';
-  return head + groupNote + offNote + `<section class="card">${tools}${filterChips(FS)}${hold}<div class="pscroll"><table class="ptbl" data-mid="${esc(mid)}"><thead>${thead}</thead><tbody>${body}</tbody></table>${more ? `<div class="more">${more}</div>` : ''}</div></section>`;
+  return head + groupNote + offNote + `<section class="card">${tools}${filterChips(FS)}${hold}<div class="pscroll"><table class="ptbl${COLS.every(c => CW[c.k]) ? ' allfixed' : ''}" data-mid="${esc(mid)}"><thead>${thead}</thead><tbody>${body}</tbody></table>${more ? `<div class="more">${more}</div>` : ''}</div></section>`;
 }
 
 /* ---------- network detail ---------- */
@@ -1424,15 +1450,16 @@ function selAt(root, e){
 }
 function mainPage(){ return [S.tree, S.tree === 'network' ? S.netSel : '', S.sel, S.view, S.metric, S.cpuView, S.gpuView, S.diskView, S.ifView, S.detailsDocked ? 'dock' : ''].join('|'); }
 let resizing = false;  // the docked panel's edge is being dragged: hold the page still till it's let go
+const COLDRAG = {on:false, move:null};   // so is a Details column's divider or header (see "Details columns by hand")
 function renderMain(){
-  if (resizing) return;  // a rebuild would replace the handle, which drops its pointer capture and strands the drag
+  if (resizing || COLDRAG.on) return;  // a rebuild would replace the handle, which drops its pointer capture and strands the drag
   renderFilterBar();
   const main = $('main');
   const a = document.activeElement;
   let refocus = null, refocusAt = 0, selStart = null, selStop = null, selDir;   // selStop: not selEnd, the selection helper above
   if (a && main.contains(a)){
     if (a.id) { refocus = '#' + a.id; selStart = a.selectionStart; selStop = a.selectionEnd; selDir = a.selectionDirection; }
-    else if (a.dataset) for (const k of ['select', 'mode', 'sort', 'pin', 'cpuview', 'netsel', 'gtoggle', 'gall', 'tilesort', 'lcpu', 'lgroup', 'tpin', 'cardfold', 'lgfold']) if (a.dataset[k] != null){ refocus = `[data-${k}="${CSS.escape(a.dataset[k])}"]`; break; }
+    else if (a.dataset) for (const k of ['select', 'mode', 'sort', 'colgrip', 'pin', 'cpuview', 'netsel', 'gtoggle', 'gall', 'tilesort', 'lcpu', 'lgroup', 'tpin', 'cardfold', 'lgfold']) if (a.dataset[k] != null){ refocus = `[data-${k}="${CSS.escape(a.dataset[k])}"]`; break; }
     if (refocus) refocusAt = Math.max(0, [...main.querySelectorAll(refocus)].indexOf(a));   // a view can draw the same button twice (a card and a table)
   }
   let html;
@@ -1975,6 +2002,14 @@ const COL_DEFAULTS = {
   net:['name', 'pid', 'owner', 'net', 'ifaces', 'cpu', 'mem', 'cmd']
 };
 function colType(){ return COL_DEFAULTS[S.metric] ? S.metric : 'cpu'; }
+// Widths you gave columns by hand (#334), per detail type like the layout: {cpu:{name:180}}; the others size to their content.
+const COL_MIN = 40, COL_MAX = 1600;
+const colClamp = w => Math.max(COL_MIN, Math.min(COL_MAX, Math.round(w)));
+function colWidths(){
+  const w = (PREFS.colWidths || {})[colType()], o = {};
+  if (w && typeof w === 'object') for (const [k, v] of Object.entries(w)) if (COL_LABELS[k] && Number.isFinite(v)) o[k] = colClamp(v);
+  return o;
+}
 function colLayout(){ const l = ((PREFS.columns || {})[colType()] || []).filter(k => COL_LABELS[k]); return l.length ? l : COL_DEFAULTS[colType()]; }
 // A header click sorts that detail type; until then every type keeps the usual default (CPU, highest first).
 function detailSort(){ const s0 = (S.sorts || {})[colType()]; return s0 && COL_LABELS[s0.k] ? s0 : (S.sort && COL_LABELS[S.sort.k] ? S.sort : {k:'cpu', dir:-1}); }
@@ -2021,7 +2056,7 @@ document.addEventListener('click', e => {
   const a = e.target.closest('[data-colact]'); if (!a) return;
   const [act, k] = a.dataset.colact.split('|'), vis = colLayout().slice(), i = vis.indexOf(k);
   if (act === 'close') return closeColMenu();
-  if (act === 'reset') return setColLayout(COL_DEFAULTS[colType()].slice());
+  if (act === 'reset'){ PREFS = Object.assign({}, PREFS, {colWidths:Object.assign({}, PREFS.colWidths, {[colType()]:{}})}); return setColLayout(COL_DEFAULTS[colType()].slice()); }   // and automatic widths (#334)
   if (act === 'hide' && vis.length > 1){ vis.splice(i, 1); COLMENU.focus = ''; }
   if (act === 'left' && i > 0) [vis[i - 1], vis[i]] = [vis[i], vis[i - 1]];
   if (act === 'right' && i >= 0 && i < vis.length - 1) [vis[i + 1], vis[i]] = [vis[i], vis[i + 1]];
@@ -2048,6 +2083,162 @@ document.addEventListener('drop', e => {
   vis.splice(to, 0, vis.splice(from, 1)[0]);
   setColLayout(vis);
 });
+
+
+/* ---------- Details columns by hand (#334): resize at the dividers, move by dragging a header ---------- */
+// While either drag lasts the page holds still (COLDRAG.on: renderMain draws nothing), so a poll can't replace the
+// header under the pointer; letting go draws what came in meanwhile. A resize freezes every column at the width it
+// has, so only the one being dragged changes and its divider stays under the pointer.
+function colSay(msg){
+  let el = $('colsay');
+  if (!el){ el = document.createElement('div'); el.id = 'colsay'; el.className = 'sr'; el.setAttribute('role', 'status'); el.setAttribute('aria-live', 'polite'); document.body.appendChild(el); }
+  el.textContent = msg;
+}
+async function setColWidth(k, w){
+  const mine = colWidths();
+  if (w == null) delete mine[k]; else mine[k] = colClamp(w);
+  PREFS = Object.assign({}, PREFS, {colWidths:Object.assign({}, PREFS.colWidths, {[colType()]:mine})});
+  colSay(COL_LABELS[k] + ': ' + (w == null ? 'automatic width' : mine[k] + ' px wide'));
+  lastMainHTML = ''; renderMain();
+  await savePrefs('the column widths');
+}
+function moveCol(k, to){
+  const vis = colLayout().slice(), from = vis.indexOf(k);
+  to = Math.max(0, Math.min(vis.length - 1, to));
+  if (from < 0 || from === to) return false;
+  vis.splice(to, 0, vis.splice(from, 1)[0]);
+  colSay(`${COL_LABELS[k]} moved to column ${to + 1} of ${vis.length}`);
+  setColLayout(vis);
+  return true;
+}
+// a drag that moved something ends in a click on whatever is under the pointer: that click isn't a sort
+function eatClick(){
+  const stop = e => { e.stopPropagation(); e.preventDefault(); };
+  addEventListener('click', stop, {capture:true, once:true});
+  setTimeout(() => removeEventListener('click', stop, {capture:true}), 0);
+}
+document.addEventListener('pointerdown', e => {
+  if (e.button !== 0 || !e.target.closest) return;
+  const g = e.target.closest('.ptbl [data-colgrip]');
+  if (g){
+    e.preventDefault();
+    const th = g.closest('th'), tbl = th.closest('.ptbl'), ths = [...tbl.querySelectorAll('thead th')], i = ths.indexOf(th), k = g.dataset.colgrip;
+    const ws = ths.map(t => t.getBoundingClientRect().width), x0 = e.clientX, total = ws.reduce((a, b) => a + b, 0);
+    const kept = ths.map(t => t.getAttribute('style')), keptTbl = tbl.getAttribute('style');
+    ths.forEach((t, j) => { t.style.minWidth = t.style.maxWidth = ''; t.style.width = ws[j] + 'px'; });
+    tbl.style.width = total + 'px'; tbl.classList.add('colfrozen'); g.classList.add('on');
+    try { g.setPointerCapture(e.pointerId); } catch (x) {}
+    COLDRAG.on = true;
+    let w = ws[i], moved = false;
+    const move = ev => { w = Math.max(COL_MIN, Math.min(COL_MAX, ws[i] + ev.clientX - x0)); moved = moved || ev.clientX !== x0; th.style.width = w + 'px'; tbl.style.width = (total - ws[i] + w) + 'px'; };
+    const up = () => {
+      g.removeEventListener('pointermove', move); RESIZE_ENDS.forEach(t => g.removeEventListener(t, up));
+      COLDRAG.on = false;
+      if (moved){ setColWidth(k, w); return; }
+      // a press without a move (a double-click's first half): put the header back as it was drawn
+      ths.forEach((t, j) => kept[j] == null ? t.removeAttribute('style') : t.setAttribute('style', kept[j]));
+      keptTbl == null ? tbl.removeAttribute('style') : tbl.setAttribute('style', keptTbl);
+      tbl.classList.remove('colfrozen'); g.classList.remove('on');
+      renderMain();
+    };
+    g.addEventListener('pointermove', move); RESIZE_ENDS.forEach(t => g.addEventListener(t, up));
+    return;
+  }
+  const th = e.target.closest('.ptbl thead th[data-colk]');
+  if (th && !COLDRAG.on) COLDRAG.move = {th, k:th.dataset.colk, id:e.pointerId, x0:e.clientX, on:false, gap:-1};
+});
+document.addEventListener('dblclick', e => {
+  const g = e.target.closest && e.target.closest('.ptbl [data-colgrip]'); if (!g) return;
+  e.preventDefault(); setColWidth(g.dataset.colgrip, null);
+});
+// Moving: past a few pixels the press on a header becomes a drag; a bar shows the gap it would go into.
+function colGap(m, x){
+  const ths = [...m.th.closest('tr').children], rs = ths.map(t => t.getBoundingClientRect());
+  const gap = rs.filter(r => r.left + r.width / 2 < x).length;
+  return {gap, x:gap < rs.length ? rs[gap].left : rs[rs.length - 1].right};
+}
+function endColMove(m, apply){
+  COLDRAG.move = null; if (!m.on) return;
+  COLDRAG.on = false; m.th.classList.remove('colmoving');
+  const d = $('coldrop'); if (d) d.hidden = true;
+  try { m.th.releasePointerCapture(m.id); } catch (e) {}
+  eatClick();
+  if (apply){ const from = colLayout().indexOf(m.k), to = m.gap > from ? m.gap - 1 : m.gap; if (moveCol(m.k, to)) return; }
+  renderMain();
+}
+document.addEventListener('pointermove', e => {
+  const m = COLDRAG.move; if (!m || e.pointerId !== m.id) return;
+  if (!m.on){
+    if (!(e.buttons & 1)){ COLDRAG.move = null; return; }
+    if (Math.abs(e.clientX - m.x0) < 6) return;
+    m.on = true; COLDRAG.on = true; m.th.classList.add('colmoving');
+    try { m.th.setPointerCapture(m.id); } catch (x) {}
+  }
+  const {gap, x} = colGap(m, e.clientX); m.gap = gap;
+  let d = $('coldrop');
+  if (!d){ d = document.createElement('div'); d.id = 'coldrop'; d.className = 'coldrop'; d.setAttribute('aria-hidden', 'true'); document.body.appendChild(d); }
+  const tbl = m.th.closest('.ptbl'), head = m.th.getBoundingClientRect(), box = tbl.closest('.pscroll').getBoundingClientRect(), tb = tbl.getBoundingClientRect();
+  Object.assign(d.style, {left:x + 'px', top:head.top + 'px', height:Math.max(head.height, Math.min(box.bottom, tb.bottom) - head.top) + 'px'});
+  d.hidden = false;
+});
+['pointerup', 'pointercancel'].forEach(t => document.addEventListener(t, e => { const m = COLDRAG.move; if (m && e.pointerId === m.id) endColMove(m, t === 'pointerup'); }));
+// The keys: ←/→ on a divider (Shift: by 50), Delete for automatic width; Alt+←/→ on a header moves its column.
+// Captured, ahead of the page's own keys (Alt+← is Back on Linux and Windows); Esc drops a move under way.
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && COLDRAG.move && COLDRAG.move.on){ e.preventDefault(); e.stopPropagation(); endColMove(COLDRAG.move, false); return; }
+  if (!e.target.closest || e.metaKey || e.ctrlKey) return;
+  const side = e.key === 'ArrowLeft' ? -1 : e.key === 'ArrowRight' ? 1 : 0;
+  const g = !e.altKey && e.target.closest('.ptbl [data-colgrip]');
+  if (g && (side || e.key === 'Delete' || e.key === 'Backspace')){
+    e.preventDefault(); e.stopPropagation();
+    const k = g.dataset.colgrip;
+    if (!side){ setColWidth(k, null); return; }
+    setColWidth(k, (colWidths()[k] || Math.round(g.closest('th').getBoundingClientRect().width)) + side * (e.shiftKey ? 50 : 10));
+    return;
+  }
+  const b = e.altKey && !e.shiftKey && side && e.target.closest('.ptbl thead [data-sort]');
+  if (b){ e.preventDefault(); e.stopPropagation(); moveCol(b.dataset.sort, colLayout().indexOf(b.dataset.sort) + side); }
+}, true);
+
+
+/* ---------- Details groups hold still (#354) ---------- */
+// A click on a group header, or the focus moving to one, selects it; a click or the focus anywhere else, Esc, Resume
+// live order or another Group by lets go. Focus a redraw puts back (no relatedTarget) is no choice of yours.
+function selectGroup(b, draw){
+  const tbl = b.closest('.ptbl'), mid = tbl.dataset.mid, same = GSEL && GSEL.mid === mid && GSEL.mode === S.group;
+  GSEL = {mid, mode:S.group, g:b.dataset.gtoggle, order:same ? GSEL.order : [...tbl.querySelectorAll('[data-gtoggle]')].map(x => x.dataset.gtoggle)};
+  if (draw){ lastMainHTML = ''; renderMain(); }
+}
+function releaseGroup(){ if (!GSEL) return; GSEL = null; lastMainHTML = ''; renderMain(); }
+document.addEventListener('click', e => {
+  const b = e.target.closest && e.target.closest('.ptbl [data-gtoggle]');
+  if (b) selectGroup(b, false);   // the toggle that follows draws it
+  else releaseGroup();
+}, true);
+// focus that comes with a press is left to the click that ends it: a redraw now would take the button away under the
+// pointer, and the click (the toggle) with it
+let gPress = false;
+document.addEventListener('pointerdown', () => { gPress = true; }, true);
+['pointerup', 'pointercancel'].forEach(t => document.addEventListener(t, () => setTimeout(() => { gPress = false; }, 0), true));
+document.addEventListener('focusin', e => {
+  if (!e.relatedTarget || gPress) return;
+  const b = e.target.closest && e.target.closest('.ptbl [data-gtoggle]');
+  if (b){ if (!GSEL || GSEL.g !== b.dataset.gtoggle) selectGroup(b, true); }
+  else if (!e.target.closest('[data-gselclose]')) releaseGroup();   // a click on Resume lets go (as a click)
+});
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Escape' || !GSEL || typingIn(e.target) || overlayOpen()) return;
+  if (INSP.pid && !(e.target.closest && e.target.closest('[data-gtoggle]'))) return;   // the open process is nearer
+  e.preventDefault(); e.stopPropagation(); releaseGroup();
+}, true);
+document.addEventListener('change', e => {
+  if (e.target.id === 'pgroup') GSEL = null;
+  if (e.target.id !== 'pghold') return;
+  PREFS = Object.assign({}, PREFS, {holdGroups:e.target.checked});
+  if (!e.target.checked){ Object.keys(GHELD).forEach(k => delete GHELD[k]); try { sessionStorage.removeItem('fleet-gheld'); } catch (x) {} }
+  lastMainHTML = ''; renderMain();
+  savePrefs('Hold group order');
+}, true);
 
 
 /* ---------- Themes (themes.js has the list and the colour maths) ---------- */
@@ -2170,6 +2361,8 @@ const SHORTCUTS = [
   ['Bigger, smaller, actual size', IS_MAC ? [MODK + '+', MODK + '−', MODK + '0'] : ['Ctrl+Plus', 'Ctrl+Minus', 'Ctrl+0']],
   ['Settings', [MODK + ',']],
   ['Refresh now', [MODK + 'R']],
+  ['On a Details column divider: narrower, wider (' + SHIFTK + ' by more); automatic width', ['←', '→', IS_MAC ? '⌫' : 'Delete']],
+  ['On a Details column header: move the column', [ALTK + '←', ALTK + '→']],
   ['Close a menu, sheet or panel; clear the filter', ['Esc']],
   ['These shortcuts', ['?', MODK + '/']]
 ];

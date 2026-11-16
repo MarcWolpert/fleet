@@ -63,9 +63,13 @@ VRAM and shared memory, temperature, power, clocks and fan, for NVIDIA, AMD, Int
 disk and each interface. Pick any of them to see just what runs there.
 
 **Details.** A sortable, filterable process list for any node, grouped by CPU group, owner, user or status,
-with the columns you choose, docked beside the overview if you like. Click a process for what it mostly
-waits on (CPU, disk, memory, GPU, locks, network), its cache misses over a lookback, limits, sockets, files
-and threads; the list holds still while it's open.
+with the columns you choose, docked beside the overview if you like. Drag the divider between two column
+headers to resize a column (double-click it for automatic width), or drag a header onto another to move its
+column; each detail type keeps its own (from the keyboard: ←/→ on a divider, ⌥←/⌥→ on a header). Click a
+process for what it mostly waits on (CPU, disk, memory, GPU, locks, network), its cache misses over a
+lookback, limits, sockets, files and threads; the list holds still while it's open. Groups hold their places
+while you have one selected (click or focus its header; Esc lets go), and **Hold group order**, by Group by,
+stops them moving at all while their numbers keep updating.
 
 **Containers and VMs, counted once.** A VM on its host costs what the host gives it (its QEMU process, as
 `htop` shows it, plus guest memory on huge pages, which `htop` leaves out); its own page shows what the guest
@@ -276,6 +280,8 @@ and `connect.json` (which machines connect when Fleet starts, and your saved set
 | ⌘N | New space: pick a grouping to pin |
 | P | Pin or unpin the selection as a space |
 | ↑ ↓ ← → | Move through the tree; collapse, expand, go to the parent |
+| ← → (⇧ for more), ⌫ | On a Details column divider: resize the column; automatic width |
+| ⌥← ⌥→ | On a Details column header: move the column |
 | ⌘T | Open a terminal on the selection; in the terminals below the page, pick where to open another (that one's machine first; Ctrl+Shift+T inside one elsewhere) |
 | ⌘J | Show or minimize the terminals below the page |
 | ⌘+ ⌘− ⌘0 in the terminals | Their text size only (Fleet's zoom elsewhere) |
