@@ -140,3 +140,67 @@ test('one click folds a group to its header; another brings it back exactly as i
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
 });
+
+// Renaming a group survives the tree being redrawn while you type: a poll that brings other rows (the network tree's,
+// or a new node in the machine tree) leaves the name field, what's in it and its focus alone, so the rest of the name
+// is typed into it, not read as shortcuts ('p' pins, '/' finds). The redraw happens once the name is in (#293).
+const typeKeys = async (p, text) => { for (const c of text){ await p.send('Input.dispatchKeyEvent', {type: 'keyDown', key: c, text: c}); await p.send('Input.dispatchKeyEvent', {type: 'keyUp', key: c}); } };
+const NAMEBOX = `(() => { const i = document.querySelector('#tree input.tg-name'); return i ? {value: i.value, focused: document.activeElement === i} : null; })()`;
+const dblHeader = p => p.eval(`(() => { const h = document.querySelector('#tree .tg-h'); h.dispatchEvent(new MouseEvent('dblclick', {bubbles: true, cancelable: true})); return true; })()`);
+test('renaming a group in the network tree survives a poll that brings other rows', async () => {
+  const fx = fixture();
+  const nm = (id, name) => ({id, name, status: 'ok', ts: {ip: '100.64.0.' + id.length, online: true, direct: true}, ifs: []});
+  fx.net = {tailnet: 'tailnet', machines: [nm('lx', 'lab-linux'), nm('lx2', 'lab-linux-2'), nm('mac', 'lab-mac')]};
+  fx.fleet.prefs = {tgroups: {'network|net:tailnet': [{id: 'gn', name: 'Linux', ids: ['net:m:lx', 'net:m:lx2']}]}};
+  const p = await open({tree: 'network', netSel: 'net:tailnet'}, fx);
+  try {
+    await p.waitFor(`${NROW('lab-mac')} && document.querySelector('#tree .tg-h')`);
+    await dblHeader(p);
+    await p.waitFor(`document.activeElement && document.activeElement.classList.contains('tg-name')`);
+    await p.eval(`(document.activeElement.select(), true)`);
+    await typeKeys(p, 'Proxmox h');
+    await p.waitFor(`!netBusy && (refreshNet(), true)`);   // the same rows: only the rates (#157)
+    await p.waitFor(`!netBusy`);
+    assert.deepEqual(await p.eval(NAMEBOX), {value: 'Proxmox h', focused: true});
+    fx.net.machines.push(nm('win', 'lab-windows'));
+    await p.waitFor(`(refreshNet(), NET.machines.length === 4)`);
+    await p.waitFor(`!netBusy`);
+    assert.deepEqual(await p.eval(NAMEBOX), {value: 'Proxmox h', focused: true});
+    await typeKeys(p, 'osts/p');
+    assert.deepEqual(await p.eval(NAMEBOX), {value: 'Proxmox hosts/p', focused: true});
+    await p.key('Enter');
+    await p.waitFor(`${NROW('lab-windows')} && !document.querySelector('#tree input.tg-name')`);
+    assert.deepEqual(await p.eval(GROUPS), [{name: 'Proxmox hosts/p', rows: ['net:m:lx', 'net:m:lx2']}]);
+    assert.equal(saved(fx)['network|net:tailnet'][0].name, 'Proxmox hosts/p');
+    assert.deepEqual(await p.eval(`({pins: PINS, find: !!(document.getElementById('treefind') && !document.getElementById('treefind').hidden), mfind: TF.open || false})`), {pins: [], find: false, mfind: false});
+    assert.deepEqual((fx.posts || []).filter(x => x.path === '/api/pins'), []);
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
+test('renaming a group in the machine tree survives a poll that brings a new node', async () => {
+  const fx = fixture();
+  fx.fleet.prefs = {tgroups: {'machines|root': [{id: 'g1', name: 'Lab', ids: ['lx', 'lx2']}]}};
+  const p = await open({sel: 'win', open: Object.assign({}, CLOSED, {mac: true, 'mac/containers': true})}, fx);
+  try {
+    await p.waitFor(`${ROW('mac/containers/web')} && document.querySelector('#tree .tg-h')`);
+    await dblHeader(p);
+    await p.waitFor(`document.activeElement && document.activeElement.classList.contains('tg-name')`);
+    await p.eval(`(document.activeElement.select(), true)`);
+    await typeKeys(p, 'Proxmox h');
+    const mac = fx.fleet.machines.find(m => m.id === 'mac');
+    mac.containers = mac.containers.concat([{id: 'mac/containers/db', name: 'db', image: 'postgres:1', status: 'Up 2 hours', g: []}]);
+    await p.waitFor(`(refreshNow(), !!nodes['mac/containers/db'])`);
+    await p.waitFor(`!busy`);
+    assert.deepEqual(await p.eval(NAMEBOX), {value: 'Proxmox h', focused: true});
+    await typeKeys(p, 'osts/p');
+    assert.deepEqual(await p.eval(NAMEBOX), {value: 'Proxmox hosts/p', focused: true});
+    await p.key('Enter');
+    await p.waitFor(`${ROW('mac/containers/db')} && !document.querySelector('#tree input.tg-name')`);
+    assert.deepEqual(await p.eval(GROUPS), [{name: 'Proxmox hosts/p', rows: ['lx', 'lx2']}]);
+    assert.equal(saved(fx)['machines|root'][0].name, 'Proxmox hosts/p');
+    assert.deepEqual(await p.eval(`({pins: PINS, sel: S.sel, tf: !!TF.open})`), {pins: [], sel: 'win', tf: false});
+    assert.deepEqual((fx.posts || []).filter(x => x.path === '/api/pins'), []);
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});

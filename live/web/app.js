@@ -413,7 +413,12 @@ function treeRoots(){
   if (S.pinsOnly) return PINS.map(id => nodes[id]).filter(Boolean).sort((a, b) => COLL.compare(a.name, b.name));
   return S.space === 'fleet' ? sortedRoots() : (nodes[S.space] ? [nodes[S.space]] : sortedRoots());
 }
+// A group's name field while it's open (renameGroup): the tree isn't redrawn under it, since a poll can bring other
+// rows at any time, so what's typed and the focus stay. Closing it redraws the tree (#293).
+let RENAMING = null;
+const renaming = () => !!(RENAMING && RENAMING.isConnected);
 function renderTree(){
+  if (renaming()) return;
   if (S.tree === 'network') return renderNetTree();
   if (S.groupsOnly) return renderGroupsTree();
   const rows = [];
@@ -567,6 +572,7 @@ function netTreeHTML(){
   }
 }
 function renderNetTree(html = netTreeHTML()){
+  if (renaming()) return;
   $('tree').innerHTML = html; netDrawn = {html, first:$('tree').firstElementChild};
   netRates();
   $('tree-title').innerHTML = 'Network';
@@ -2610,9 +2616,9 @@ function renameGroup(key, id){
   // the group's header in the tree, or its row in Groups only
   const n = document.querySelector(`#tree .tgroup[data-tgroup="${CSS.escape(id)}"] .tg-n`) || document.querySelector(`#tree .row[data-select="div:${CSS.escape(id)}"] .nm`); if (!n) return;
   const inp = document.createElement('input'); inp.className = 'tg-name'; inp.value = n.textContent; inp.setAttribute('aria-label', 'Group name');
-  n.replaceWith(inp); inp.focus(); inp.select();
+  n.replaceWith(inp); inp.focus(); inp.select(); RENAMING = inp;
   let done = false;
-  const commit = ok => { if (done) return; done = true; const v = inp.value.trim().slice(0, 60); if (ok && v) updGroup(key, id, g => Object.assign({}, g, {name:v})); else renderTree(); };
+  const commit = ok => { if (done) return; done = true; RENAMING = null; const v = inp.value.trim().slice(0, 60); if (ok && v) updGroup(key, id, g => Object.assign({}, g, {name:v})); else renderTree(); };
   inp.addEventListener('keydown', e => { if (e.key === 'Enter'){ e.preventDefault(); commit(true); } if (e.key === 'Escape'){ e.preventDefault(); e.stopPropagation(); commit(false); } });
   inp.addEventListener('blur', () => commit(true));
 }
