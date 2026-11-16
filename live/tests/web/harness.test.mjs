@@ -89,3 +89,24 @@ test('a browser test sees the headers a write carried, and a write that skips ap
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
 });
+
+test('a space and a tile pinned on the page are still pinned after the next polls and a reload (#114)', async () => {
+  const fx = fixture();
+  const p = await browser.page(fx, {ui: ui({sel: 'lx'})});
+  // the page's polls of /api/fleet, counted from now
+  const countPolls = () => p.eval(`(() => { window.polls = 0; const f = window.fetch; window.fetch = (u, o) => { if (String(u).startsWith('/api/fleet')) window.polls++; return f(u, o); }; return true; })()`);
+  try {
+    await p.waitFor(`document.querySelectorAll('#tree .row').length > 0`);
+    await p.eval(`(togglePin('lx'), toggleTilePin('gpu|lx|gpu0:temp'), true)`);
+    for (let i = 0; i < 100 && (fx.posts || []).length < 2; i++) await new Promise(r => setTimeout(r, 30));
+    await countPolls();
+    await p.waitFor(`window.polls >= 2`);   // the first of them has been answered and applied
+    assert.deepEqual(await p.eval(`({pins: PINS, tilepins: TPINS, space: !!document.querySelector('[data-space="lx"]')})`),
+      {pins: ['lx'], tilepins: {'gpu|lx': ['gpu0:temp']}, space: true});
+    assert.deepEqual([fx.fleet.pins, fx.fleet.tilepins], [['lx'], {'gpu|lx': ['gpu0:temp']}]);
+    await p.reload();
+    await p.waitFor(`document.querySelector('[data-space="lx"]')`);
+    assert.deepEqual(await p.eval(`({pins: PINS, tilepins: TPINS})`), {pins: ['lx'], tilepins: {'gpu|lx': ['gpu0:temp']}});
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});

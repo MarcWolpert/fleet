@@ -51,7 +51,9 @@ export function startServer(fx){
         const [status, answer] = judgeWrite(req, srv.address().port, u.pathname, raw);
         if (status !== 200){ fx.refused = (fx.refused || []).concat([Object.assign(w, {status})]); res.writeHead(status); return res.end(); }
         fx.posts = (fx.posts || []).concat([w]);
-        if (u.pathname === '/api/prefs' && fx.fleet) fx.fleet.prefs = answer.prefs;  // kept, like the server's ui.json
+        // kept and sent back with every /api/fleet, like the server's ui.json, pins.json and tilepins.json
+        const kept = {'/api/prefs': 'prefs', '/api/pins': 'pins', '/api/tilepins': 'tilepins'}[u.pathname];
+        if (kept && fx.fleet) fx.fleet[kept] = answer[kept];
         json(answer); }); return; }
       if (u.pathname === '/api/fleet') return json(fx.fleet);
       if (u.pathname === '/api/procs') return json((fx.procs || {})[mid] || {procs: []});
