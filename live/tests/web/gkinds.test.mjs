@@ -78,3 +78,19 @@ test('clicking a group\'s header selects it and shows its own all-up view (#49)'
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
 });
+
+test('each kind has its own icon, on its header, its pill, the picker and its page (#54)', async () => {
+  const [p] = await open();
+  try {
+    const kinds = ['fleet', 'flotilla', 'division', 'section', 'squadron', 'taskforce'];
+    assert.deepEqual(await p.eval(`${JSON.stringify(kinds)}.map(k => typeof IC['g' + k])`), kinds.map(() => 'string'));
+    assert.equal(await p.eval(`new Set(${JSON.stringify(kinds)}.map(k => IC['g' + k])).size`), 6);
+    assert.deepEqual(await p.eval(`['g1', 'g2', 'g3'].map(g => iconOf(nodes['div:' + g]))`), ['gfleet', 'gtaskforce', 'gdivision']);
+    assert.equal(await p.eval(`!!document.querySelector('.tgroup[data-tgroup="g3"] .tg-h svg[data-icon="gdivision"]')`), true);
+    await p.eval(`(() => { document.querySelector('.tgroup[data-tgroup="g1"] .tg-n').click(); return true; })()`);
+    await p.waitFor(`S.sel === 'div:g1'`);
+    assert.equal(await p.eval(`!!document.querySelector('#main .hero .tile svg[data-icon="gfleet"]')`), true);
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+

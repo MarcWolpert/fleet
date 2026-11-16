@@ -36,6 +36,12 @@ const IC = {
   search2:'<circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5M8.5 11h5"/>',
   refresh:'<path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4.5V11h-6.5"/>',
   check:'<path d="M5 12.5l4.5 4.5L19 7.5"/>',
+  gfleet:'<path d="M2.5 17.5h8l-1.6 2.5H4.1z"/><path d="M13.5 17.5h8l-1.6 2.5h-4.8z"/><path d="M8 10.5h8l-1.6 2.5H9.6z"/><path d="M6.5 17.5v-3M17.5 17.5v-3M12 10.5V4.5l3.5 2-3.5 1.6"/>',
+  gflotilla:'<path d="M3.5 13h7.5l-1.5 2.6H5z"/><path d="M13 13h7.5L19 15.6h-4.5z"/><path d="M7.2 13V9M16.8 13V9"/><path d="M3 19.5c1.5-1.1 3-1.1 4.5 0s3 1.1 4.5 0 3-1.1 4.5 0 3 1.1 4.5 0"/>',
+  gdivision:'<rect x="3" y="12.5" width="7.5" height="7.5" rx="1.3"/><rect x="13.5" y="12.5" width="7.5" height="7.5" rx="1.3"/><rect x="8.25" y="3.5" width="7.5" height="7.5" rx="1.3"/>',
+  gsection:'<circle cx="12" cy="12" r="5.6"/><path d="M12 9.2V12l2 1.3"/><path d="M5.5 4.5H3.5v15h2M18.5 4.5h2v15h-2"/>',
+  gsquadron:'<path d="M12 3.5l3.4 6H8.6z"/><path d="M6 12.5l3.4 6H2.6z"/><path d="M18 12.5l3.4 6h-6.8z"/>',
+  gtaskforce:'<path d="M12 3.5l2.5 5.1 5.6.8-4.1 3.9 1 5.6-5-2.7-5 2.7 1-5.6-4.1-3.9 5.6-.8z"/>',
   upload:'<path d="M12 15V4.5M7.5 9L12 4.5 16.5 9"/><path d="M5 14.5v3a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3"/>',
   palette:'<path d="M12 3.5a8.5 8.5 0 1 0 0 17c1.2 0 1.8-.8 1.8-1.7 0-.5-.2-.9-.5-1.2-.3-.4-.5-.8-.5-1.3 0-1 .8-1.8 1.8-1.8h2.1a3.8 3.8 0 0 0 3.8-3.8C20.5 6.9 16.7 3.5 12 3.5z"/><circle cx="7.5" cy="11.5" r="1"/><circle cx="10" cy="7.5" r="1"/><circle cx="14.5" cy="7.5" r="1"/>',
   trash:'<path d="M4.5 7h15M10 11v6M14 11v6M6.5 7l1 12.5a2 2 0 0 0 2 1.8h5a2 2 0 0 0 2-1.8l1-12.5M9.5 7V4.5h5V7"/>',
@@ -46,7 +52,7 @@ const IC = {
   nic:'<rect x="3" y="7" width="18" height="10" rx="1.5"/><path d="M7 17v2.5M11 17v2.5M15 17v2.5M7 10.5h4"/>',
   bridge:'<path d="M3 15c4-6 14-6 18 0"/><path d="M3 15v4M21 15v4M8 11.5V19M16 11.5V19M12 10.5V19"/>'
 };
-const icon = (k, sw) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${sw||1.8}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${IC[k] || IC.cube}</svg>`;
+const icon = (k, sw) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${sw||1.8}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" data-icon="${IC[k] ? k : 'cube'}">${IC[k] || IC.cube}</svg>`;
 
 /* ---------- formatting ---------- */
 function num(v){ if (!isFinite(v)) return '—'; if (v >= 100) return Math.round(v).toString(); if (v >= 10) return v.toFixed(0); if (v >= 1) return v.toFixed(1); if (v === 0) return '0'; return v.toFixed(2); }
@@ -189,7 +195,7 @@ function gpuCell(n){ const w = whichGpu(n); return fmt(cur(n, 'gpu'), 'gpu') + (
 const $ = id => document.getElementById(id);
 function colOf(n){ return n.kind === 'division' ? n.color : TCOL[n.type] || 'var(--ink-2)'; }
 function iconOf(n){
-  if (n.kind === 'division') return 'layers';
+  if (n.kind === 'division') return 'g' + (n.gkind || 'taskforce');
   if (n.kind === 'machine') return n.tile || 'vm';
   if (n.kind === 'cronfolder' || n.kind === 'cron') return 'clock';
   if (n.kind === 'base') return 'chip';
@@ -780,7 +786,7 @@ function fleetView(dv){
     const bar = off ? `<div class="sbar empty">${esc(diagnose(r).title)}</div>` : cap ? `<div class="sbar">${TYPES.filter(t => bt[t.id] > 0).map(t => `<span class="s" style="width:${Math.min(100, bt[t.id]/den*100).toFixed(3)}%;background:${TCOL[t.id]}" data-tip="seg|${esc(r.id)}|${S.metric}|${t.id}"></span>`).join('')}</div>` : `<div class="sbar empty">no ${mlabel(S.metric)}</div>`;
     return `<div class="mrow"><button type="button" class="mbtn" data-select="${esc(r.id)}"><span class="tile ${r.tile}">${icon(r.tile)}</span><span>${esc(r.name)}</span><i class="sdot ${statusClass(r)}" title="${statusText(r)}"></i></button>${bar}<div class="tot">${!off && cap ? pct(used/cap*100) + ' used' : '—'}<small>${off ? '' : pct(used/(fleetUsed||1)*100) + ' of fleet ' + mlabel(S.metric)}</small></div></div>`;
   }).join('');
-  const tile = dv ? `<span class="tile" style="background:color-mix(in srgb, ${dv.color} 22%, transparent);color:${dv.color}">${icon('layers')}</span>` : `<span class="tile fleet">${icon('fleet')}</span>`;
+  const tile = dv ? `<span class="tile" style="background:color-mix(in srgb, ${dv.color} 22%, transparent);color:${dv.color}">${icon(iconOf(dv))}</span>` : `<span class="tile fleet">${icon('fleet')}</span>`;
   return `<div class="hero">${tile}<div><h1>${dv ? esc(dv.name) : 'All machines'}</h1><div class="facts">${dv ? '<span>division</span>' : ''}<span>${live} of ${list.length} machines live</span><span>${nVm} VMs</span><span>${cronCount({children:list})} scheduled jobs</span><span>${c.cap('cpu')} cores</span><span>${Math.round(c.cap('mem'))} GB RAM</span></div></div>${heroStats([stat('cpu'), stat('mem'), stat('gpu')])}</div>`
     + `<div class="grid2">${whereCard(key, dv ? `Where ${esc(dv.name)}’s usage goes` : 'Where your fleet’s usage goes')}${graphCard(`${dv ? esc(dv.name) : 'Fleet'} ${mlabel(S.metric)}`, 'live machines, by type', series, graphMax(c.cap(S.metric), series, S.metric), S.metric)}</div>`
     + `<section class="card"><div class="card-h"><h2>By machine · ${mlabel(S.metric)}</h2><span class="sub">each bar is that machine’s own ${S.mode === 'cap' ? 'capacity' : 'usage'}</span><span class="grow"></span>${modeSeg()}</div>${legendHTML(S.mode === 'cap')}${mrows}</section>`;
@@ -2275,7 +2281,7 @@ function tgroupOpen({open:g, key, d, kind, folded, count}){
   const label = GKIND[kind][1], dup = g.name.toLowerCase().startsWith(label);
   const fold = `<button type="button" class="tg-fold${folded ? '' : ' open'}" data-tgfold="${esc(g.id)}" aria-expanded="${!folded}" aria-label="${folded ? 'Unfold' : 'Fold'} ${esc(g.name)}">${icon('chev', 2.4)}</button>`;
   return `<div class="tgroup${S.tree !== 'network' && S.sel === 'div:' + g.id ? ' sel' : ''}" data-tgroup="${esc(g.id)}" data-tgkey="${esc(key)}" data-kind="${kind}" role="group" aria-label="${esc(g.name)}, ${label}" style="--gc:var(--g-${kind});--d:${d}">`
-    + `<div class="tg-h" title="Click to see this group; double-click to rename; right-click for more">${fold}<i></i><span class="tg-n">${esc(g.name)}</span>${dup ? '' : `<span class="tg-k">${label}</span>`}${folded ? `<span class="count">${count}</span>` : ''}</div>`;
+    + `<div class="tg-h" title="Click to see this group; double-click to rename; right-click for more">${fold}<span class="tg-ic">${icon('g' + kind, 2)}</span><span class="tg-n">${esc(g.name)}</span>${dup ? '' : `<span class="tg-k">${label}</span>`}${folded ? `<span class="count">${count}</span>` : ''}</div>`;
 }
 function updGroup(key, id, f){
   const all = Object.assign({}, PREFS.tgroups || {});
