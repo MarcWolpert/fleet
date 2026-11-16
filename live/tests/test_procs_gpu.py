@@ -47,7 +47,7 @@ def on(p, i=13):
 def api_procs(view):
     """/api/procs for one machine holding `view`."""
     m = fleet_live.Machine({"id": "m1", "name": "m1"}, 3)
-    m.view = view
+    m.got(view)   # a reading arrives
     f = fleet_live.Fleet.__new__(fleet_live.Fleet)
     f.machines, f.lock = {"m1": m}, threading.Lock()
     f.specs = {"m1": {"id": "m1", "procs_owner": {"cont": {}, "vm": {}}, "vms": []}}

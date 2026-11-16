@@ -288,6 +288,7 @@ class Machine:
         self.error = ""
         self.prev = None
         self.view = None          # derived, see derive_*()
+        self.fresh = False        # a reading arrived in this run (a view restored at start has no processes)
         self.cum = {}             # cumulative counters from the previous reading
         self.disk_peak = 500 * MB
         self.lock = threading.Lock()
@@ -304,7 +305,7 @@ class Machine:
         while True:
             if not self.on.is_set():   # turned off: no session until it's turned on
                 with self.lock:
-                    self.view, self.status, self.error = None, "disabled", ""
+                    self.view, self.status, self.error, self.fresh = None, "disabled", "", False
                 self.on.wait()
                 backoff = 5
             try:
@@ -338,7 +339,7 @@ class Machine:
 
     def got(self, view):
         with self.lock:
-            self.view, self.status, self.error, self.last_ok = view, "ok", "", time.time()
+            self.view, self.status, self.error, self.last_ok, self.fresh = view, "ok", "", time.time(), True
 
     def set_status(self, status, error=""):
         with self.lock:
@@ -1415,8 +1416,8 @@ class Fleet:
             view = m.view
         with self.lock:
             spec = find_spec(self.specs, mid)
-        if not view or not spec:
-            return {"procs": []}
+        if not view or not spec or not m.fresh:   # not read yet (connecting, or just restarted): the page keeps what it shows
+            return {"procs": [], "ready": m.status == "disabled"}
         own = spec.get("procs_owner", {"cont": {}, "vm": {}})
         out = []
         for p in view["procs"]:
@@ -1436,7 +1437,7 @@ class Fleet:
                         p[15] if len(p) > 15 else [], round(p[16], 4) if len(p) > 16 else -1])
         # p[13]: the GPUs the process uses (positions in this machine's gpus); gpu_procs says whether the
         # host reports that at all (macOS doesn't), so an empty p[13] isn't taken for "on no GPU".
-        return {"procs": out, "t": view["t"], "gpu_procs": bool(view.get("gpu_procs"))}
+        return {"procs": out, "t": view["t"], "gpu_procs": bool(view.get("gpu_procs")), "ready": True}
 
     def api_cpus(self, mid):
         m = self.machines.get(mid)

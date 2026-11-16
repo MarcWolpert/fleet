@@ -1398,6 +1398,12 @@ document.addEventListener('toggle', e => { if (e.target.classList && e.target.cl
 
 /* ---------- polling ---------- */
 let lastSig = '', busy = false, fails = 0;
+// A process list the server hasn't read yet (Fleet just restarted, the machine is reconnecting) is not an empty
+// one: keep the list on screen until a fresh one comes, so Details never flashes empty.
+function takeProcs(mid, d){
+  if (d && d.ready === false && PROCS.machine === mid) return;
+  PROCS = {machine:mid, list:(d && d.procs) || [], gpuProcs:!!(d && d.gpu_procs)};
+}
 function sigOf(){ return Object.keys(nodes).join('|') + '#' + PINS.join('|'); }
 async function refreshNow(){
   inspectTick();
@@ -1410,13 +1416,13 @@ async function refreshNow(){
     if (S.sel !== 'fleet' && !nodes[S.sel]) { /* keep selection; it may come back */ }
     const n = S.sel === 'fleet' ? null : nodes[S.sel];
     const jobs = [];
-    if ((S.view === 'details' || (S.detailsDocked && n && S.tree !== 'network')) && (n || roots[0])){ const mid = procMachineFor(n || roots[0]); if (mid) jobs.push(fetch('/api/procs?machine=' + encodeURIComponent(mid), {cache:'no-store'}).then(r => r.json()).then(d => { PROCS = {machine:mid, list:d.procs || [], gpuProcs:!!d.gpu_procs}; })); }
-    if (S.view !== 'details' && n && n.kind === 'machine' && S.metric === 'cpu' && S.cpuView === 'logical' && cpuSel(n).length && n.status === 'ok') jobs.push(fetch('/api/procs?machine=' + encodeURIComponent(n.id), {cache:'no-store'}).then(r => r.json()).then(d => { PROCS = {machine:n.id, list:d.procs || [], gpuProcs:!!d.gpu_procs}; }));
+    if ((S.view === 'details' || (S.detailsDocked && n && S.tree !== 'network')) && (n || roots[0])){ const mid = procMachineFor(n || roots[0]); if (mid) jobs.push(fetch('/api/procs?machine=' + encodeURIComponent(mid), {cache:'no-store'}).then(r => r.json()).then(d => takeProcs(mid, d))); }
+    if (S.view !== 'details' && n && n.kind === 'machine' && S.metric === 'cpu' && S.cpuView === 'logical' && cpuSel(n).length && n.status === 'ok') jobs.push(fetch('/api/procs?machine=' + encodeURIComponent(n.id), {cache:'no-store'}).then(r => r.json()).then(d => takeProcs(n.id, d)));
     if (S.view !== 'details' && n && n.kind === 'machine' && S.metric === 'cpu' && S.cpuView === 'logical') jobs.push(fetch('/api/cpus?machine=' + encodeURIComponent(n.id), {cache:'no-store'}).then(r => r.json()).then(d => { CPUS[n.id] = d; }));
     const nm = n && n.kind === 'machine' ? n : null;
     if (nm && S.metric === 'net' && S.view !== 'details') jobs.push(fetch('/api/ifs?machine=' + encodeURIComponent(nm.id), {cache:'no-store'}).then(r => r.json()).then(d => { IFS[nm.id] = d; }));
     if (nm && S.metric === 'disk' && S.view !== 'details') jobs.push(fetch('/api/disks?machine=' + encodeURIComponent(nm.id), {cache:'no-store'}).then(r => r.json()).then(d => { DISKS[nm.id] = d; }));
-    if (nm && S.view !== 'details' && !S.detailsDocked && ((S.metric === 'disk' && diskSel(nm).length) || (S.metric === 'gpu' && gpuSel(nm).length) || (S.metric === 'net' && ifSel(nm).length)) && nm.status === 'ok') jobs.push(fetch('/api/procs?machine=' + encodeURIComponent(nm.id), {cache:'no-store'}).then(r => r.json()).then(d => { PROCS = {machine:nm.id, list:d.procs || [], gpuProcs:!!d.gpu_procs}; }));
+    if (nm && S.view !== 'details' && !S.detailsDocked && ((S.metric === 'disk' && diskSel(nm).length) || (S.metric === 'gpu' && gpuSel(nm).length) || (S.metric === 'net' && ifSel(nm).length)) && nm.status === 'ok') jobs.push(fetch('/api/procs?machine=' + encodeURIComponent(nm.id), {cache:'no-store'}).then(r => r.json()).then(d => takeProcs(nm.id, d)));
     if (S.tree === 'network') jobs.push(fetch('/api/net', {cache:'no-store'}).then(r => r.json()).then(d => { NET = d; }));
     await Promise.all(jobs.map(p => p.catch(() => null)));
     fails = 0; $('conn').hidden = true; $('live').hidden = false;
