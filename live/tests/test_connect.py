@@ -38,6 +38,11 @@ class AtStart(unittest.TestCase):
         self.assertEqual([at("lab", c) for c in (LOCAL, A, B)], [True, False, True])
         # turned off by hand before Fleet restarted itself (settings saved, an update): still off
         self.assertEqual([at("all", c, {"a"}) for c in (LOCAL, A, B)], [True, False, True])
+        # a restart Fleet does itself keeps every machine connected but those turned off, whatever Auto says (#224),
+        # and connects one just added
+        restart = lambda auto, cfg, off=(): fl.connects_at_start(cfg, {"auto": auto, "presets": presets}, off, restarted=True)
+        self.assertEqual([restart("none", c, {"a"}) for c in (LOCAL, A, B)], [True, False, True])
+        self.assertEqual([restart("lab", c) for c in (LOCAL, A, B)], [True, True, True])
 
     def test_the_setting_file_is_read_defensively(self):
         with tempfile.TemporaryDirectory() as d:
