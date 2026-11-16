@@ -120,3 +120,29 @@ test('+ opens Go to anything with just what can have a terminal; picking one ope
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
 });
+
+// #395: t shows or hides the terminals, r goes into the one you're on; not while typing in a field
+test('t shows or hides the terminals; r puts you in the one you’re on; neither while typing', async () => {
+  const fx = fx1();
+  const p = await browser.page(fx, {ui: ui({sel: 'lx'})});
+  const press = async k => { await p.send('Input.dispatchKeyEvent', {type: 'keyDown', key: k, code: 'Key' + k.toUpperCase(), text: k, windowsVirtualKeyCode: k.toUpperCase().charCodeAt(0)}); await p.send('Input.dispatchKeyEvent', {type: 'keyUp', key: k, code: 'Key' + k.toUpperCase(), windowsVirtualKeyCode: k.toUpperCase().charCodeAt(0)}); };
+  try {
+    await p.waitFor(`document.querySelector('#tdrawer iframe')`);
+    await p.eval(`(document.querySelector('#tree [tabindex], #tree button').focus(), true)`);
+    await press('t');
+    await p.waitFor(`document.getElementById('tdrawer').hidden && PREFS.termMin === true`);
+    await press('t');
+    await p.waitFor(`!document.getElementById('tdrawer').hidden && PREFS.termMin === false`);
+    await p.eval(`(document.querySelector('#tree [tabindex], #tree button').focus(), true)`);
+    await press('r');
+    await p.waitFor(`document.activeElement && document.activeElement.tagName === 'IFRAME' && !!document.activeElement.closest('#tdrawer')`);
+    // typing in a field: the letters are the field's
+    await p.eval(`(document.querySelector('#tree [tabindex], #tree button').focus(), openTreeFind(), true)`);
+    await p.waitFor(`document.activeElement && document.activeElement.id === 'tfq'`);
+    await press('t');
+    await p.eval(`new Promise(r => setTimeout(r, 200))`);
+    assert.equal(await p.eval(`document.getElementById('tdrawer').hidden`), false);
+    assert.equal(await p.eval(`document.getElementById('tfq').value`), 't');
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});

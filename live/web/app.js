@@ -2365,7 +2365,8 @@ const SHORTCUTS = [
   ['Open a terminal on the selection', [IS_MAC ? MODK + 'T' : 'Alt+T'], ['Open a terminal on the selection']],
   ['In the terminals: open another (pick where; this one’s machine first)', [IS_MAC ? MODK + 'T' : 'Ctrl+Shift+T'], {see:['New terminal…']}],
   ['In the terminals: the next or previous one', IS_MAC ? [CTRLK + TABK, CTRLK + SHIFTK + TABK] : ['Ctrl+Tab', 'Ctrl+Shift+Tab'], null],
-  ['Show or minimize the terminals below the page', [IS_MAC ? MODK + 'J' : 'Alt+J'], ['Show or minimize the terminals']],
+  ['Show or minimize the terminals below the page', [IS_MAC ? MODK + 'J' : 'Alt+J', 'T'], {see:['Show or minimize the terminals']}],
+  ['Into the terminal you’re on', ['R'], ['Into the terminal you’re on']],
   ['In the terminals: split the one you’re on', [IS_MAC ? '⌘\\' : 'Ctrl+Shift+5'], {see:['Split the terminal you’re on']}],
   ['In the terminals: kill the one you’re on (on its tab)', [IS_MAC ? '⌘⌫' : 'Delete'], null],
   ['In the terminals: undo dragging a tab onto another', [MODK + 'Z'], null],
@@ -2409,6 +2410,13 @@ function fleetCommand(name, arg){
     case 'space-step': { if (PANEL === 'term' && cycleTerm(arg)) return true; const ks = spaceKeys(), i = Math.max(0, ks.indexOf(S.space)); goSpace(ks[(i + arg + ks.length) % ks.length]); return true; }
     case 'pin': { const n = nodes[S.sel]; if (!n || S.sel === 'fleet') return false; const was = PINS.includes(S.sel); togglePin(S.sel); toast(was ? `Unpinned ${n.name}` : `Pinned ${n.name} as a space`); return true; }
     case 'newspace': if (overlayOpen() && !PICK.open) return false; if (!PICK.open) openPicker(); return true;
+    case 'intoterm': {
+      if (!TD.list.length){ toast(TD.avail ? 'No terminals yet: open one with Open terminal ▾ › Open inline' : 'Inline terminals need ttyd on this computer'); return true; }
+      if (PREFS.termMin) setTermMin(false);
+      const s = activeTerm(), f = s && document.querySelector(`#tdrawer [data-tdpane="${s.key}"] iframe`);
+      if (f) f.focus(); else { const t = document.querySelector('#tdrawer [role=tab][aria-selected=true]'); if (t) t.focus(); }
+      PANEL = 'term'; markPanel(); return true;
+    }
     case 'terminals': { if (!TD.list.length){ toast(TD.avail ? 'No terminals yet: open one with Open terminal ▾ › Open inline' : 'Inline terminals need ttyd on this computer'); return true; } setTermMin(!PREFS.termMin); return true; }
     case 'terminal': { if (inlineNewTab()) return true; const b = document.querySelector('[data-terminal]'); if (!b){ toast('Select a machine or container to open a terminal on it'); return true; } b.click(); return true; }
     case 'settings': if (!SET.open) openSettings(); return true;
@@ -2508,6 +2516,8 @@ document.addEventListener('keydown', e => {
   if (e.key === '/') return run('find');
   if (e.key === '?') return run('keys');
   if (e.key === 'p' || e.key === 'P') return run('pin');
+  if (e.key === 't') return run('terminals');      // show or hide the terminals (#395)
+  if (e.key === 'r') return run('intoterm');       // into the terminal you're on (#395)
   if (e.key.startsWith('Arrow')){
     const a = document.activeElement;
     if (a && a !== document.body && !a.closest('#tree, .side, .spacebar')) return;
@@ -2547,6 +2557,7 @@ function gotoCommands(){
     {label:'Open a terminal on the selection', hint:IS_MAC ? MODK + 'T' : 'Alt+T', ic:'terminal', run:() => fleetCommand('terminal')},
     {label:'Pin a grouping…', hint:IS_MAC ? MODK + 'N' : 'Alt+N', ic:'plus', run:() => openPicker()},
     {label:'Show or minimize the terminals', hint:IS_MAC ? MODK + 'J' : 'Alt+J', ic:'terminal', run:() => fleetCommand('terminals')},
+    {label:'Into the terminal you’re on', hint:'R', ic:'terminal', run:() => fleetCommand('intoterm')},
     {label:'New terminal…', ic:'terminal', run:() => { const s = activeTerm(); openGoto({mode:'term', first:s && s.node}); }},
     {label:'Split the terminal you’re on', ic:'terminal', run:() => { if (!activeTerm()) toast('No terminal to split yet'); else splitInline(); }},
     {label:'Terminals: larger text', ic:'terminal', run:() => setTermFont(termFont() + 1)},
