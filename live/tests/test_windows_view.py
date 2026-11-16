@@ -160,7 +160,7 @@ class CompleteView(unittest.TestCase):
         v = m.derive_windows(desktop(1003.0, 1))
         lc = lambda n, pct, core, eff: {"n": n, "pct": pct, "mhz": 3000 + 100 * n, "core": core, "eff": eff, "l3": "0"}
         web = {"id": WEB[:12], "name": "shop-web-1", "image": "nginx:1", "status": "Up 2 hours", "project": "shop", "service": "web",
-               "file": "C:\\shop\\compose.yaml", "networks": "shop_default", "u": [0.5, 1.0, 0.0, 1.0, 0.5]}
+               "file": "C:\\shop\\compose.yaml", "networks": "shop_default", "u": [0.5, 1.0, 0.0, 1.0, 0.5], "netrx": 0.0, "nettx": 0.5}   # it sent 1.5 MB
         want = {
             "t": 1003.0, "os": "Microsoft Windows 11 Pro", "arch": "AMD64", "cpu_model": "Intel(R) Core(TM) test CPU", "ncpu": 8, "uptime": 86400.0,
             "host": [1.6, 12.0, 35.0, 5.0, 1.5],   # CPU cores, GB in use, GPU %, disk MB/s, network MB/s (physical links that are up)
@@ -176,7 +176,7 @@ class CompleteView(unittest.TestCase):
             "lcpus": [lc(0, 50.0, "0", 1), lc(1, 40.0, "0", 1), lc(2, 30.0, "1", 1), lc(3, 20.0, "1", 1),
                       lc(4, 10.0, "2", 0), lc(5, 10.0, "3", 0), lc(6, 0.0, "4", 0), lc(7, 0.0, "5", 0)],
             "groups": [{"name": "P-cores", "cpus": [0, 1, 2, 3]}, {"name": "E-cores", "cpus": [4, 5, 6, 7]}],
-            "containers": [web, dict(web, id=DB[:12], name="shop-db-1", image="postgres:16", service="db", u=[0.0] * 5)],   # docker stats: "--"
+            "containers": [web, dict(web, id=DB[:12], name="shop-db-1", image="postgres:16", service="db", u=[0.0] * 5, nettx=0.0)],   # docker stats: "--"
             # the WSL utility VM: vmmemWSL's 2 cores and 6 GB, less the container Docker Desktop runs in it
             "vms": [{"name": "WSL", "u": [1.5, 5.0, 0.0, 0.0, 0.0], "gu": [0.0, 0.0], "running": True, "ifs": [], "cpus": "",   # on neither GPU
                      "distros": [{"name": "docker-desktop", "state": "Running", "default": False}, {"name": "Ubuntu", "state": "Running", "default": True}]}],

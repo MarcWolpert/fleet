@@ -166,11 +166,11 @@ STATS = [
 ]
 EXPECTED_CONTAINERS = [
     {"id": WEB_ID[:12], "name": "blog-web-1", "image": "nginx:1.27", "status": "Up 2 hours", "project": "blog", "service": "web",
-     "file": "/srv/blog/compose.yaml", "networks": "blog_default", "u": [0.125, 100 * MIB / GB, 0.0, 0.0, 0.0]},
+     "file": "/srv/blog/compose.yaml", "networks": "blog_default", "u": [0.125, 100 * MIB / GB, 0.0, 0.0, 0.0], "netrx": 0.0, "nettx": 0.0},
     {"id": MIGRATE_ID[:12], "name": "migrate", "image": "blog-migrate:latest", "status": "Up 1 second", "project": "", "service": "",
-     "file": "", "networks": "bridge", "u": [0.0, 0.0, 0.0, 0.0, 0.0]},
+     "file": "", "networks": "bridge", "u": [0.0, 0.0, 0.0, 0.0, 0.0], "netrx": 0.0, "nettx": 0.0},
     {"id": IDLE_ID[:12], "name": "idle", "image": "busybox:1.36", "status": "Up 3 days", "project": "", "service": "",
-     "file": "", "networks": "bridge", "u": [0.0, 1 * MIB / GB, 0.0, 0.0, 0.0]},
+     "file": "", "networks": "bridge", "u": [0.0, 1 * MIB / GB, 0.0, 0.0, 0.0], "netrx": 0.0, "nettx": 0.0},
 ]
 
 

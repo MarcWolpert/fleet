@@ -276,7 +276,7 @@ class ApiNet(unittest.TestCase):
                           {"id": "pi", "name": "Garden", "os": "linux", "ssh": "pi@192.0.2.20", "tailscale": "garden-pi"},
                           {"id": "lab", "name": "lab", "os": "linux", "ssh": "lab", "vm_on": "nas"})
         self.f.machines["nas"].view = {"ifs": [{"name": "eth0", "kind": "physical", "rx": 1.5, "tx": 0.5}],
-                                       "containers": [{"name": "redis", "networks": "bridge", "u": [0.1, 0.2, 0.0, 0.0, 0.25]}],
+                                       "containers": [{"name": "redis", "networks": "bridge", "u": [0.1, 0.2, 0.0, 0.0, 0.25], "netrx": 0.1, "nettx": 0.15}],
                                        "vms": [{"name": "lab", "ifs": [{"if": "vnet0", "source": "br0"}], "u": [0.5, 2.0, 0.0, 0.0, 0.75]}],
                                        "dockernets": [{"id": "aaaaaaaaaaaa", "name": "bridge", "driver": "bridge"}]}
         self.f.machines["nas"].status = "ok"
@@ -300,7 +300,7 @@ class ApiNet(unittest.TestCase):
         self.assertEqual({k: v for k, v in nas.items() if k != "tailscale"}, {
             "id": "nas", "name": "nas", "status": "ok", "error": "", "vm_on": "",
             "ifs": [{"name": "eth0", "kind": "physical", "rx": 1.5, "tx": 0.5, "hrx": ZEROS, "htx": ZEROS}],
-            "containers": [{"name": "redis", "networks": "bridge", "net": 0.25}],
+            "containers": [{"name": "redis", "networks": "bridge", "net": 0.25, "rx": 0.1, "tx": 0.15}],
             "vms": [{"name": "lab", "ifs": [{"if": "vnet0", "source": "br0"}], "net": 0.75}],
             "dockernets": [{"id": "aaaaaaaaaaaa", "name": "bridge", "driver": "bridge"}]})
         lab = next(m for m in out["machines"] if m["id"] == "lab")
