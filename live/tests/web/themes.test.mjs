@@ -119,6 +119,45 @@ test('a light VS Code theme takes its frame from a light bar, never a dark or co
   assert.equal(themeTokens(cases[2][1]).vars.chrome, '#f0f0f0');
 });
 
+// A theme file often has no "type" (VS Code takes the kind from the extension's package.json): the editor then
+// says whether it's light or dark, and the colours Fleet derives from it go the same way.
+const NO_TYPE = [
+  // a light-grey editor and no bars: the frame Fleet derives from it is darker, but the theme is still light
+  ['grey editor, no bars', {'editor.background': '#b0b0b0', 'editor.foreground': '#000000'}, false, {win: '#b0b0b0', ink: '#000000'}],
+  // a grey side bar close to a light-grey editor: the frame, a mid grey, doesn't make the theme dark
+  ['grey side bar', {'editor.background': '#c0c0c0', 'editor.foreground': '#000000', 'sideBar.background': '#a0a0a0'}, false,
+    {win: '#c0c0c0', chrome: '#a0a0a0', side: '#a0a0a0', ink: '#000000'}],
+  // the classic light theme with its dark activity bar, without "type"
+  ['dark activity bar', {'editor.background': '#ffffff', 'editor.foreground': '#333333', 'sideBar.background': '#f3f3f3', 'titleBar.activeBackground': '#dddddd', 'activityBar.background': '#2c2c2c'}, false,
+    {win: '#ffffff', chrome: '#dddddd', side: '#f3f3f3', ink: '#333333'}],
+  // control: a dark editor is a dark theme
+  ['dark editor', {'editor.background': '#202030', 'editor.foreground': '#e0d0f0', 'sideBar.background': '#1a1a28'}, true,
+    {win: '#202030', chrome: '#1a1a28', side: '#1a1a28', ink: '#e0d0f0'}]
+];
+test('a VS Code theme without "type" is light or dark as its editor is, and its text reads', async t => {
+  for (const [what, colors, dark, c] of NO_TYPE) await t.test(what, () => {
+    const th = readThemeFile(JSON.stringify({name: 'Plain', colors}), 'plain.json');
+    assert.deepEqual(th, {id: 'custom-plain', name: 'Plain', dark, c});
+    const tk = themeTokens(th);
+    assert.equal(tk.dark, dark);
+    readable(tk.vars, what);
+  });
+});
+
+test('Import theme: a light theme without "type" is applied as light (colour scheme included) and saved as light', async () => {
+  const fx = fixture();
+  const p = await open(fx);
+  try {
+    await settings(p);
+    await choose(p, 'plain.json', JSON.stringify({name: 'Plain', colors: NO_TYPE[0][1]}));
+    await p.waitFor(`document.querySelector('.thsw.on .thsw-b') && document.querySelector('.thsw.on .thsw-b').dataset.themeid === 'custom-plain'`);
+    assert.deepEqual(await p.eval(`[${VAR('win')}, ${VAR('ink')}, document.documentElement.style.colorScheme]`), ['#b0b0b0', '#000000', 'light']);
+    await p.waitFor(`true`);
+    assert.deepEqual(lastPrefs(fx).themes, [{id: 'custom-plain', name: 'Plain', dark: false, c: {win: '#b0b0b0', ink: '#000000'}}]);
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
 test('Fleet is the default; Settings → Appearance picks a theme, applies it at once and saves it', async () => {
   const fx = fixture();
   const p = await open(fx);

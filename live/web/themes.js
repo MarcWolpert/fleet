@@ -243,7 +243,7 @@ function readThemeFile(text, fileName){
   const fromFile = String(fileName || '').replace(/\.[^.]+$/, '').replace(/[-_ ]?colou?r[-_ ]?theme$/i, '').replace(/[-_]+/g, ' ').trim();
   const name = String(j.name || j.displayName || j.label || fromFile || 'Imported theme').slice(0, 60);
   const type = String(j.type || j.uiTheme || '').toLowerCase();
-  const dark = /light|^vs$/.test(type) ? false : /dark|black|^vs-dark$|^hc/.test(type) ? true : null;
+  let dark = /light|^vs$/.test(type) ? false : /dark|black|^vs-dark$|^hc/.test(type) ? true : null;
   const keys = Object.keys(cols);
   const c = {};
   if (keys.some(k => THEME_KEYS.includes(k)) && !keys.some(k => k.includes('.'))){
@@ -261,7 +261,10 @@ function readThemeFile(text, fileName){
     const tok = (...want) => { for (const w of want){ const hit = scopes.find(([s]) => s === w || s.startsWith(w + '.')); if (hit) return hit[1]; } return null; };
     const win = g('editor.background');
     if (!win && !g('sideBar.background', 'activityBar.background')) throw new Error('it has no editor colours (it may only point at another theme file)');
+    // light or dark: the file's "type", else its editor (a theme file often has no "type", VS Code takes it from the
+    // extension's package.json); the tokens Fleet derives for it go the same way
     const isDark = dark !== null ? dark : themeLum(themeFlat(win || g('sideBar.background', 'activityBar.background'), '#000000')) < 0.4;
+    dark = isDark;
     if (win) c.win = win;
     // In a light theme a bar is used only if it is close to the editor (1.5:1 at most), so the text, which reads at
     // 7:1 on the cards, still reads on it; a dark or coloured bar (a classic activity bar, a blue title bar) is not.
