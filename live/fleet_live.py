@@ -2209,9 +2209,9 @@ def inspect_process(m, pid):
             elif cfg.get("os") == "macos":
                 cmd, stdin = ["ssh"] + SSH_MARK + [cfg["ssh"], "python3 -"], mac_inspect_script(pid, INSPECT_SECS).encode()
             elif cfg.get("os") == "windows":
-                script = "$FleetPid=%d\n$FleetSecs=%s\n" % (pid, INSPECT_SECS) + ps_compact(open(os.path.join(HERE, "inspect_windows.ps1"), encoding="utf-8").read())
-                enc = base64.b64encode(script.encode("utf-16-le")).decode()
-                cmd, stdin = ["ssh"] + SSH_MARK + [cfg["ssh"], "powershell -NoProfile -NonInteractive -EncodedCommand " + enc], None
+                # like the collector: a short bootstrap any default shell runs (cmd.exe takes 8,191 characters), the script on stdin
+                argv, stdin = ps_launch("$FleetPid=%d\n$FleetSecs=%s\n" % (pid, INSPECT_SECS) + ps_compact(open(os.path.join(HERE, "inspect_windows.ps1"), encoding="utf-8").read()))
+                cmd = ["ssh"] + SSH_MARK + [cfg["ssh"], " ".join(argv)]
             else:
                 cmd = ["ssh"] + SSH_MARK + [cfg["ssh"], "python3 - %d %s" % (pid, INSPECT_SECS)]
                 stdin = open(os.path.join(HERE, "inspect_linux.py"), "rb").read()

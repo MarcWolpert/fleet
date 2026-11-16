@@ -123,6 +123,27 @@ class LaunchFitsAnyShell(unittest.TestCase):
         self.check_payload(p.stdin.writes[0])
         self.assertEqual((p.stdin.flushed, p.stdin.closed), (True, False))
 
+    def test_the_process_inspector_over_ssh(self):
+        # #304: the inspector is the other long script Fleet sends a Windows machine. As one -EncodedCommand it was
+        # about 10,800 characters, so on a host whose OpenSSH keeps cmd.exe as its shell every inspection failed with
+        # "The command line is too long." It goes the collector's way: the short bootstrap, and the script on stdin.
+        ran = []
+        def run(cmd, **kw):
+            ran.append((cmd, kw.get("input")))
+            return subprocess.CompletedProcess(cmd, 0, b'#< CLIXML\r\n{"pid": 4242, "threads_n": 3}\r\n', b"")
+        m = fl.Machine({"id": "w", "name": "win-desktop", "os": "windows", "ssh": "win-desktop"}, 3)
+        with mock.patch.object(fl.subprocess, "run", run), mock.patch.object(fl, "INSPECT_CACHE", {}):
+            out = fl.inspect_process(m, 4242)
+        [(cmd, stdin)] = ran
+        self.assertEqual(cmd[:-1], ["ssh"] + fl.SSH_MARK + ["win-desktop"])
+        self.check_bootstrap(cmd[-1])
+        self.assertTrue(stdin.isascii(), "plain text: the console's code page reads it as sent")
+        script = "$FleetPid=4242\n$FleetSecs=%s\n" % fl.INSPECT_SECS + fl.ps_compact(
+            open(os.path.join(LIVE, "inspect_windows.ps1"), encoding="utf-8").read())
+        self.assertEqual(stdin.decode("ascii"), script + "\n" + END + "\n")
+        self.assertGreater(len(base64.b64encode(script.encode("utf-16-le"))), CMD_EXE_MAX, "the script alone is too long for cmd.exe")
+        self.assertEqual({k: v for k, v in out.items() if k != "t"}, {"pid": 4242, "threads_n": 3, "machine": "w"})
+
 
 MIB = 1024 * 1024
 LO, HI = "0x00000000_0x0000d1b5", "0x00000000_0x00010f2c"   # two adapters' LUIDs, LO the lower
