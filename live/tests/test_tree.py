@@ -448,5 +448,115 @@ class GoneNodesAreForgotten(TreeTest):
         self.assertEqual(sorted(f.specs), ["lx", "nas"])
 
 
+def compose(cid, project, service, u, name=None, gkeys=()):
+    c = container(cid, name or "%s-%s-1" % (project, service), u, gkeys, project, service)
+    c["file"] = "/srv/%s/compose.yaml,/srv/%s/compose.override.yaml" % (project, project)
+    return c
+
+
+class TheTree(TreeTest):
+    """#179: the whole tree for a machine, as an exact set, with the nothing-else controls."""
+
+    def shape(self, spec):
+        node = lambda n: (n["id"], n["name"], n.get("status", ""), n.get("g", []), n["h"]["cpu"][-1], n["h"]["mem"][-1])
+        return {"base": (spec["base"]["id"], spec["base"]["g"], [spec["base"]["h"][k][-1] for k in fleet_live.METRICS]),
+                "compose": [(p["id"], p["name"], p["file"], [node(s) for s in p["services"]]) for p in spec["compose"]],
+                "containers": [node(c) for c in spec["containers"]],
+                "jobs": [(j["id"], j["name"], j["running"], j["g"], j["h"]["cpu"][-1]) for j in spec["baseCron"]],
+                "vms": [(v["id"], v["status"], [v["base"]["h"][k][-1] for k in fleet_live.METRICS]) for v in spec["vms"]],
+                "owners": spec["procs_owner"]}
+
+    def test_compose_projects_loose_containers_vms_and_jobs_with_base_as_what_is_left(self):
+        f = make_fleet({"id": "lx", "name": "lx", "ssh": "lx", "os": "linux"}, {"id": "nas", "name": "nas", "ssh": "nas", "os": "linux"})
+        conts = [compose("aaaaaa111111", "media", "web", [0.5, 1.0, 0, 0.25, 0.1]), compose("bbbbbb222222", "media", "web", [0.25, 1.0, 0, 0, 0.1], name="media-web-2"),
+                 compose("cccccc333333", "media", "db", [0.25, 2.0, 0, 0.25, 0]), container("dddddd444444", "builder", [0.5, 0.5, 0, 0, 0.05]),
+                 dict(container("eeeeee555555", "old", [0, 0, 0, 0, 0]), status="Exited (0) 2 hours ago")]
+        give(f, "lx", view(host=[2.0, 5.0, 0.0, 1.0, 0.5], containers=conts, vms=[vm("lab", [0.25, 1.0, 0, 0.25, 0.05], cpus="2-3")],
+                           jobs=[job("rotate.sh", u=[0.125, 0.25, 0, 0, 0]), job("backup.sh", sched="0 3 * * *")]))
+        give(f, "nas", view(containers=[compose("ffffff666666", "media", "web", [1.0, 1.0, 0, 0, 0])]))   # same names, another host
+        r = lambda: jid("lx", "rotate.sh", "crontab", "*/5 * * * *", "/usr/local/bin/rotate.sh")
+        b = lambda: jid("lx", "backup.sh", "crontab", "0 3 * * *", "/usr/local/bin/backup.sh")
+        self.assertEqual(self.shape(self.record(f, "lx")), {
+            # 2.0 cores less 1.5 in containers, 0.25 in the VM and 0.125 in a job; 5 GB less 4.5, 1 and 0.25 is below 0, so 0
+            "base": ("lx/base", [], [0.125, 0.0, 0.0, 0.25, 0.2]),
+            "compose": [("lx/compose/media", "media", "/srv/media/compose.yaml",
+                         [("lx/compose/media/db", "db", "Up 1 hour", [], 0.25, 2.0), ("lx/compose/media/web", "web", "Up 1 hour", [], 0.5, 1.0),
+                          ("lx/compose/media/web-bbbbbb", "web", "Up 1 hour", [], 0.25, 1.0)])],
+            "containers": [("lx/containers/builder", "builder", "Up 1 hour", [], 0.5, 0.5), ("lx/containers/old", "old", "Exited (0) 2 hours ago", [], 0.0, 0.0)],
+            "jobs": [(r(), "rotate.sh", True, [], 0.125), (b(), "backup.sh", False, [], 0.0)],
+            "vms": [("lx/vms/lab", "ok", [0.25, 1.0, 0.0, 0.25, 0.05])],
+            "owners": {"cont": {"aaaaaa111111": "lx/compose/media/web", "bbbbbb222222": "lx/compose/media/web-bbbbbb", "cccccc333333": "lx/compose/media/db",
+                                "dddddd444444": "lx/containers/builder", "eeeeee555555": "lx/containers/old"}, "vm": {"lab": "lx/vms/lab"}}})
+        nas = self.shape(self.record(f, "nas"))
+        self.assertEqual((nas["compose"], nas["containers"], nas["jobs"], nas["vms"]),
+                         ([("nas/compose/media", "media", "/srv/media/compose.yaml", [("nas/compose/media/web", "web", "Up 1 hour", [], 1.0, 1.0)])], [], [], []))
+
+    def test_api_fleet_sends_no_processes_at_any_level(self):
+        f = make_fleet(HOST_CFG, VM_CFG)
+        give(f, "nas", host_view([vm("win-vm", [3.5, 16.0, 0, 2.0, 1.0])], procs=[prow(10, "qemu", "vm:win-vm")]))
+        give(f, "win-vm", view(procs=[prow(40, "explorer.exe", "base")]))
+        self.record(f, "nas")
+        with mock.patch.object(fleet_live, "load_pins", lambda: []), mock.patch.object(fleet_live, "load_tilepins", lambda: {}), \
+                mock.patch.object(fleet_live, "load_prefs", lambda: {}):
+            out = f.api_fleet()
+        def keys(s):
+            return [sorted({"procs", "procs_owner"} & set(s))] + [keys(v) for v in s["vms"]]
+        self.assertEqual([keys(s) for s in out["machines"]], [[[], [[]]]])
+        self.assertEqual(([p[10] for p in f.api_procs("nas")["procs"]], [p[10] for p in f.api_procs("win-vm")["procs"]]), (["win-vm"], ["win-vm/base"]))
+
+
+class SavedState(TreeTest):
+    """#179: the last readings and history survive a restart; nothing too old, and nothing for machines no longer configured."""
+
+    def setUp(self):
+        super().setUp()
+        self.tmp = tempfile.TemporaryDirectory()
+        self.state = mock.patch.object(fleet_live, "STATE_PATH", os.path.join(self.tmp.name, "state.json"))
+        self.state.start()
+
+    def tearDown(self):
+        self.state.stop()
+        self.tmp.cleanup()
+        super().tearDown()
+
+    def test_a_restart_gets_the_last_reading_without_processes_and_the_history_back(self):
+        f = make_fleet(HOST_CFG, {"id": "lx", "name": "lx", "ssh": "lx", "os": "linux"})
+        m = give(f, "nas", busy_view(1.0))
+        m.last_ok = 1234.5
+        for cpu in (1.0, 2.0):
+            m.view = busy_view(cpu)
+            self.record(f, "nas")
+        fleet_live.save_state(f)
+        hist = snapshot()
+        fleet_live.HIST = fleet_live.Hist()
+        g = make_fleet(HOST_CFG, {"id": "lx", "name": "lx", "ssh": "lx", "os": "linux"})
+        fleet_live.load_state(g)
+        n = g.machines["nas"]
+        self.assertEqual((n.view, n.last_ok, n.status), (dict(busy_view(2.0), procs=[]), 1234.5, "connecting"))
+        self.assertEqual((g.machines["lx"].view, g.machines["lx"].status), (None, "connecting"))
+        self.assertEqual(snapshot(), hist)
+
+    def test_a_state_file_over_six_hours_old_is_left_alone(self):
+        f = make_fleet(HOST_CFG)
+        give(f, "nas", busy_view(1.0))
+        self.record(f, "nas")
+        with mock.patch.object(fleet_live.time, "time", lambda: 1_000_000.0):
+            fleet_live.save_state(f)
+        fleet_live.HIST = fleet_live.Hist()
+        g = make_fleet(HOST_CFG)
+        with mock.patch.object(fleet_live.time, "time", lambda: 1_000_000.0 + 6 * 3600 + 1):
+            fleet_live.load_state(g)
+        self.assertEqual((g.machines["nas"].view, snapshot()), (None, {}))
+
+    def test_a_machine_no_longer_configured_gets_no_reading(self):
+        f = make_fleet(HOST_CFG, {"id": "old-host", "name": "old-host", "ssh": "old-host", "os": "linux"})
+        give(f, "old-host", busy_view(1.0))
+        fleet_live.save_state(f)
+        g = make_fleet(HOST_CFG)
+        fleet_live.load_state(g)
+        self.assertEqual(list(g.machines), ["nas"])
+        self.assertIsNone(g.machines["nas"].view)
+
+
 if __name__ == "__main__":
     unittest.main()
