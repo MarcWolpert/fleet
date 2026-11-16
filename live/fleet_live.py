@@ -79,13 +79,16 @@ def save_connect(d):
         os.replace(tmp, CONNECT_PATH)
 
 
-def connects_at_start(cfg, conn, off=()):
+def connects_at_start(cfg, conn, off=(), restarted=False):
     """Whether Fleet connects to this machine when it starts: this computer always (it needs no SSH); an
-    SSH machine per 'Connect automatically', unless it was turned off by hand before Fleet restarted itself."""
+    SSH machine per 'Connect automatically'. A restart Fleet does itself (settings saved, an update) keeps every
+    machine connected but those turned off by hand, and connects one just added (#224)."""
     if cfg.get("kind") == "local":
         return True
     if cfg["id"] in off:
         return False
+    if restarted:
+        return True
     a = conn["auto"]
     return a == "all" or (a != "none" and cfg["id"] in conn["presets"].get(a, []))
 
@@ -1557,9 +1560,10 @@ class Fleet:
         self.interval = float(cfg.get("interval", 3))
         self.machines = collections.OrderedDict()
         conn, off = load_connect(), set(filter(None, os.environ.pop("FLEET_OFF", "").split(",")))
+        restarted = os.environ.pop("FLEET_RESTARTED", "") == "1"   # Fleet restarting itself, not a start
         for m in cfg.get("machine", []):
             self.machines[m["id"]] = Machine(m, self.interval)
-            if not connects_at_start(m, conn, off):
+            if not connects_at_start(m, conn, off, restarted):
                 self.machines[m["id"]].on.clear()
         self.tick = 0
         self.specs = {}
@@ -1949,6 +1953,7 @@ def load_state(fleet):
 def restart_self(fleet, reason):
     print("%s; restarting" % reason, flush=True)
     os.environ["FLEET_OFF"] = ",".join(m.id for m in fleet.machines.values() if not m.on.is_set())   # stays off after the restart
+    os.environ["FLEET_RESTARTED"] = "1"   # and the rest stay connected, whatever Auto says (#224)
     save_state(fleet)
     stop_collectors(fleet)
     args = [sys.executable, os.path.abspath(__file__)] + [x for x in sys.argv[1:] if x not in ("--open", "--open-if-unseen")] + ["--open-if-unseen"]
