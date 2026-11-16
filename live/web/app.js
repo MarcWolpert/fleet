@@ -1305,6 +1305,7 @@ document.addEventListener('click', e => {
   const tp = e.target.closest('[data-tpin]'); if (tp){ e.stopPropagation(); toggleTilePin(tp.dataset.tpin); return; }
   const ap = e.target.closest('[data-addpin]'); if (ap){ PICK.open ? closePicker(false) : openPicker(); return; }
   const st = e.target.closest('[data-settings]'); if (st){ openSettings(); return; }
+  if (e.target.closest('[data-addmachinedlg]')){ openAddMachine(); return; }
   const tm = e.target.closest('[data-terminal]'); if (tm){ const n = nodes[tm.dataset.terminal]; api('/api/terminal', {node:tm.dataset.terminal}).then(r => toast(r.ok ? `Opened ${r.title} in ${r.terminal}` : (r.error || 'Couldn’t open a terminal'))).catch(() => toast('Couldn’t reach Fleet')); return; }
   const rt = e.target.closest('[data-retry]'); if (rt){ rt.disabled = true; rt.innerHTML = icon('refresh') + 'Retrying…'; api('/api/retry', {machine:rt.dataset.retry}).catch(() => null); setTimeout(refreshNow, 2500); return; }
   if (PICK.open && !$('picker').contains(e.target)) closePicker(false);
@@ -2524,4 +2525,54 @@ function pinsView(){
   return `<div class="hero"><span class="tile" style="background:color-mix(in srgb, var(--accent) 22%, transparent);color:var(--accent)">${icon('pin')}</span><div><h1>Pins only</h1><div class="facts"><span>${items.length} pinned</span><span>${mlabel(S.metric)}: each pin's share of its host (or of itself, for a machine)</span></div></div></div>`
     + (items.length ? `<section class="card"><div class="card-h"><h2>Your pins · ${mlabel(S.metric)}</h2></div><div class="pinlist">${rows}</div></section>`
       : noteHTML('Nothing pinned yet: pin a machine, container or group with the pin on its row, or with <b>+</b> in the top bar.'));
+}
+
+
+/* ---------- + Add a machine (#165): how to add an SSH machine, then a short form ---------- */
+async function openAddMachine(){
+  if ($('addm')) return;
+  const el = document.createElement('div'); el.id = 'addm-bg'; el.className = 'sheet-bg';
+  el.innerHTML = `<div class="sheet addm" id="addm" role="dialog" aria-modal="true" aria-labelledby="addm-t">
+    <div class="sheet-h"><h2 id="addm-t">Add a machine</h2><button type="button" class="iconbtn" data-addmclose="1" aria-label="Close">${icon('x', 2.2)}</button></div>
+    <div class="sheet-b">
+      <section><h3>Before you add it</h3><p class="sub">Fleet reads a machine over SSH from this computer, read-only, and installs nothing there.</p><ol>
+        <li>Check you can log in without a password: <code>ssh user@host</code>. If it asks for one, copy your key there with <code>ssh-copy-id user@host</code>.</li>
+        <li><b>Linux</b> needs <code>python3</code> (most have it). <b>Windows</b> needs OpenSSH Server (Settings, System, Optional features) and your key in <code>C:\\Users\\you\\.ssh\\authorized_keys</code>, or for an administrator account in <code>C:\\ProgramData\\ssh\\administrators_authorized_keys</code>.</li>
+        <li>The host can be an IP, a name from your <code>~/.ssh/config</code>, or a Tailscale name (MagicDNS on).</li>
+        <li>A VM on one of your machines? Add it here, then set <b>Runs on</b> in Settings to nest it under its host.</li></ol></section>
+      <section><h3>Then add it</h3><div class="mgrid">
+        <label class="wide">SSH destination<input name="ssh" placeholder="user@host, an ~/.ssh/config name, or a Tailscale name" spellcheck="false" autocapitalize="off"></label>
+        <label>Name<input name="name" placeholder="what Fleet calls it"></label>
+        <label>System<select name="os"><option value="linux">Linux</option><option value="windows">Windows</option></select></label></div>
+        <div class="mtest"><button type="button" class="btn" data-addmtest="1">${icon('refresh')}Test connection</button><span class="tres"></span></div>
+        <div class="addm-err" role="alert"></div></section>
+    </div>
+    <div class="sheet-f"><button type="button" class="btn" data-addmclose="1">Cancel</button><button type="button" class="btn primary" data-addmsave="1">Add to Fleet</button></div></div>`;
+  document.body.appendChild(el);
+  const q = n => el.querySelector(`[name=${n}]`), res = el.querySelector('.tres'), err = el.querySelector('.addm-err');
+  const close = () => { el.remove(); const b = document.querySelector('[data-addmachinedlg]'); if (b) b.focus(); };
+  el.addEventListener('keydown', e => { if (e.key === 'Escape'){ e.preventDefault(); e.stopPropagation(); close(); } });
+  el.addEventListener('click', async e => {
+    if (e.target === el || e.target.closest('[data-addmclose]')){ close(); return; }
+    if (e.target.closest('[data-addmtest]')){
+      const ssh = q('ssh').value.trim(); if (!ssh){ err.textContent = 'Type the SSH destination first.'; return; }
+      res.className = 'tres'; res.textContent = 'Testing…';
+      try { const r = await api('/api/test', {ssh, os:q('os').value}); res.className = 'tres ' + (r.ok ? 'good' : 'bad'); res.innerHTML = r.ok ? icon('check') + 'Connected' : 'Failed' + (r.output ? ` · <code>${esc(String(r.output).split('\n').slice(0, 2).join(' · '))}</code>` : ''); }
+      catch (x) { res.className = 'tres bad'; res.textContent = 'Fleet didn’t answer'; }
+      return;
+    }
+    if (e.target.closest('[data-addmsave]')){
+      const ssh = q('ssh').value.trim(), name = q('name').value.trim() || ssh, os = q('os').value;
+      if (!ssh){ err.textContent = 'Type the SSH destination first.'; q('ssh').focus(); return; }
+      err.textContent = '';
+      try {
+        const cfg = await (await fetch('/api/config', {cache:'no-store'})).json(), machines = (cfg.machines || []).map(m => Object.assign({}, m));
+        const m = {id:slugId(name, new Set(machines.map(x => x.id))), name, ssh, os, tile:os === 'windows' ? 'desktop' : 'server'};
+        const r = await api('/api/config', {interval:Number(cfg.interval) || 3, terminal:cfg.terminal || 'auto', machines:machines.concat([m])});
+        if (r.ok === false){ err.textContent = (r.errors || ['Couldn’t save.']).join(' '); return; }
+        close(); toast(`Added ${name}. Connecting…`); setTimeout(refreshNow, 2500);
+      } catch (x) { err.textContent = 'Couldn’t reach Fleet to save.'; }
+    }
+  });
+  q('ssh').focus();
 }

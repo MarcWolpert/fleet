@@ -49,6 +49,7 @@ plus an app window.
 | ✅ | Groups in the trees: drag a box over items at the same level (or drag a row by its handle). A group is named and coloured by what's in it: a **fleet** of machines, a **flotilla** of VMs, a **division** of containers, a **section** of cron jobs, a **squadron** of Docker Compose, a **task force** when mixed; each kind has its own colour from the theme. Click a group's name to see its own all-up view (a fleet gets All machines for just its machines), or its chevron to fold it to one line and back, as it was; right-click to rename, pin or disband; pin any group as a space from **+**; Pins only keeps its own; click empty space for the all-up view |
 | ✅ | Offline machines explain why in plain language, with the steps to fix it and Retry; reconnecting machines keep their last reading |
 | ✅ | Settings: add and edit machines, test a connection, pick the terminal app and refresh rate |
+| ✅ | **+ Add a machine** at the bottom of the tree: how to get a machine ready for SSH (keys, python3 on Linux, OpenSSH on Windows, Tailscale names), then test and add it in one step |
 | ✅ | Open terminal: ssh to any machine, or a shell inside any container, in your preferred terminal |
 | ✅ | Pick processors, a CCD or a P/E-core group, or a GPU, and see just those, with what runs on them |
 | ✅ | Dock the Details process list beside the overview (drag the Details pill to the right) |

@@ -692,6 +692,15 @@ tr.fmatch>td{background:color-mix(in srgb, var(--stale) 16%, transparent)!import
 .prow2 .pw{font-size:12px;color:var(--ink-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .prow2 .track{height:8px;border-radius:4px;background:var(--track);overflow:hidden}.prow2 .track i{display:block;height:100%;border-radius:4px}
 .prow2 .pv{font:500 12px var(--mono);color:var(--ink);text-align:right}
+
+/* + Add a machine: the foot of the tree panel, and its dialog */
+.side-foot{flex:none;padding:10px 12px;border-top:1px solid var(--line)}
+.addm-btn svg{width:14px;height:14px}
+.sheet.addm{width:min(640px,100%)}
+.addm ol{margin:0 0 4px;padding-left:20px;display:flex;flex-direction:column;gap:9px;font-size:13px;color:var(--ink-2);line-height:1.5}
+.addm ol code,.addm p code{font:500 12px/1.4 var(--mono);background:color-mix(in srgb, var(--ink) 7%, transparent);border-radius:5px;padding:1px 6px;color:var(--ink)}
+.addm .mgrid{margin-top:4px}
+.addm .addm-err{color:var(--warn);font-size:12.5px}
 </style>
 </head>
 <body>
@@ -716,6 +725,7 @@ tr.fmatch>td{background:color-mix(in srgb, var(--stale) 16%, transparent)!import
       <div class="tfind" id="tfind" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg><input type="search" id="tfq" placeholder="Filter the tree" aria-label="Filter the tree" autocomplete="off" spellcheck="false"></div>
       <div class="tree" id="tree" role="tree"></div>
       <div id="side-note"></div>
+      <div class="side-foot"><button type="button" class="btn addm-btn" data-addmachinedlg="1" aria-haspopup="dialog"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>Add a machine</button></div>
     </aside>
     <main id="main"></main>
     <div class="mfind" id="mfind" role="search" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg><input type="search" id="mfq" placeholder="Find on this page" aria-label="Find on this page" autocomplete="off" spellcheck="false"><span id="mfcount" aria-live="polite"></span><button type="button" data-mfstep="-1" aria-label="Previous match" title="Previous (⇧Enter)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M6 15l6-6 6 6"/></svg></button><button type="button" data-mfstep="1" aria-label="Next match" title="Next (Enter)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button><button type="button" data-mfclose="1" aria-label="Close find" title="Close (Esc)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
