@@ -382,6 +382,41 @@ class Machine:
         self.wake.set()
         return True
 
+    def docker_desktop_procs(self, view, own, now=None):
+        """Docker Desktop (this Mac): each container's processes, read with docker top, since they run in
+        Docker's Linux VM, which macOS can't see. Their PIDs are the VM's, so rows are keyed
+        d:<container>:<pid> and never meet this Mac's. CPU comes from each one's cumulative CPU time over its
+        last readings (up to 15 s apart); it is read at most every 2 s."""
+        now = time.time() if now is None else now
+        st = self.__dict__.setdefault("dtop", {"t": -1e9, "rows": [], "cpu": {}})
+        if now - st["t"] < 2.0:
+            return st["rows"]
+        conts = [c for c in view.get("containers", []) if c.get("id")]
+        outs = {}
+        def top(c):
+            outs[c["id"]] = run(["docker", "top", c["id"], "-eo", "pid,ppid,user,stat,cputimes,rss,nlwp,args"], timeout=5)
+        threads = [threading.Thread(target=top, args=(c,), daemon=True) for c in conts]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(6)
+        rows, seen = [], set()
+        for c in conts:
+            cid = c["id"]
+            for pid, ppid, user, stat, cpus, rss, nlwp, args in parse_docker_top(outs.get(cid, "")):
+                key = "d:%s:%d" % (cid, pid)
+                seen.add(key)
+                hist = st["cpu"].setdefault(key, collections.deque(maxlen=8))
+                hist.append((now, cpus))
+                old = next(((t0, c0) for t0, c0 in hist if now - t0 <= 15), None)
+                cpu = (cpus - old[1]) / (now - old[0]) if old and now - old[0] >= 2.5 else 0.0
+                name = os.path.basename(args.split()[0]).rstrip(":") if args.split() else ""
+                rows.append([key, name, user, stat, round(max(0.0, cpu), 4), round(rss * 1024 / GB, 5), 0.0, 0.0, nlwp, args,
+                             own["cont"].get(cid, self.id + "/base"), "d:%s:%d" % (cid, ppid), -1, [], [], [], -1])
+        st["cpu"] = {k: v for k, v in st["cpu"].items() if k in seen}
+        st["t"], st["rows"] = now, rows
+        return rows
+
     def got(self, view):
         with self.lock:
             self.view, self.status, self.error, self.last_ok, self.fresh = view, "ok", "", time.time(), True
@@ -1077,6 +1112,22 @@ def group_lcpus_windows(lcpus):
 
 
 # ---------------------------------------------------------------- macOS collector
+def parse_docker_top(text):
+    """docker top <c> -eo pid,ppid,user,stat,cputimes,rss,nlwp,args: (pid, ppid, user, stat, CPU seconds,
+    RSS KB, threads, command line), the command line whole."""
+    rows = []
+    lines = text.splitlines()
+    if not lines or not lines[0].split()[:1] == ["PID"]:
+        return rows
+    for line in lines[1:]:
+        f = line.split(None, 7)
+        try:
+            rows.append((int(f[0]), int(f[1]), f[2], f[3], int(f[4]), int(f[5]), int(f[6]), f[7] if len(f) > 7 else ""))
+        except (ValueError, IndexError):
+            continue
+    return rows
+
+
 class MacCollector:
     """This Mac, read directly: ps, host_processor_info, vm_stat, netstat, ioreg, docker, crontab, launchd."""
 
@@ -1759,6 +1810,8 @@ class Fleet:
                         p[15] if len(p) > 15 else [], round(p[16], 4) if len(p) > 16 else -1])
         # p[13]: the GPUs the process uses (positions in this machine's gpus); gpu_procs says whether the
         # host reports that at all (macOS doesn't), so an empty p[13] isn't taken for "on no GPU".
+        if m.cfg.get("kind") == "local" and platform.system() == "Darwin" and view.get("containers"):
+            out.extend(m.docker_desktop_procs(view, own))   # Docker Desktop: its containers' processes, from its VM
         return {"procs": out, "t": view["t"], "gpu_procs": bool(view.get("gpu_procs")), "ready": True}
 
     def api_cpus(self, mid):

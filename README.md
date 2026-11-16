@@ -56,6 +56,7 @@ plus an app window.
 | ✅ | Details columns: right-click a column header to hide, move or add columns, a layout per detail type |
 | ✅ | Themes: Fleet's own, Monokai Dimmed and 20 more built in (Dracula, Nord, Solarized, Gruvbox, Tokyo Night, Catppuccin, GitHub, …), or **Import theme** from any VS Code colour theme |
 | ✅ | Keyboard: ⌘K goes to any machine, container, job, command or theme; ⌘F finds in the panel you're in; ⌘[ ⌘] back and forward; ⌘1–9 spaces, ⌃⇥ cycles them, ⌘N a new space, ⌥1–5 metrics, arrows in the tree, ⌘+/⌘− text size; `?` lists them all |
+| ✅ | Docker Desktop on a Mac: its containers are listed directly and its Linux VM is folded into Base system (never counted twice); Details lists each container's processes from `docker top`, with the VM's PID tagged **VM** |
 | ✅ | Details drop-down: click a process to see what it mostly waits on (CPU, disk, memory, GPU, locks, network…), its cache misses, limits, sockets, files and threads; the list holds still while it's open |
 | ✅ | Connections: the dot on a machine's row (or its right-click menu) turns its SSH connection off and on. **Auto** beside + Add a machine picks which machines Fleet connects to when it starts: All, None, or a set you save (*Save what's connected now as a set…*), so a start at login opens no session and asks for no key you didn't want. Kept in `~/.config/fleet/connect.json` |
 | ✅ | macOS app and Linux package, with the Fleet icon |
