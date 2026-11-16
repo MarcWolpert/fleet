@@ -1729,14 +1729,18 @@ function allThemes(){ return FLEET_THEMES.concat(customThemes()); }
 function currentTheme(){ const id = PREFS.theme || 'fleet'; return allThemes().find(t => t.id === id) || FLEET_THEMES[0]; }
 let appliedTheme = '';
 function applyTheme(th){
-  const tk = themeTokens(th), key = th.id + JSON.stringify(tk);
+  // the theme, with the reader's colour vision (#219) and contrast (#220) on top
+  const cvd = CVD_KINDS.includes(PREFS.cvd) ? PREFS.cvd : '', hc = !!PREFS.contrast;
+  const tk = themeAccess(themeTokens(th), {cvd, contrast:hc}), key = th.id + cvd + hc + JSON.stringify(tk);
   if (key === appliedTheme) return;
   appliedTheme = key;
-  const st = document.documentElement.style;
+  const root = document.documentElement, st = root.style;
   for (const [k, v] of Object.entries(tk.vars)) st.setProperty('--' + k, v);
   st.colorScheme = tk.dark ? 'dark' : 'light';
-  document.documentElement.dataset.fleetTheme = th.id;
-  try { localStorage.setItem('fleet-theme', JSON.stringify({id:th.id, dark:tk.dark, vars:tk.vars})); } catch (e) {}
+  root.dataset.fleetTheme = th.id;
+  if (cvd) root.dataset.cvd = cvd; else delete root.dataset.cvd;
+  root.classList.toggle('hc', hc);
+  try { localStorage.setItem('fleet-theme', JSON.stringify({id:th.id, dark:tk.dark, vars:tk.vars, cvd, hc})); } catch (e) {}
   // Fleet.app paints its window (behind the page, and while it loads) in the same colour
   try { window.webkit.messageHandlers.fleet.postMessage({bg:tk.vars.chrome, dark:tk.dark}); } catch (e) {}
 }
@@ -1755,7 +1759,11 @@ function appearanceSection(){
   return `<section><h3>Appearance</h3><p class="sub">Pick a theme; it applies right away and is kept for next time.</p>
     <div class="thgrid" role="group" aria-label="Themes">${allThemes().map(t => themeSwatch(t, t.id === cur)).join('')}</div>
     <div class="throw"><button type="button" class="btn" data-importtheme="1">${icon('upload')}Import theme</button><input type="file" id="themefile" accept=".json,.jsonc,application/json" hidden>
-    <span class="thmsg${THEME_MSG.bad ? ' bad' : ''}" role="status">${esc(THEME_MSG.text || 'A VS Code colour theme (.json), or a Fleet theme.')}</span></div></section>`;
+    <span class="thmsg${THEME_MSG.bad ? ' bad' : ''}" role="status">${esc(THEME_MSG.text || 'A VS Code colour theme (.json), or a Fleet theme.')}</span></div>
+    <div class="access"><label>Colour vision<select data-cvd aria-describedby="cvd-help">${[['', 'Typical'], ['protan', 'Protanopia (red-weak)'], ['deutan', 'Deuteranopia (green-weak)'], ['tritan', 'Tritanopia (blue-weak)'], ['mono', 'Monochromacy (no colour)']]
+      .map(([v, l]) => `<option value="${v}"${(PREFS.cvd || '') === v ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
+      <label class="chk"><input type="checkbox" data-hc${PREFS.contrast ? ' checked' : ''}>Higher contrast</label>
+      <p class="sub" id="cvd-help">Colour vision swaps the colours of workload types, groups and statuses for ones that stay apart for that kind of vision (on any theme); statuses also change shape. Higher contrast makes text and lines stronger.</p></div></section>`;
 }
 function rerenderAppearance(focusSel){
   if (!SET.open || !SET.draft) return;
@@ -1763,6 +1771,15 @@ function rerenderAppearance(focusSel){
   sec.closest('section').outerHTML = appearanceSection();
   const f = focusSel && $('sheet').querySelector(focusSel); if (f) f.focus();
 }
+async function setAccess(change, what){
+  PREFS = Object.assign({}, PREFS, change);
+  applyTheme(currentTheme()); lastMainHTML = ''; renderAll();
+  await savePrefs(what);
+}
+document.addEventListener('change', e => {
+  const c = e.target.closest('#sheet [data-cvd]'); if (c){ setAccess({cvd:c.value}, 'colour vision'); return; }
+  const h = e.target.closest('#sheet [data-hc]'); if (h) setAccess({contrast:h.checked}, 'higher contrast');
+});
 async function pickTheme(id){
   if (!allThemes().some(t => t.id === id)) return;
   PREFS = Object.assign({}, PREFS, {theme:id});

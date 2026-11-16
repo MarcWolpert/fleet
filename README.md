@@ -54,6 +54,7 @@ plus an app window.
 | ✅ | Pick processors, a CCD or a P/E-core group, or a GPU, and see just those, with what runs on them |
 | ✅ | Dock the Details process list beside the overview (drag the Details pill to the right) |
 | ✅ | Details columns: right-click a column header to hide, move or add columns, a layout per detail type |
+| ✅ | Colour vision and contrast (Settings › Appearance): a colour-blind mode for protanopia, deuteranopia, tritanopia or monochromacy (colours checked to stay apart for each, statuses also change shape), and Higher contrast (stronger text and lines, the faintest text 7:1 or more), on any theme |
 | ✅ | Themes: Fleet's own, Monokai Dimmed and 20 more built in (Dracula, Nord, Solarized, Gruvbox, Tokyo Night, Catppuccin, GitHub, …), or **Import theme** from any VS Code colour theme |
 | ✅ | Keyboard: ⌘K goes to any machine, container, job, command or theme; ⌘F finds in the panel you're in; ⌘[ ⌘] back and forward; ⌘1–9 spaces, ⌃⇥ cycles them, ⌘N a new space, ⌥1–5 metrics, arrows in the tree, ⌘+/⌘− text size; `?` lists them all |
 | ✅ | Docker Desktop on a Mac: its containers are listed directly and its Linux VM is folded into Base system (never counted twice); Details lists each container's processes from `docker top`, with the VM's PID tagged **VM**; open one and choose how to look inside it: a throwaway helper container (`docker run --rm --pid=host --network=none`, the `python:3.12-slim` image) or Fleet's inspector run in its own container (`docker exec`, needs python3 there) |
