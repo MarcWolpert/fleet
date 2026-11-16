@@ -203,7 +203,7 @@ def stat_line(pid, comm, ppid, start):
 
 def run_exec_finder(procs, pid, top, backwards=False):
     """Run the prelude docker_vm_inspect_cmd sends with docker exec, as python3 runs it inside the container, against a
-    fake /proc: procs {container pid: (cmdline bytes, comm, ppid, seconds since it started)}. `top` is what docker top
+    fake /proc: procs {container pid: (cmdline bytes or None for one that just exited, comm, ppid, seconds since it started)}. `top` is what docker top
     said of the container (VM pid, etimes, args), as inspect_docker_vm reads it. Returns the container PID the
     inspector is then run on, or the error it printed. /proc is listed in name order, or backwards."""
     out = "PID ELAPSED COMMAND\n" + "".join("%d %d %s\n" % row for row in top)
@@ -218,6 +218,8 @@ def run_exec_finder(procs, pid, top, backwards=False):
             f.write("%.2f 100.00\n" % UPTIME)
         for p, (cmdline, comm, ppid, age) in procs.items():
             os.mkdir(os.path.join(root, str(p)))
+            if cmdline is None:   # it exited after /proc was listed: its files are gone
+                continue
             with open(os.path.join(root, str(p), "cmdline"), "wb") as f:
                 f.write(cmdline)
             with open(os.path.join(root, str(p), "stat"), "w") as f:
@@ -275,6 +277,121 @@ class ExecFindsTheProcess(unittest.TestCase):
         procs = {1: (b"/sbin/tini\0--\0node\0server.js\0", "tini", 0, 300.0), 6: (b"node\0server.js\0", "node", 1, 299.4)}
         top = [(4100, 300, "/sbin/tini -- node server.js"), (4107, 299, "node server.js")]
         self.assertEqual((run_exec_finder(procs, 4107, top), run_exec_finder(procs, 4100, top)), (6, 1))
+
+
+class ExecFinderEdges(unittest.TestCase):
+    """PR 273 review: the finder's parts most likely to be wrong, run (not only compiled): where starttime is in
+    /proc/<pid>/stat, the 3 s it allows, and command lines whose NULs differ from docker top's text."""
+
+    def one(self, cmdline, age, args="node server.js", etimes=299, comm="node"):
+        return run_exec_finder({6: (cmdline, comm, 1, age)}, 4107, [(4107, etimes, args)])
+
+    def test_starttime_is_field_22_whatever_the_process_calls_itself(self):
+        # comm may hold spaces and parentheses: the fields are counted from the last ")"
+        self.assertEqual([self.one(b"node\0server.js\0", 299.4, comm=c) for c in ("node", "my (odd) node", "a) S 1 2 3")], [6, 6, 6])
+
+    def test_three_seconds_either_way_and_no_more(self):
+        got = {age: self.one(b"node\0server.js\0", age) for age in (296.1, 299.0, 301.9, 302.5, 295.5)}
+        nf = "Couldn't find that process inside its container."
+        self.assertEqual(got, {296.1: 6, 299.0: 6, 301.9: 6, 302.5: nf, 295.5: nf})
+
+    def test_command_lines_as_docker_top_shows_them(self):
+        cases = {b"node\0server.js\0": "node server.js",                         # argv, NUL after each
+                 b"node\0server.js": "node server.js",                            # no NUL after the last
+                 b"nginx: worker process\0\0\0\0\0\0": "nginx: worker process",      # a rewritten argv, padded
+                 b"sshd: /usr/sbin/sshd -D [listener] 0 of 10-100 startups\0": "sshd: /usr/sbin/sshd -D [listener] 0 of 10-100 startups"}
+        self.assertEqual({k: self.one(k, 299.4, args=v) for k, v in cases.items()}, {k: 6 for k in cases})
+
+    def test_nothing_else_another_command_line_is_not_it(self):
+        nf = "Couldn't find that process inside its container."
+        self.assertEqual([self.one(b"node\0server.js\0--inspect\0", 299.4), self.one(b"node\0worker.js\0", 299.4)], [nf, nf])
+
+    def test_a_process_that_exits_while_proc_is_read_is_passed_over(self):
+        procs = dict(PREFORK)
+        procs[11] = (None, "gone", 7, 1.0)   # listed, then gone before its files are read
+        self.assertEqual(run_exec_finder(procs, 3713, PREFORK_TOP), 9)
+
+
+class InspectDockerVm(unittest.TestCase):
+    """inspect_docker_vm: docker top to find it for exec, then docker run or docker exec, and the answer or the error."""
+
+    def setUp(self):
+        fl.INSPECT_CACHE.clear()
+        self.addCleanup(fl.INSPECT_CACHE.clear)
+        self.m = types_m()
+
+    def look(self, via, stdout=b"", stderr=b"", top=PREFORK_TOP, pid=3700, raises=None, keep=False):
+        if not keep:
+            fl.INSPECT_CACHE.clear()
+        out = "PID ELAPSED COMMAND\n" + "".join("%d %d %s\n" % row for row in top)
+        with mock.patch.object(fl, "run", lambda cmd, timeout=10: out), mock.patch.object(fl.subprocess, "run") as sp, \
+                mock.patch.object(fl.time, "time", return_value=1000.0):
+            sp.return_value = mock.Mock(stdout=stdout, stderr=stderr)
+            if raises:
+                sp.side_effect = raises
+            got = fl.inspect_docker_vm(self.m, "abc123def456", pid, via)
+        return got, [c.args[0][:3] for c in sp.call_args_list]
+
+    def test_the_last_json_line_is_the_answer(self):
+        got, ran = self.look("exec", stdout=b'Unable to find image\n{"pid": 1}\nnoise\n{"pid": 7, "name": "gunicorn"}\n')
+        self.assertEqual((got, ran), ({"pid": 7, "name": "gunicorn", "machine": "here", "t": 1000.0, "via": "exec"}, [["docker", "exec", "-i"]]))
+
+    def test_a_process_docker_top_no_longer_lists_is_gone_and_nothing_runs(self):
+        self.assertEqual(self.look("exec", pid=3799), ({"pid": 3799, "gone": True}, []))
+
+    def test_exec_says_a_missing_python3_from_stdout_and_a_helper_its_error_from_stderr(self):
+        miss = b'OCI runtime exec failed: exec failed: unable to start container process: exec: "python3": executable file not found in $PATH: unknown\n'
+        self.assertEqual(self.look("exec", stdout=miss)[0]["error"], "This container has no python3 to run Fleet's inspector. Look with a helper container instead.")
+        got, ran = self.look("helper", stderr=b"Unable to find image 'python:3.12-slim' locally\ndocker: Error response from daemon: pull access denied.\n")
+        self.assertEqual((got["error"], ran), ("docker: Error response from daemon: pull access denied.", [["docker", "run", "--rm"]]))
+        self.assertEqual(self.look("helper")[0]["error"], "no answer from Docker")
+
+    def test_docker_that_takes_too_long_says_so(self):
+        got, _ = self.look("helper", raises=fl.subprocess.TimeoutExpired(["docker"], 120))
+        self.assertEqual(got, {"pid": 3700, "error": "Docker took too long to answer", "machine": "here", "t": 1000.0, "via": "helper"})
+
+    def test_a_second_look_within_a_second_is_the_first_one(self):
+        first, _ = self.look("helper", stdout=b'{"pid": 3700}\n')
+        again, ran = self.look("helper", stdout=b'{"pid": 3700, "other": 1}\n', keep=True)
+        self.assertEqual((again, ran), (first, []))
+
+
+class ProcRouteGate(unittest.TestCase):
+    """/api/proc?key=d:<container>:<pid>&via=...: only for this computer when it is a Mac (Docker Desktop), only by a
+    way Fleet knows, only for a well-formed key; anything else is refused and nothing is run."""
+
+    def ask(self, query, platform_name="darwin"):
+        import http.client, http.server
+        fleet = mock.Mock()
+        fleet.machines = {"here": fl.Machine({"id": "here", "name": "here", "kind": "local"}, 3),
+                          "nas": fl.Machine({"id": "nas", "name": "nas", "ssh": "nas", "os": "linux"}, 3)}
+        srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), fl.Handler)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        seen = []
+        try:
+            with mock.patch.object(fl.Handler, "fleet", fleet, create=True), mock.patch.object(fl.sys, "platform", platform_name), \
+                    mock.patch.object(fl, "inspect_docker_vm", lambda m, cid, pid, via: seen.append((m.id, cid, pid, via)) or {"pid": pid}):
+                c = http.client.HTTPConnection("127.0.0.1", srv.server_address[1], timeout=5)
+                c.request("GET", "/api/proc?" + query, headers={"Host": "127.0.0.1:%d" % srv.server_address[1]})
+                body = json.loads(c.getresponse().read())
+                c.close()
+        finally:
+            srv.shutdown()
+            srv.server_close()
+        return body, seen
+
+    def test_a_vm_process_of_this_mac_by_a_known_way(self):
+        self.assertEqual(self.ask("machine=here&key=d:abc123def456:3615&via=helper"), ({"pid": 3615}, [("here", "abc123def456", 3615, "helper")]))
+        self.assertEqual(self.ask("machine=here&key=d:abc123def456:3615&via=exec")[1], [("here", "abc123def456", 3615, "exec")])
+
+    def test_nothing_else(self):
+        no = ({"error": "no such process"}, [])
+        cases = {"an unknown way": "machine=here&key=d:abc123def456:3615&via=ssh", "no way": "machine=here&key=d:abc123def456:3615",
+                 "a bad key": "machine=here&key=d:abc123def456:3615;id&via=helper", "a short id": "machine=here&key=d:abc123:3615&via=helper",
+                 "another machine": "machine=nas&key=d:abc123def456:3615&via=helper", "no machine": "machine=gone&key=d:abc123def456:3615&via=helper"}
+        got = {k: self.ask(q) for k, q in cases.items()}
+        got["not a Mac"] = self.ask("machine=here&key=d:abc123def456:3615&via=helper", platform_name="linux")
+        self.assertEqual(got, dict({k: no for k in cases}, **{"not a Mac": no}))
 
 
 class LookInside(unittest.TestCase):
