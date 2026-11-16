@@ -34,6 +34,8 @@ async function open(fx){
   await p.waitFor(`document.querySelectorAll('.ptbl tbody tr[data-pid]').length === 12`);
   return p;
 }
+const settle = ms => new Promise(r => setTimeout(r, ms));
+async function polls(p, n = 3){ for (let i = 0; i < n; i++){ await p.eval(`(refreshNow(), true)`); await settle(150); } await settle(300); }
 
 test('clicking a process opens its drop-down right under it, asks for that process, and closes again', async () => {
   const fx = fixture(); fx.proc = () => look();
@@ -69,6 +71,53 @@ test('a look is asked for with Fleet\'s own header, which a page on another site
     assert.deepEqual(fx.procCalls.slice(0, 1), ['lx:103']);
     assert.deepEqual((fx.refused || []).map(r => r.path), [], 'no look turned away');
     assert.equal(await p.eval(`${PANEL}.textContent.includes('didn’t answer')`), false);
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
+const WATCHED = `(document.querySelector('tr.pinsp [data-watched]') || {}).textContent || ''`;
+
+test('a look the server answers twice (its answer is shared for a second) counts once (#288)', async () => {
+  const T1 = Date.now() / 1000 - 5, A = look({t: T1}), B = look({t: T1 + 2, waits: {disk: 20}});
+  const fx = fixture(); fx.proc = (mid, pid, n) => n <= 2 ? A : B;
+  const p = await open(fx);
+  try {
+    await click(p, 'tr[data-pid="103"] td:nth-child(4)');
+    await p.waitFor(`document.querySelector('tr.pinsp [data-wait]')`);
+    await p.eval(`(refreshNow(), true)`);                     // the server's cached answer: the same look, t and all
+    for (let i = 0; i < 50 && fx.procCalls.length < 2; i++) await settle(20);
+    await settle(200);
+    assert.equal(fx.procCalls.length, 2);
+    assert.match(await p.eval(WATCHED), /· 1 look \(2 s of samples\)/);
+    assert.deepEqual(await p.eval(WAITS), {events: '60%', disk: '30%', cpu: '10%'});
+    await p.eval(`(refreshNow(), true)`);                     // a new look
+    await p.waitFor(`/· 2 looks/.test(${WATCHED})`);
+    assert.match(await p.eval(WATCHED), /· 2 looks \(3 s of samples\)/);
+    assert.deepEqual(await p.eval(WAITS), {disk: '65%', events: '30%', cpu: '5%'});
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
+test('the answer for a process you just left doesn\'t let a second look start for the new one (#288)', async () => {
+  const held = [], fx = fixture();
+  fx.proc = (mid, pid) => new Promise(r => held.push({pid, send: () => r(look({pid, name: pid === 101 ? 'nginx' : 'postgres', t: 5000 + pid}))}));
+  const release = pid => held.filter(h => h.pid === pid).forEach(h => h.send());
+  const p = await open(fx);
+  try {
+    await click(p, 'tr[data-pid="101"] td:nth-child(4)');
+    for (let i = 0; i < 50 && held.length < 1; i++) await settle(20);
+    await click(p, 'tr[data-pid="103"] td:nth-child(4)');    // 101's look is still on its way
+    for (let i = 0; i < 50 && held.length < 2; i++) await settle(20);
+    assert.deepEqual(fx.procCalls, ['lx:101', 'lx:103']);
+    release(101);                                             // the stale answer comes back while 103's is on its way
+    await settle(200);
+    await polls(p);
+    assert.deepEqual(fx.procCalls, ['lx:101', 'lx:103'], 'one look at a time for 103');
+    release(103);
+    await p.waitFor(`/· 1 look\\b/.test(${WATCHED})`);
+    await settle(200);
+    assert.match(await p.eval(WATCHED), /· 1 look \(2 s of samples\)/);
+    assert.match(await p.eval(`${PANEL}.textContent`), /postgres/);
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
 });
@@ -114,9 +163,6 @@ test('while a process is open the rows hold their places; Resume live order sort
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
 });
-
-const settle = ms => new Promise(r => setTimeout(r, ms));
-async function polls(p, n = 3){ for (let i = 0; i < n; i++){ await p.eval(`(refreshNow(), true)`); await settle(150); } await settle(300); }
 
 test('a drop-down off screen asks nothing: another machine, another view; back on its machine it looks again (#288)', async () => {
   const fx = fixture(); fx.proc = () => look();

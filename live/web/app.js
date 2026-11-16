@@ -85,7 +85,8 @@ const KEEP = {pending:null, t:0};
 const FIRST = {checked:false, fresh:(() => { try { return localStorage.getItem('fleet-live-ui') === null; } catch (e) { return false; } })()};
 try { const k = JSON.parse(sessionStorage.getItem('fleet-scroll') || 'null'); if (k && k.pos) Object.assign(KEEP, {pending:k, t:Date.now()}); } catch (e) {}   // the panel you're in: 'tree', 'main' or 'details'
 // the process open in the Details drop-down (see "One process, up close")
-const INSP = {mid:null, pid:0, name:'', order:null, gorder:null, data:null, good:null, acc:{}, samples:0, secs:0, looks:0, busy:false, cacheLooks:[]};
+// gen: which opening of the drop-down a look belongs to; lastT: when the server took the last look counted (#288)
+const INSP = {mid:null, pid:0, name:'', order:null, gorder:null, data:null, good:null, acc:{}, samples:0, secs:0, looks:0, busy:false, cacheLooks:[], gen:0, lastT:null};
 let DATA = null, PINS = [], WINDOW = 180, INTERVAL = 3, CPUS = {}, PROCS = {machine:null, list:[]}, NET = null, DISKS = {}, IFS = {};
 const nodes = {}, roots = [];
 const zero = () => new Array(H).fill(0);
@@ -1435,7 +1436,7 @@ document.addEventListener('click', e => {
   if (e.target.closest('[data-inspclose]')){ closeInspect(); return; }
   const lb = e.target.closest('[data-lookback]'); if (lb){ PREFS = Object.assign({}, PREFS, {cacheLookback:+lb.dataset.lookback}); lastMainHTML = ''; renderMain(); savePrefs('the cache lookback'); return; }
   const look = e.target.closest('[data-vmlook]');
-  if (look && typeof INSP.pid === 'string'){ INSP.via = look.dataset.vmlook; INSP.data = null; INSP.good = null; INSP.acc = {}; INSP.samples = 0; INSP.secs = 0; INSP.looks = 0; INSP.cacheLooks = []; lastMainHTML = ''; renderMain(); inspectTick(); return; }
+  if (look && typeof INSP.pid === 'string'){ INSP.via = look.dataset.vmlook; INSP.gen++; INSP.busy = false; INSP.lastT = null; INSP.data = null; INSP.good = null; INSP.acc = {}; INSP.samples = 0; INSP.secs = 0; INSP.looks = 0; INSP.cacheLooks = []; lastMainHTML = ''; renderMain(); inspectTick(); return; }
   const prow = e.target.closest('.ptbl tbody tr[data-pid]');
   if (prow && !e.target.closest('button, a, input, select, label')){
     const k = prow.dataset.pid;   // a process in Docker Desktop's VM is keyed d:<container>:<pid>
@@ -2204,28 +2205,32 @@ const VERDICT = {cpu:'CPU: it is running most of the time it isn’t idle', cpuw
 function toggleInspect(mid, pid, row){
   if (INSP.pid === pid && INSP.mid === mid){ closeInspect(); return; }
   const tbl = row && row.closest('.ptbl');
-  Object.assign(INSP, {via:null, mid, pid, name:'', data:null, good:null, acc:{}, samples:0, secs:0, looks:0, busy:false, cacheLooks:[],
+  Object.assign(INSP, {via:null, mid, pid, name:'', data:null, good:null, acc:{}, samples:0, secs:0, looks:0, busy:false, cacheLooks:[], gen:INSP.gen + 1, lastT:null,
     order:tbl ? [...tbl.querySelectorAll('tbody tr[data-pid]')].map(r => +r.dataset.pid) : null,
     gorder:tbl ? [...tbl.querySelectorAll('[data-gtoggle]')].map(b => b.dataset.gtoggle) : null});
   const pr = PROCS.list.find(p => p[0] === pid); INSP.name = pr ? pr[1] : '';
   lastMainHTML = ''; renderMain(); inspectTick();
 }
-function closeInspect(){ if (!INSP.pid) return; Object.assign(INSP, {via:null, mid:null, pid:0, order:null, gorder:null, data:null, good:null, acc:{}, looks:0}); lastMainHTML = ''; renderMain(); }
+function closeInspect(){ if (!INSP.pid) return; Object.assign(INSP, {via:null, mid:null, pid:0, order:null, gorder:null, data:null, good:null, acc:{}, looks:0, busy:false, gen:INSP.gen + 1, lastT:null}); lastMainHTML = ''; renderMain(); }
 async function inspectTick(){
   // a process in Docker's VM is looked at only the way you picked (#218): a helper container, or its own container
   if (!INSP.pid || INSP.busy || (typeof INSP.pid === 'string' && !INSP.via)) return;
   // only while its drop-down is on screen, and not once the process has exited: Details on another machine or
   // closed, or another view, asks the machine nothing; back on its machine, the looks go on (#288)
   if (!document.querySelector('tr.pinsp') || (INSP.data && INSP.data.gone)) return;
-  const mid = INSP.mid, pid = INSP.pid;
+  const mid = INSP.mid, pid = INSP.pid, gen = INSP.gen;
   INSP.busy = true;
   let d;
   const q = typeof pid === 'string' ? `key=${encodeURIComponent(pid)}&via=${INSP.via}` : `pid=${pid}`;
   // X-Fleet: a look reaches out to the machine, so the server wants proof it comes from this page (#287)
   try { d = await (await fetch(`/api/proc?machine=${encodeURIComponent(mid)}&${q}`, {cache:'no-store', headers:{'X-Fleet':'1'}})).json(); }
   catch (e) { d = {pid, error:'Fleet didn’t answer'}; }
+  // the answer for a drop-down since closed or moved to another process: that one's own look is on its way (#288)
+  if (INSP.gen !== gen) return;
   INSP.busy = false;
-  if (INSP.pid !== pid || INSP.mid !== mid) return;
+  // the server shares a look for a second after it ends, so the next poll can bring the same one again: count it once
+  if (d.t != null && d.t === INSP.lastT) return;
+  INSP.lastT = d.t;
   INSP.data = d; INSP.looks++;
   if (!d.error && !d.gone){
     INSP.good = d; if (d.name) INSP.name = d.name;

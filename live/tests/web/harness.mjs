@@ -69,11 +69,11 @@ export function startServer(fx){
       if (u.pathname === '/api/disks') return json((fx.disks || {})[mid] || {disks: [], per_process: true});
       if (u.pathname === '/api/ifs') return json((fx.ifs || {})[mid] || {ifs: [], per_process: true});
       if (u.pathname === '/api/net') return json(fx.net || {tailnet: 'tailnet', machines: []});
-      if (u.pathname === '/api/proc'){  // the Details drop-down: fx.proc(machine, pid, call number) answers
+      if (u.pathname === '/api/proc'){  // the Details drop-down: fx.proc(machine, pid, call number) answers, now or (a Promise) when it settles
         // a look reaches out to the machine (SSH, a helper container), so like the server it passes the write gate (#287)
         if (!fromThisPage(req, srv.address().port)){ fx.refused = (fx.refused || []).concat([{path: u.pathname + u.search, headers: req.headers, status: 403}]); res.writeHead(403); return res.end(); }
         const key = u.searchParams.get('key'), pid = key || +u.searchParams.get('pid'); fx.procCalls = (fx.procCalls || []).concat([mid + ':' + pid + (key ? ':' + u.searchParams.get('via') : '')]);
-        return json((typeof fx.proc === 'function' ? fx.proc(mid, pid, fx.procCalls.length) : null) || {pid, error: 'no fixture'});
+        return Promise.resolve(typeof fx.proc === 'function' ? fx.proc(mid, pid, fx.procCalls.length) : null).then(a => json(a || {pid, error: 'no fixture'}));
       }
       if (u.pathname === '/api/config') return json(fx.config || {path: '/dev/null', interval: 3, machines: [], status: {}, terminals: []});
       res.writeHead(404); return res.end();
