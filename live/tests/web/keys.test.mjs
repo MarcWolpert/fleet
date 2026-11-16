@@ -112,3 +112,20 @@ test('⌘K goes to anything: a machine, a command or a theme', async () => {
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
 });
+
+test('the Go to list\'s row style stays in Go to: the spacers in card headers stay plain spacers (regression)', async () => {
+  const p = await open({sel: 'lx'});
+  try {
+    await p.waitFor(`document.querySelectorAll('#main .card-h .grow').length >= 2`);
+    // every spacer: no padding, no minimum height, no pointer
+    const SPACERS = `[...new Set([...document.querySelectorAll('#main .card-h .grow')].map(s => { const c = getComputedStyle(s); return [c.padding, c.minHeight, c.cursor].join(' '); }))]`;
+    assert.deepEqual(await p.eval(SPACERS), ['0px auto auto']);
+    // the machine view's "Where this machine's usage goes" header is one line: its toggle sits beside its title
+    assert.equal(await p.eval(`(() => { const h = [...document.querySelectorAll('#main .card-h')].find(h => h.querySelector('.seg')); const t = h.querySelector('h2').getBoundingClientRect(), s = h.querySelector('.seg').getBoundingClientRect(); return s.top < t.bottom && t.top < s.bottom; })()`), true);
+    // Go to's rows keep their look
+    await press(p, 'k', {mod: true, code: 'KeyK'});
+    await p.waitFor(`document.querySelector('#gotolist [data-goi]')`);
+    assert.equal(await p.eval(`(() => { const c = getComputedStyle(document.querySelector('#gotolist [data-goi]')); return [c.display, c.minHeight, c.padding, c.cursor].join(' '); })()`), 'flex 36px 5px 10px pointer');
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});

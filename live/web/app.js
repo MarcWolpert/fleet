@@ -1939,12 +1939,12 @@ function renderGoto(){
   box.innerHTML = GOTO.items.length ? GOTO.items.map((x, i) => {
     const ic = x.n ? icon(iconOf(x.n)) : icon(x.ic || 'chev'), col = x.n ? (x.n.kind === 'machine' ? 'var(--ink-2)' : colOf(x.n)) : 'var(--ink-3)';
     const where = x.n && x.path.length ? `<span class="pw">${esc(x.path.join(' › '))}</span>` : '';
-    return `<div class="grow${i === GOTO.i ? ' on' : ''}" role="option" id="go-${i}" aria-selected="${i === GOTO.i}" data-goi="${i}"><span class="ico" style="color:${col}">${ic}</span>`
+    return `<div class="gorow${i === GOTO.i ? ' on' : ''}" role="option" id="go-${i}" aria-selected="${i === GOTO.i}" data-goi="${i}"><span class="ico" style="color:${col}">${ic}</span>`
       + `<span class="pn"><span>${esc(x.label)}</span>${where}</span>${x.hint ? `<kbd>${esc(x.hint)}</kbd>` : `<span class="pk">${esc(x.kind)}</span>`}`
       + (x.n && x.n.kind !== 'cron' && x.n.kind !== 'cronfolder' ? `<button type="button" class="gopin${PINS.includes(x.n.id) ? ' on' : ''}" data-gopin="${esc(x.n.id)}" aria-pressed="${PINS.includes(x.n.id)}" aria-label="${PINS.includes(x.n.id) ? 'Unpin' : 'Pin'} ${esc(x.label)}" title="Pin as a space (⇧Enter)">${icon('pin')}</button>` : '') + `</div>`;
   }).join('') : `<div class="more">Nothing matches “${esc(GOTO.q)}”.</div>`;
   $('gotoq').setAttribute('aria-activedescendant', GOTO.items.length ? 'go-' + GOTO.i : '');
-  const on = box.querySelector('.grow.on'); if (on) on.scrollIntoView({block:'nearest'});
+  const on = box.querySelector('.gorow.on'); if (on) on.scrollIntoView({block:'nearest'});
 }
 function openGoto(){
   if ($('goto')) return;
@@ -1957,7 +1957,7 @@ function openGoto(){
     const gp = e.target.closest('[data-gopin]'); if (gp){ e.stopPropagation(); gotoPin(gp.dataset.gopin); return; }
     const r = e.target.closest('[data-goi]'); if (r) runGoto(+r.dataset.goi);
   });
-  el.addEventListener('mousemove', e => { const r = e.target.closest('[data-goi]'); if (r && +r.dataset.goi !== GOTO.i){ GOTO.i = +r.dataset.goi; el.querySelectorAll('.grow').forEach((g, i) => { g.classList.toggle('on', i === GOTO.i); g.setAttribute('aria-selected', i === GOTO.i); }); } });
+  el.addEventListener('mousemove', e => { const r = e.target.closest('[data-goi]'); if (r && +r.dataset.goi !== GOTO.i){ GOTO.i = +r.dataset.goi; el.querySelectorAll('.gorow').forEach((g, i) => { g.classList.toggle('on', i === GOTO.i); g.setAttribute('aria-selected', i === GOTO.i); }); } });
   el.addEventListener('input', e => { if (e.target.id === 'gotoq'){ GOTO.q = e.target.value; GOTO.i = 0; renderGoto(); } });
   el.addEventListener('keydown', e => {
     if (e.key === 'Escape'){ e.preventDefault(); e.stopPropagation(); closeGoto(); }
