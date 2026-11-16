@@ -352,9 +352,11 @@ function renderTree(){
   // ⌘F in the tree: only what matches, and the path down to it
   const keep = TF.q ? treeMatches(treeRoots(), TF.q) : null;
   const shown = n => !keep || keep.has(n.id), opened = n => keep ? n.children.some(c => keep.has(c.id)) : isOpen(n);
-  (function walkRows(list, d){ list.forEach(n => { if (!shown(n)) return; rows.push({n, d}); if (n.children.length && opened(n)) walkRows(orderedKids(n), d + 1); }); })(treeRoots(), 0);
+  const entries = groupedWalk(treeRoots(), orderedKids, opened, shown, S.pinsOnly ? 'pins' : 'machines');
+  entries.forEach(e => { if (e.n) rows.push(e); });
   if (keep && !rows.length){ $('tree').innerHTML = `<div class="tempty">Nothing in the tree matches “${esc(TF.q)}”.</div>`; return; }
-  $('tree').innerHTML = rows.map(({n, d}) => {
+  $('tree').innerHTML = entries.map(e => e.open ? tgroupOpen(e) : e.close ? '</div>' : treeRow(e)).join('');
+  function treeRow({n, d, pk}){
     const kids = n.children.length > 0, open = kids && opened(n);
     const count = (n.kind === 'group' || n.kind === 'cronfolder' || n.kind === 'project') ? `<span class="count">${n.children.length}</span>` : '';
     const dot = n.kind === 'cron' ? `<i class="dot${n.running?' on':''}" data-dot="${esc(n.id)}" title="running now"></i>` : n.kind === 'machine' ? `<i class="sdot ${statusClass(n)}" data-sdot="${esc(n.id)}" title="${statusText(n)}"></i>` : '';
@@ -362,13 +364,13 @@ function renderTree(){
     const gtag = gw ? `<span class="gtag" title="${esc(whichGpuLong(n))}">${gw}</span>` : '';
     const st = n.kind === 'machine' ? ' ' + statusClass(n) : '';
     const pin = (n.kind === 'machine' || n.kind === 'project' || n.kind === 'service' || n.kind === 'container' || n.kind === 'group') ? pinBtn(n.id) : '<span style="width:22px;flex:none"></span>';
-    return `<div class="row ${n.kind}${st}${S.sel===n.id?' sel':''}" style="--d:${d}" role="treeitem" aria-level="${d+1}" ${kids?`aria-expanded="${open}"`:''} aria-selected="${S.sel===n.id}" data-select="${esc(n.id)}">`
+    return `<div class="row ${n.kind}${st}${S.sel===n.id?' sel':''}" style="--d:${d}" role="treeitem" aria-level="${d+1}" ${kids?`aria-expanded="${open}"`:''} aria-selected="${S.sel===n.id}" data-select="${esc(n.id)}" data-pk="${esc(pk)}">`
       + `<button type="button" class="chev${open?' open':''}${kids?'':' leaf'}" ${kids?`data-toggle="${esc(n.id)}" aria-label="${open?'Collapse':'Expand'} ${esc(n.name)}"`:'tabindex="-1" aria-hidden="true"'}>${icon('chev', 2.4)}</button>`
       + `<span class="ico" style="color:${n.kind==='cronfolder'||n.kind==='cron'?'var(--ink-3)':colOf(n)}">${icon(iconOf(n))}</span>`
       + `<button type="button" class="nm" data-select="${esc(n.id)}">${esc(n.name)}</button>${count}${gtag}${dot}${pin}`
       + `<svg class="spark" data-spark="${esc(n.id)}" viewBox="0 0 60 16" preserveAspectRatio="none" aria-hidden="true"><polyline points="${sparkPts(n.series[S.metric], 60, 16)}" fill="none" stroke="${n.kind==='machine'&&!n.parent?'var(--accent)':colOf(n)}" stroke-width="1.5" vector-effect="non-scaling-stroke" stroke-linejoin="round"/></svg>`
       + `<span class="val${n.kind === 'machine' && !isLive(n) ? ' dim' : ''}" data-val="${esc(n.id)}" title="share of host ${mlabel(S.metric)}">${rowVal(n)}</span></div>`;
-  }).join('');
+  }
   if (S.pinsOnly && !rows.length) $('tree').innerHTML = `<div class="empty-pins">${icon('pin')}<b>Nothing pinned yet</b><span>Pin a machine, VM, project or container with the pin on its row, or with <b>+</b> in the top bar.</span></div>`;
   const scope = S.space === 'fleet' ? 'All machines' : (nodes[S.space] ? nodes[S.space].name : 'All machines');
   $('tree-title').innerHTML = `<span class="scopeseg" role="group" aria-label="Show"><button type="button" data-pinsonly="0" aria-pressed="${!S.pinsOnly}">${esc(scope)}</button><button type="button" data-pinsonly="1" aria-pressed="${!!S.pinsOnly}">Pins only</button></span>`;
@@ -423,16 +425,18 @@ function renderNetTree(){
   const rootsN = buildNet();
   const rows = [];
   const keep = TF.q ? treeMatches(rootsN, TF.q) : null;
-  (function w(list, d){ list.forEach(n => { if (keep && !keep.has(n.id)) return; rows.push({n, d}); if (n.children.length && (keep ? n.children.some(c => keep.has(c.id)) : netOpen(n))) w(n.children, d + 1); }); })(rootsN, 0);
-  $('tree').innerHTML = rows.length ? rows.map(({n, d}) => {
+  const entries = groupedWalk(rootsN, n => n.children, n => keep ? n.children.some(c => keep.has(c.id)) : netOpen(n), n => !keep || keep.has(n.id), 'network');
+  entries.forEach(e => { if (e.n) rows.push(e); });
+  $('tree').innerHTML = rows.length ? entries.map(e => e.open ? tgroupOpen(e) : e.close ? '</div>' : netRow(e)).join('') : '<div class="side-note">Loading the network…</div>';
+  function netRow({n, d, pk}){
     const kids = n.children.length > 0, open = kids && netOpen(n);
     const ic = n.kind === 'tailnet' ? 'net' : n.kind === 'nmachine' ? 'desktop' : n.kind === 'ncontainer' ? 'cube' : n.ifkind === 'bridge' ? 'bridge' : n.vm ? 'vm' : 'nic';
     const sub = n.kind === 'nmachine' ? `<i class="sdot ${n.status}" title="${esc(n.status)}"></i>` : n.vm ? `<span class="count">${esc(n.vm)}</span>` : n.dnet && n.kind === 'if' ? `<span class="count">${esc(n.dnet)}</span>` : '';
     const rate = `<span>↓ ${rateText(n.rx)}</span><span>↑ ${n.kind === 'ncontainer' ? '—' : rateText(n.tx)}</span>`;
-    return `<div class="row${S.netSel===n.id?' sel':''}" style="--d:${d}" role="treeitem" aria-level="${d+1}" ${kids?`aria-expanded="${open}"`:''} data-netsel="${esc(n.id)}">`
+    return `<div class="row${S.netSel===n.id?' sel':''}" style="--d:${d}" role="treeitem" aria-level="${d+1}" ${kids?`aria-expanded="${open}"`:''} data-netsel="${esc(n.id)}" data-pk="${esc(pk)}">`
       + `<button type="button" class="chev${open?' open':''}${kids?'':' leaf'}" ${kids?`data-toggle="${esc(n.id)}" aria-label="${open?'Collapse':'Expand'} ${esc(n.name)}"`:'tabindex="-1" aria-hidden="true"'}>${icon('chev', 2.4)}</button>`
       + `<span class="ico" style="color:var(--ink-2)">${icon(ic)}</span><button type="button" class="nm" data-netsel="${esc(n.id)}">${esc(n.name)}</button>${sub}<span class="nrate">${rate}</span></div>`;
-  }).join('') : '<div class="side-note">Loading the network…</div>';
+  }
   $('tree-title').innerHTML = 'Network';
   $('tree-col').textContent = '↓ in · ↑ out';
   $('side-note').innerHTML = '';
@@ -2104,6 +2108,13 @@ function selItems(btn, what){
 }
 function ctxFor(t){
   if (!t || !t.closest || t.closest('.ptbl thead th, #ctxmenu, #colmenu, input, textarea, select')) return null;
+  const tgh = t.closest('#tree .tg-h');
+  if (tgh){
+    const box = tgh.closest('.tgroup'), key = box.dataset.tgkey, id = box.dataset.tgroup, g = ((PREFS.tgroups || {})[key] || []).find(x => x.id === id);
+    if (!g) return null;
+    return {title:g.name, items:[{label:'Rename', run:() => renameGroup(key, id)}, {label:'Next colour', run:() => updGroup(key, id, x => Object.assign({}, x, {c:(x.c + 1) % TG_COLORS.length}))},
+      {label:'Ungroup', run:() => updGroup(key, id, null)}]};
+  }
   const pr = t.closest('.ptbl tbody tr[data-pid]');
   if (pr){
     const mid = pr.closest('.ptbl').dataset.mid, pid = +pr.dataset.pid, p = PROCS.list.find(x => x[0] === pid); if (!p) return null;
@@ -2195,4 +2206,83 @@ addEventListener('resize', () => closeCtx(false));
 function selectNone(){
   if (S.tree === 'network'){ S.netSel = 'net:tailnet'; save(); renderTree(); renderToolbar(); lastMainHTML = ''; renderMain(); return; }
   goSpace('fleet');
+}
+
+
+/* ---------- Custom groups in the trees (issue #8) ---------- */
+// Drag a box over items at the same level to group them. Groups live in ui.json (prefs.tgroups), keyed by
+// tree (machines, pins, network) and parent, so Pins only and the network tree keep their own.
+const TG_COLORS = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#6250d6', '#e34948'];
+// the rows to draw, with group start/end markers; a group's members sit together where the first one would be
+function groupedWalk(roots, kidsOf, openFn, shownFn, scope){
+  const out = [];
+  (function w(list, d, pk){
+    const vis = list.filter(shownFn), key = scope + '|' + pk;
+    const gs = ((PREFS.tgroups || {})[key] || []).map(g => ({g, members:vis.filter(n => g.ids.includes(n.id))})).filter(x => x.members.length);
+    const placed = new Set();
+    const one = n => { out.push({n, d, pk}); if (n.children.length && openFn(n)) w(kidsOf(n), d + 1, n.id); };
+    vis.forEach(n => {
+      if (placed.has(n.id)) return;
+      const gx = gs.find(x => x.members.includes(n));
+      if (!gx) return one(n);
+      gx.members.forEach(m => placed.add(m.id));
+      out.push({open:gx.g, key, d}); gx.members.forEach(one); out.push({close:true});
+    });
+  })(roots, 0, 'root');
+  return out;
+}
+function tgroupOpen({open:g, key, d}){
+  return `<div class="tgroup" data-tgroup="${esc(g.id)}" data-tgkey="${esc(key)}" role="group" aria-label="${esc(g.name)}" style="--gc:${TG_COLORS[(g.c || 0) % TG_COLORS.length]};--d:${d}">`
+    + `<div class="tg-h" title="Right-click to rename, recolour or ungroup"><i></i><span class="tg-n">${esc(g.name)}</span></div>`;
+}
+function updGroup(key, id, f){
+  const all = Object.assign({}, PREFS.tgroups || {});
+  all[key] = (all[key] || []).map(g => g.id === id ? (f ? f(g) : null) : g).filter(Boolean);
+  PREFS = Object.assign({}, PREFS, {tgroups:all}); renderTree(); savePrefs('the groups');
+}
+function renameGroup(key, id){
+  const n = document.querySelector(`#tree .tgroup[data-tgroup="${CSS.escape(id)}"] .tg-n`); if (!n) return;
+  const inp = document.createElement('input'); inp.className = 'tg-name'; inp.value = n.textContent; inp.setAttribute('aria-label', 'Group name');
+  n.replaceWith(inp); inp.focus(); inp.select();
+  let done = false;
+  const commit = ok => { if (done) return; done = true; const v = inp.value.trim().slice(0, 60); if (ok && v) updGroup(key, id, g => Object.assign({}, g, {name:v})); else renderTree(); };
+  inp.addEventListener('keydown', e => { if (e.key === 'Enter'){ e.preventDefault(); commit(true); } if (e.key === 'Escape'){ e.preventDefault(); e.stopPropagation(); commit(false); } });
+  inp.addEventListener('blur', () => commit(true));
+}
+$('tree').addEventListener('dblclick', e => { const h = e.target.closest('.tg-h'); if (h){ const b = h.closest('.tgroup'); renameGroup(b.dataset.tgkey, b.dataset.tgroup); } });
+// the box: a press that moves more than a few pixels draws it instead of clicking
+const MQ = {st:null, until:0};
+$('tree').addEventListener('pointerdown', e => {
+  if (e.button !== 0 || e.target.closest('[data-toggle], [data-pin], [data-unpin], .tpin, .pin, input, .tg-h')) return;
+  MQ.st = {x0:e.clientX, y0:e.clientY, on:false};
+});
+document.addEventListener('pointermove', e => {
+  const m = MQ.st; if (!m) return;
+  if (!m.on){ if (Math.hypot(e.clientX - m.x0, e.clientY - m.y0) < 6) return; m.on = true; m.box = document.createElement('div'); m.box.className = 'mqbox'; document.body.appendChild(m.box); }
+  const x = Math.min(m.x0, e.clientX), y = Math.min(m.y0, e.clientY), w = Math.abs(e.clientX - m.x0), h = Math.abs(e.clientY - m.y0);
+  Object.assign(m.box.style, {left:x + 'px', top:y + 'px', width:w + 'px', height:h + 'px'});
+  document.querySelectorAll('#tree .row').forEach(r => { const b = r.getBoundingClientRect(); r.classList.toggle('mqhit', b.bottom > y && b.top < y + h && b.right > x && b.left < x + w); });
+});
+document.addEventListener('pointerup', () => {
+  const m = MQ.st; MQ.st = null; if (!m || !m.on) return;
+  MQ.until = Date.now() + 500;   // the click that ends a drag isn't a click
+  m.box.remove();
+  const hits = [...document.querySelectorAll('#tree .row.mqhit')]; hits.forEach(r => r.classList.remove('mqhit'));
+  finishMarquee(hits);
+});
+addEventListener('click', e => { if (Date.now() < MQ.until && e.target.closest && e.target.closest('#tree')){ e.preventDefault(); e.stopImmediatePropagation(); MQ.until = 0; } }, true);   // only in the tree: a re-render may have removed the row the drag began on
+function finishMarquee(hits){
+  if (!hits.length) return;
+  const ids = hits.map(r => r.dataset.select || r.dataset.netsel), pks = new Set(hits.map(r => r.dataset.pk));
+  if (pks.size > 1){ toast('Only items at the same level can be grouped: draw the box over siblings'); return; }
+  if (hits.length < 2){ toast('Draw the box over two or more items at the same level to group them'); return; }
+  const scope = S.tree === 'network' ? 'network' : S.pinsOnly ? 'pins' : 'machines', key = scope + '|' + [...pks][0];
+  const all = Object.assign({}, PREFS.tgroups || {});
+  const list = (all[key] || []).map(g => Object.assign({}, g, {ids:g.ids.filter(id => !ids.includes(id))})).filter(g => g.ids.length);
+  const names = new Set(list.map(g => g.name)), cs = new Set(list.map(g => g.c));
+  let k = 1; while (names.has('Group ' + k)) k++;
+  let c = 0; while (cs.has(c) && c < TG_COLORS.length - 1) c++;
+  list.push({id:'g' + Date.now().toString(36), name:'Group ' + k, c, ids});
+  all[key] = list;
+  PREFS = Object.assign({}, PREFS, {tgroups:all}); renderTree(); savePrefs('the groups');
 }
