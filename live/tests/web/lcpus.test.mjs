@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// CPU → Logical processors on its own: a machine the server has no per-processor readings for.
+// CPU → Logical processors on its own: a machine the server has no per-processor readings for, and
+// keyboard focus on the card's controls across the polls that redraw it.
 import {test, before, after} from 'node:test';
 import assert from 'node:assert/strict';
 import {launch, sleep} from './harness.mjs';
-import {fixture, ui} from './fixtures.mjs';
+import {fixture, ui, CCD1} from './fixtures.mjs';
 
 let browser;
 before(async () => { browser = await launch(); });
@@ -47,6 +48,39 @@ test('the control: a machine Fleet polls itself shows all its processors', async
     await p.waitFor(`document.querySelector('[data-lcpu]')`);
     assert.equal((await state(p)).card.sub, 'lab-linux CPU · 16 processors');
     assert.deepEqual(await p.eval(`[...document.querySelectorAll('[data-lcpu]')].map(b => +b.dataset.lcpu)`), [0, 1, 2, 3, 8, 9, 10, 11, 4, 5, 6, 7, 12, 13, 14, 15]);
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
+// The card changes on every poll (percentages, sparklines), so the main pane is redrawn every 2 s.
+const CONTROLS = ['[data-tilesort="cpu"]', '[data-lcpu="4"]', `[data-lgroup="${CCD1.join(',')}"]`, '[data-tpin="cpu|lx|4"]', '[data-tpin="cpugroup|lx|CCD 1"]', '[data-cpuview="type"]'];
+test('every control in the card keeps keyboard focus across a poll that redraws it', async () => {
+  const fx = fixture();
+  const p = await browser.page(fx, {ui: ui({sel: 'lx', metric: 'cpu', cpuView: 'logical'})});
+  try {
+    await p.waitFor(`document.querySelector('[data-lcpu]')`);
+    const kept = {};
+    for (const [i, sel] of CONTROLS.entries()){
+      await p.eval(`(document.querySelector(${JSON.stringify(sel)}).focus(), document.activeElement.__before = 1, document.activeElement.matches(${JSON.stringify(sel)}))`);
+      fx.cpus.lx.cpus[0].pct = 50 + i;   // the next poll brings a new reading for CPU 0
+      await p.waitFor(`document.querySelector('[data-lcpu="0"]').getAttribute('aria-label') === 'CPU 0, ${50 + i}%'`);
+      kept[sel] = await p.eval(`({focused: document.activeElement.matches(${JSON.stringify(sel)}), redrawn: !document.activeElement.__before})`);
+    }
+    assert.deepEqual(kept, Object.fromEntries(CONTROLS.map(s => [s, {focused: true, redrawn: true}])));
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
+test('stepping through Sort with the keyboard keeps focus on it', async () => {
+  const p = await browser.page(fixture(), {ui: ui({sel: 'lx', metric: 'cpu', cpuView: 'logical'})});
+  try {
+    await p.waitFor(`document.querySelector('[data-lcpu]')`);
+    await p.eval(`(document.querySelector('[data-tilesort="cpu"]').focus(), true)`);
+    const steps = [];
+    for (const v of ['usage', 'clock', 'number']){   // what ↓ does on a closed select: a new value and a change event
+      steps.push(await p.eval(`(() => { const s = document.activeElement; if (!s.matches('select')) return 'focus lost'; s.value = '${v}'; s.dispatchEvent(new Event('change', {bubbles: true})); const a = document.activeElement; return a.matches('[data-tilesort="cpu"]') ? a.value : 'focus lost'; })()`));
+    }
+    assert.deepEqual(steps, ['usage', 'clock', 'number']);
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
 });

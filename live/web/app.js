@@ -1171,7 +1171,7 @@ function renderMain(){
   let refocus = null, selStart = null;
   if (a && main.contains(a)){
     if (a.id) { refocus = '#' + a.id; selStart = a.selectionStart; }
-    else if (a.dataset) for (const k of ['select', 'mode', 'sort', 'pin', 'cpuview', 'netsel', 'gtoggle', 'gall']) if (a.dataset[k] != null){ refocus = `[data-${k}="${CSS.escape(a.dataset[k])}"]`; break; }
+    else if (a.dataset) for (const k of ['select', 'mode', 'sort', 'pin', 'cpuview', 'netsel', 'gtoggle', 'gall', 'tilesort', 'lcpu', 'lgroup', 'tpin']) if (a.dataset[k] != null){ refocus = `[data-${k}="${CSS.escape(a.dataset[k])}"]`; break; }
   }
   let html;
   let panel = '';
