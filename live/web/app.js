@@ -870,7 +870,14 @@ function diagnose(m){
   const retry = 'Press <b>Retry now</b>.';
   if (m.status === 'off') return {kind:'off', ic:'power', title:`${name} is turned off`, text:'Its host reports this VM as not running. Start it there and Fleet picks it up within a few seconds.', steps:[]};
   if (m.status === 'connecting' && !e) return {kind:'wait', ic:'refresh', title:`Connecting to ${name}…`, text:'Waiting for its first reading.', steps:[]};
-  if (/host key verification failed|remote host identification has changed/.test(e)) return {kind:'key', ic:'key', title:`Fleet can’t confirm this is really ${name}`,
+  // a changed key ends in "host key verification failed" too; its banner is cut off (the server keeps ssh's last lines), its "host key for X has changed" line isn't
+  const changed = /host key for (\S+) has changed|remote host identification has changed/.exec(e);
+  if (changed) return {kind:'key', ic:'key', title:`${name}’s SSH host key has changed`,
+    text:`SSH remembers another key for <code>${host}</code> than the one it was just sent, so it refused to connect. A rebuilt or reinstalled machine does that, but so does an impostor: check the new key before you trust it.`,
+    steps:[`If you didn’t rebuild or reinstall ${name}, don’t connect: find out first why its key changed.`,
+      'Otherwise read its new fingerprint on the machine itself, e.g. <code>ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub</code> on Linux, or the same file under <code>C:\\ProgramData\\ssh</code> on Windows.',
+      `Remove the old key with <code>ssh-keygen -R ${esc(changed[1] || (m.ssh || m.name).replace(/^.*@/, ''))}</code>, then run <code>ssh ${host}</code>, check that the fingerprint matches, type <b>yes</b>, and log out.`, retry]};
+  if (/host key verification failed/.test(e)) return {kind:'key', ic:'key', title:`Fleet can’t confirm this is really ${name}`,
     text:`SSH has no trusted host key for <code>${host}</code> yet, so it refused to connect. That’s SSH protecting you from an impostor; trusting the key once fixes it.`,
     steps:[`Open Terminal and run <code>ssh ${host}</code>.`, 'Check the fingerprint, type <b>yes</b> to trust it, then log out.', retry]};
   if (/permission denied|authentication failed|too many authentication failures/.test(e)) return {kind:'auth', ic:'lock', title:`${name} didn’t accept the login`,
