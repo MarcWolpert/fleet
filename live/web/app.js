@@ -1262,10 +1262,15 @@ async function api(path, body){
   if (!r.ok) throw new Error('HTTP ' + r.status);
   return r.json();
 }
+// Pins (~/.config/fleet/pins.json) are saved whole. An answer older than the latest save, from a poll that overlapped
+// a save or from an earlier save, never replaces PINS: the next pin would build on it and drop this one (#95).
+let pinsSeq = 0, pinsSaves = 0;
 async function setPins(pins){
+  const seq = ++pinsSeq; pinsSaves++;
   PINS = pins;
-  renderSpaces(); renderTree(); renderMain(); renderPickerList();
-  try { const d = await api('/api/pins', pins); PINS = d.pins || pins; } catch (e) {}
+  renderSpaces(); renderTree(); renderMain(); renderPickerList(); lastSig = sigOf();   // drawn with these pins: a poll that brings others redraws
+  try { const d = await api('/api/pins', pins); if (seq === pinsSeq) PINS = d.pins || pins; } catch (e) {}
+  pinsSaves--;
   renderSpaces(); renderPickerList();
 }
 function togglePin(id){ setPins(PINS.includes(id) ? PINS.filter(x => x !== id) : PINS.concat([id])); }
@@ -1373,9 +1378,10 @@ async function refreshNow(){
   inspectTick();
   if (busy) return; busy = true;
   try {
+    const pinsAt = pinsSaves ? -1 : pinsSeq;   // a pin save on its way now or made before the answer: keep PINS (#95)
     const r = await fetch('/api/fleet', {cache:'no-store'});
     DATA = await r.json();
-    INTERVAL = DATA.interval || 3; WINDOW = DATA.window_s || INTERVAL * H; PINS = DATA.pins || []; if (!prefsBusy){ PREFS = DATA.prefs || {}; applyTheme(currentTheme()); } if (!tpinBusy) TPINS = DATA.tilepins || {};
+    INTERVAL = DATA.interval || 3; WINDOW = DATA.window_s || INTERVAL * H; if (pinsAt === pinsSeq) PINS = DATA.pins || []; if (!prefsBusy){ PREFS = DATA.prefs || {}; applyTheme(currentTheme()); } if (!tpinBusy) TPINS = DATA.tilepins || {};
     build(DATA);
     if (S.sel !== 'fleet' && !nodes[S.sel]) { /* keep selection; it may come back */ }
     const n = S.sel === 'fleet' ? null : nodes[S.sel];
