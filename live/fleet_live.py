@@ -13,7 +13,7 @@ connection closes. Nothing is installed on any machine and nothing is changed.
 Usage: python3 fleet_live.py [--port 4518] [--config PATH] [--open]
 """
 import argparse, base64, collections, ctypes, ctypes.util, glob, http.server, json, os, platform, plistlib, shlex
-import re, shutil, subprocess, sys, threading, time, tomllib, urllib.parse, webbrowser, zlib
+import re, shutil, subprocess, sys, tempfile, threading, time, tomllib, urllib.parse, webbrowser, zlib
 
 VERSION = "0.0.1"
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -195,6 +195,15 @@ def size_bytes(s):
         return 0.0
     mult = {"B": 1, "kB": 1e3, "KB": 1e3, "KiB": 1024, "MB": 1e6, "MiB": 2**20, "GB": 1e9, "GiB": 2**30, "TB": 1e12, "TiB": 2**40}
     return float(m.group(1)) * mult.get(m.group(2), 1)
+
+
+def docker_pct(s):
+    """A docker stats percentage as a fraction. docker stats prints "--" for a container it cannot read (one
+    that exits or is removed while it reads): that container counts as idle."""
+    try:
+        return float((s or "0%").rstrip("%") or 0) / 100.0
+    except ValueError:
+        return 0.0
 
 
 GB = 2**30
@@ -840,7 +849,7 @@ class Machine:
                 continue
             nio = s.get("NetIO", "0B / 0B").split("/")
             bio = s.get("BlockIO", "0B / 0B").split("/")
-            stats[s.get("ID", "")[:12]] = (float(s.get("CPUPerc", "0%").rstrip("%") or 0) / 100.0,
+            stats[s.get("ID", "")[:12]] = (docker_pct(s.get("CPUPerc")),
                                            size_bytes(s.get("MemUsage", "0B").split("/")[0]) / GB,
                                            sum(size_bytes(x) for x in bio), sum(size_bytes(x) for x in nio))
         for line in r.get("containers", []):
@@ -992,7 +1001,7 @@ def group_lcpus_windows(lcpus):
 
 # ---------------------------------------------------------------- macOS collector
 class MacCollector:
-    """This Mac, read directly: ps, host_processor_info, vm_stat, iostat, netstat, ioreg, docker, crontab, launchd."""
+    """This Mac, read directly: ps, host_processor_info, vm_stat, netstat, ioreg, docker, crontab, launchd."""
 
     def __init__(self):
         self.prev = {}
@@ -1008,15 +1017,74 @@ class MacCollector:
         self.docker_cache = ([], {})
         self.gpu_info = self.read_gpus()
         self.disk_names = {}
+        self.vz_owners = {}
+        self.nettop = None     # the nettop sample running beside the readings: (Popen, its output file, when it started)
+        self.net_last = None   # the last sample it finished: (bytes in + out per pid, when it started)
+        self.net_rates = {}    # MB/s per pid between the last two samples
 
-    def disk_info(self, dn):
-        if dn not in self.disk_names:
+    def disk_info(self, dn, rid=None):
+        """diskutil's facts about a disk, kept per disk and registry entry (a disk name is reused when an image is ejected)."""
+        if (dn, rid) not in self.disk_names:
             try:
                 pl = plistlib.loads(subprocess.run(["diskutil", "info", "-plist", dn], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=8).stdout)
-                self.disk_names[dn] = {"model": pl.get("MediaName", ""), "size": pl.get("TotalSize") or pl.get("Size") or 0, "rot": pl.get("SolidState") is False}
+                self.disk_names[(dn, rid)] = {"model": pl.get("MediaName", ""), "size": pl.get("TotalSize") or pl.get("Size") or 0, "rot": pl.get("SolidState") is False,
+                                              "image": pl.get("BusProtocol") == "Disk Image" or pl.get("VirtualOrPhysical") == "Virtual"}
             except Exception:
-                self.disk_names[dn] = {}
-        return self.disk_names[dn]
+                self.disk_names[(dn, rid)] = {}
+        return self.disk_names[(dn, rid)]
+
+    def vz_owner(self, pid):
+        """Whose Virtualization.framework VM a process runs, from the files it holds open: "docker" for Docker
+        Desktop's (its kernel in Docker.app, its disk under com.docker.docker), a UTM VM's name from the .utm
+        bundle its disk is in, or "" when they don't say (asked again the next reading)."""
+        if pid not in self.vz_owners:
+            own = ""
+            for line in run(["lsof", "-nP", "-p", str(pid), "-F", "n"]).splitlines():
+                if re.match(r"n.*(/Docker\.app/Contents/|/com\.docker\.docker/)", line):
+                    own = "docker"
+                    break
+                m = re.match(r"n.*/([^/]+)\.utm/", line)
+                if m and not own:
+                    own = m.group(1)
+            if not own:
+                return ""
+            self.vz_owners[pid] = own
+        return self.vz_owners[pid]
+
+    def net_rates_now(self):
+        """Each process's network rate (MB/s, in + out) from nettop. nettop takes about 5 s to print its one
+        sample, so it runs beside the readings: a reading that finds it done starts the next one, and every
+        reading uses the rates between the last two samples. A sample still running after 10 s is stopped."""
+        t = time.time()
+        if self.nettop:
+            p, out, began = self.nettop
+            if p.poll() is None and t - began <= 10:
+                return self.net_rates
+            if p.poll() is None:
+                p.kill()
+                p.wait()
+                self.net_rates = {}
+            else:
+                out.seek(0)
+                b = {}
+                for line in out.read().decode("utf-8", "replace").splitlines()[1:]:
+                    f = line.split(",")
+                    if len(f) >= 3:
+                        _name, _, pid = f[0].rpartition(".")
+                        if pid.isdigit() and f[1].isdigit() and f[2].isdigit():
+                            b[int(pid)] = int(f[1]) + int(f[2])
+                if self.net_last and began > self.net_last[1]:
+                    prev, dt = self.net_last[0], began - self.net_last[1]
+                    self.net_rates = {pid: (v - prev[pid]) / dt / MB for pid, v in b.items() if pid in prev and v >= prev[pid]}
+                self.net_last = (b, began)
+            out.close()
+        out = tempfile.TemporaryFile()  # a file, not a pipe, so nettop never waits on a full pipe
+        try:
+            self.nettop = (subprocess.Popen(["nettop", "-P", "-L", "1", "-x", "-J", "bytes_in,bytes_out"], stdout=out, stderr=subprocess.DEVNULL), out, t)
+        except Exception:
+            out.close()
+            self.nettop = None
+        return self.net_rates
 
     def read_gpus(self):
         """Every GPU in this Mac (Apple silicon's, or an Intel Mac's integrated and discrete ones), in IOAccelerator order."""
@@ -1050,13 +1118,19 @@ class MacCollector:
             ctype = {}
         if not ctype:
             return [{"name": "All processors", "cpus": list(range(self.ncpu))}]
-        # Match cluster types to perf levels by count (largest-performance level first).
+        # Match cluster types to perf levels by name ("P" is Performance, "E" Efficiency); by count only when no
+        # name matches, since counts can't tell 4P+4E apart.
         by_type = collections.OrderedDict()
         for n in sorted(ctype):
             by_type.setdefault(ctype[n], []).append(n)
         groups = []
+        used = set()
         for ct, cpus in by_type.items():
-            lvl = next((v for v in levels.values() if v[2] == len(cpus)), (ct, len(cpus), len(cpus)))
+            li = next((i for i, v in levels.items() if i not in used and ct[:1] and v[0][:1].upper() == ct[:1].upper()), None)
+            if li is None:
+                li = next((i for i, v in levels.items() if i not in used and v[2] == len(cpus)), None)
+            used.add(li)
+            lvl = levels.get(li, (ct, len(cpus), len(cpus)))
             name, per_l2 = lvl[0] or ct, lvl[1] or len(cpus)
             chunks = [cpus[i:i + per_l2] for i in range(0, len(cpus), per_l2)]
             for k, ch in enumerate(chunks):
@@ -1072,6 +1146,8 @@ class MacCollector:
         if rc != 0:
             return []
         ticks = [[info[i * 4 + j] for j in range(4)] for i in range(count.value)]  # user, system, idle, nice
+        # The kernel allocated the array in this process and it is ours: give it back, or every reading leaks a page.
+        self.libc.vm_deallocate(self.libc.mach_task_self(), ctypes.cast(info, ctypes.c_void_p), ctypes.c_size_t(n_info.value * ctypes.sizeof(ctypes.c_int)))
         return ticks
 
     def rate(self, key, value, t):
@@ -1099,18 +1175,26 @@ class MacCollector:
         if used <= 0:
             used = (pages("Pages active") + pages("Pages wired down") + pages("Pages occupied by compressor")) * page
         mem_used = used / GB
-        io = run(["iostat", "-Id"]).split("\n")
-        disk_mb, mac_disks = 0.0, []
-        if len(io) >= 3:
-            names, nums = io[0].split(), io[2].split()
-            for k, dn in enumerate(names):
-                if 3 * k + 2 < len(nums) and re.match(r"^[\d.]+$", nums[3 * k + 2]):
-                    mb = float(nums[3 * k + 2])
-                    disk_mb += mb
-                    info = self.disk_info(dn)
-                    mac_disks.append({"name": dn, "model": info.get("model", ""), "size": info.get("size", 0), "rot": info.get("rot", False), "role": "",
-                                      "mounts": [], "read": self.rate("dk." + dn, mb, t), "write": 0.0, "busy": -1})
-        disk = self.rate("disk", disk_mb, t)
+        # Disks: every drive's block storage driver counts its bytes since boot (iostat shows only the first few
+        # by name). Disk images are left out: their I/O is already counted on the drive that holds their files.
+        try:
+            drivers = plistlib.loads(subprocess.run(["ioreg", "-r", "-l", "-c", "IOBlockStorageDriver", "-d", "2", "-w", "0", "-a"],
+                                                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10).stdout)
+        except Exception:
+            drivers = []
+        disk_b, mac_disks = 0, []
+        for drv in drivers:
+            st = drv.get("Statistics") or {}
+            for media in drv.get("IORegistryEntryChildren") or []:
+                dn = media.get("BSD Name")
+                info = self.disk_info(dn, media.get("IORegistryEntryID")) if dn else {}
+                if not dn or info.get("image"):
+                    continue
+                r, w = st.get("Bytes (Read)", 0), st.get("Bytes (Write)", 0)
+                disk_b += r + w
+                mac_disks.append({"name": dn, "model": info.get("model", ""), "size": info.get("size", 0), "rot": info.get("rot", False), "role": "",
+                                  "mounts": [], "read": self.rate("dkr." + dn, r, t) / MB, "write": self.rate("dkw." + dn, w, t) / MB, "busy": -1})
+        disk = self.rate("disk", disk_b, t) / MB
         self.disk_peak = max(self.disk_peak, disk * MB * 1.25)
         ifs, net = [], 0.0
         for line in run(["netstat", "-ib"]).splitlines()[1:]:
@@ -1134,7 +1218,7 @@ class MacCollector:
                 for x in ifs:
                     if x["name"] == cur_if:
                         x.setdefault("addrs6", []).append(m6.group(1))
-            m = re.search(r"inet (\d+\.\d+\.\d+\.\d+) netmask (0x[0-9a-f]+)", line)
+            m = re.search(r"inet (\d+\.\d+\.\d+\.\d+)(?: --> \S+)? netmask (0x[0-9a-f]+)", line)  # "A --> B": point-to-point (utun)
             if m:
                 bits = bin(int(m.group(2), 16)).count("1")
                 for x in ifs:
@@ -1144,16 +1228,12 @@ class MacCollector:
         gpus = [{"name": gi["name"], "mem": gi["mem"], "util": stats[i]["util"] if i < len(stats) else 0.0, "m": stats[i] if i < len(stats) else {}, "lim": {}}
                 for i, gi in enumerate(self.gpu_info)]
         gpu = sum(g["util"] for g in gpus)
-        # Network per process: nettop has each process's bytes in/out; lsof says which local address
-        # (and so which interface) its connections use. (netstat prints nothing when run from Python.)
+        # Network per process: nettop has each process's bytes in/out (it runs beside the readings, see
+        # net_rates_now); lsof says which local address (and so which interface) its connections use.
+        # (netstat prints nothing when run from Python.)
         ip_if = {a.split("/")[0]: x["name"] for x in ifs for a in x["addrs"] + x.get("addrs6", [])}
+        net_rates = self.net_rates_now()
         mac_net = {}
-        for line in run(["nettop", "-P", "-L", "1", "-x", "-J", "bytes_in,bytes_out"], timeout=10).splitlines()[1:]:
-            f = line.split(",")
-            if len(f) >= 3:
-                _name, _, pid = f[0].rpartition(".")
-                if pid.isdigit() and f[1].isdigit() and f[2].isdigit():
-                    mac_net.setdefault(int(pid), {"ifs": set(), "b": 0})["b"] = int(f[1]) + int(f[2])
         cur_pid = None
         for line in run(["lsof", "-nP", "-iTCP", "-sTCP:ESTABLISHED", "-F", "pn"], timeout=10).splitlines():
             if line.startswith("p"):
@@ -1162,7 +1242,7 @@ class MacCollector:
                 ip = line[1:].split("->")[0].rsplit(":", 1)[0].strip("[]")
                 ifn = ip_if.get(ip)
                 if ifn:
-                    mac_net.setdefault(cur_pid, {"ifs": set(), "b": 0})["ifs"].add(ifn)
+                    mac_net.setdefault(cur_pid, set()).add(ifn)
         # Processes: CPU from cumulative cpu time deltas.
         procs = []
         args = {}
@@ -1178,9 +1258,8 @@ class MacCollector:
             pid = int(f[0])
             secs = parse_cputime(f[5])
             c = self.rate("p%d" % pid, secs, t)
-            pn = mac_net.get(pid) or {}
             procs.append([pid, int(f[1]), os.path.basename(f[6]), f[2], f[3], c, int(f[4]) * 1024 / GB, 0.0, 0.0, 0, args.get(pid, f[6]), "base", -1, [], [],
-                          sorted(pn.get("ifs", ())), self.rate("pn%d" % pid, pn.get("b", 0), t) / MB if pn else 0.0])
+                          sorted(mac_net.get(pid, ())), net_rates.get(pid, 0.0)])
         if len(self.prev) > 20000:
             self.prev = {k: v for k, v in self.prev.items() if v[1] >= t - 30}
         # VMs: Virtualization.framework, QEMU and Parallels processes (Docker Desktop's VM is not a VM here).
@@ -1194,16 +1273,21 @@ class MacCollector:
             return " ".join(out)
         vms = {}
         docker_vm = None
+        self.vz_owners = {pid: own for pid, own in self.vz_owners.items() if pid in by_pid}
         for p in procs:
             a = p[10]
             if "com.apple.Virtualization.VirtualMachine" in a or re.search(r"qemu-system-\w+", a) or "prl_vm_app" in a:
                 anc = ancestry(p).lower()
-                if "docker" in anc:
+                m = re.search(r"([^/]+)\.utm", a) or re.search(r"-name\s+(?:guest=)?([^,\s]+)", a) or re.search(r"([^/]+)\.pvm", a)
+                # Apple's Virtualization VMs run in an XPC service launchd starts (parent pid 1, arguments only
+                # the service's path), so neither says whose VM it is; its open files do.
+                vz = "com.apple.Virtualization.VirtualMachine" in a and not m and "docker" not in anc
+                own = self.vz_owner(p[0]) if vz else ""
+                if "docker" in anc or own == "docker":
                     docker_vm = p
                     p[11] = "dockervm"
                     continue
-                m = re.search(r"([^/]+)\.utm", a) or re.search(r"-name\s+(?:guest=)?([^,\s]+)", a) or re.search(r"([^/]+)\.pvm", a)
-                name = m.group(1) if m else ("UTM VM" if "utm" in anc else "VM %d" % p[0])
+                name = m.group(1) if m else own or ("UTM VM" if "utm" in anc else "VM %d" % p[0])
                 acc = vms.setdefault(name, {"name": name, "u": [0.0] * 5, "running": True, "ifs": [], "cpus": ""})
                 acc["u"][0] += p[5]
                 acc["u"][1] += p[6]
@@ -1234,7 +1318,7 @@ class MacCollector:
             s = stats.get(cid, {})
             nio = s.get("NetIO", "0B / 0B").split("/")
             bio = s.get("BlockIO", "0B / 0B").split("/")
-            u = [float(s.get("CPUPerc", "0%").rstrip("%") or 0) / 100.0, size_bytes(s.get("MemUsage", "0B").split("/")[0]) / GB, 0.0,
+            u = [docker_pct(s.get("CPUPerc")), size_bytes(s.get("MemUsage", "0B").split("/")[0]) / GB, 0.0,
                  self.rate("cb" + cid, sum(size_bytes(x) for x in bio), t) / MB, self.rate("cn" + cid, sum(size_bytes(x) for x in nio), t) / MB]
             containers.append({"id": cid, "name": c.get("Names", ""), "image": c.get("Image", ""), "status": c.get("Status", ""),
                                "project": labels.get("com.docker.compose.project", ""), "service": labels.get("com.docker.compose.service", ""),
