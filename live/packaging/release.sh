@@ -36,6 +36,9 @@ MAC="$LIVE/dist/Fleet-$WANT-macos-arm64.zip"
 LINUX_X64="$LIVE/dist/fleet-$WANT-linux-x64.tar.gz"
 LINUX_ARM64="$LIVE/dist/fleet-$WANT-linux-arm64.tar.gz"
 [ -f "$LINUX_X64" ] && [ -f "$LINUX_ARM64" ] || die "no Linux packages"
+# the Flatpak (#358), when its Linux build container is here (see live/packaging/flatpak/build_flatpak.sh)
+FLATPAK=""
+if docker ps -q -f name=^fleet-flatpak$ 2>/dev/null | grep -q .; then "$HERE/flatpak/build_flatpak.sh" x86_64 && FLATPAK="$LIVE/dist/fleet-$WANT-x86_64-flatpak.tar.gz"; else echo "release: no Flatpak build container, so no Flatpak" >&2; fi
 NOTES=$(mktemp)
 awk -v v="## Fleet $WANT" '$0 == v {on = 1; next} /^## / && on {exit} on' "$LIVE/CHANGELOG.md" > "$NOTES"
 
@@ -47,5 +50,5 @@ fi
 [ -f "$MAC" ] || die "no $MAC: publish from a Mac so the release has all three packages"
 git tag -a "$TAG" -m "Fleet $WANT"
 git push origin "$TAG"
-gh release create "$TAG" "$MAC" "$LINUX_X64" "$LINUX_ARM64" --title "Fleet $WANT" --notes-file "$NOTES" --latest
+gh release create "$TAG" "$MAC" "$LINUX_X64" "$LINUX_ARM64" $FLATPAK --title "Fleet $WANT" --notes-file "$NOTES" --latest
 echo "release: published Fleet $WANT ($TAG)"

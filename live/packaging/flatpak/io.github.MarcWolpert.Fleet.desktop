@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Fleet
+GenericName=Machine monitor
+Comment=Every machine you manage, live, in one tree
+Exec=fleet
+Icon=io.github.MarcWolpert.Fleet
+Terminal=false
+Categories=System;Monitor;
+Keywords=monitor;ssh;docker;vm;processes;
+StartupWMClass=fleet-live

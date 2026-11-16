@@ -146,11 +146,13 @@ test('inline as the default; ⌘T from the terminal opens another; it shows it h
   fx.onPost = p => p === '/api/inline-terminal' ? {ok: true, id: 's' + (++n), url: 'data:text/html,' + encodeURIComponent(page), title: 'lab-linux'} : p === '/api/inline-terminal/close' ? {ok: true} : null;
   const p = await browser.page(fx, {ui: ui({sel: 'lx'})});
   const cmdT = async () => { for (const type of ['keyDown', 'keyUp']) await p.send('Input.dispatchKeyEvent', {type, key: 't', code: 'KeyT', modifiers: 4, windowsVirtualKeyCode: 84}); };
+  // each stand-in terminal is a frame in a process of its own: under a full suite's load it can take a while to start
+  const SLOW = 20000;
   // focus a terminal and wait until it says so itself (Fleet's script in its page): it runs in its own process
   const intoTerminal = async sel => {
     const n = await p.eval(`(window.__tf = window.__tf || 0, window.__tfOn || (window.__tfOn = addEventListener('message', e => { if (e.data && e.data.fleet === 'termFocus') __tf++; }) || 1), document.activeElement && document.activeElement.blur(), window.__tf)`);
     await p.eval(`(document.querySelector(${JSON.stringify(sel)}).focus(), true)`);
-    await p.waitFor(`window.__tf > ${n}`);
+    await p.waitFor(`window.__tf > ${n}`, SLOW);
   };
   try {
     await p.waitFor(`document.querySelector('.hero [data-terminal="lx"]')`);
@@ -173,12 +175,12 @@ test('inline as the default; ⌘T from the terminal opens another; it shows it h
     assert.equal(await p.eval(`document.querySelector('.pactive:not(#tdrawer)')`), null);
     // ⌘T in a terminal asks which to open (#338): just what can have one, this terminal's machine first
     const pick = async () => {
-      await p.waitFor(`document.getElementById('goto') && GOTO.mode === 'term'`);
+      await p.waitFor(`document.getElementById('goto') && GOTO.mode === 'term'`, SLOW);
       assert.equal(await p.eval(`GOTO.items[0].n.id`), 'lx');
       assert.equal(await p.eval(`GOTO.items.every(x => x.n && termOk(x.n))`), true);
-      await p.waitFor(`document.hasFocus() && document.activeElement && document.activeElement.id === 'gotoq'`);   // focus back from the terminal's frame (its own process)
+      await p.waitFor(`document.hasFocus() && document.activeElement && document.activeElement.id === 'gotoq'`, SLOW);   // focus back from the terminal's frame (its own process)
       await p.key('Enter');
-      await p.waitFor(`!document.getElementById('goto')`);
+      await p.waitFor(`!document.getElementById('goto')`, SLOW);
     };
     await cmdT();
     await pick();
@@ -201,7 +203,7 @@ test('inline as the default; ⌘T from the terminal opens another; it shows it h
     const space = await p.eval(`S.space`);
     await intoTerminal('#tdrawer .td-pane:not([hidden]) iframe');
     await ctrlTab(true);
-    await p.waitFor(`${ACTIVE} === 1`);
+    await p.waitFor(`${ACTIVE} === 1`, SLOW);
     assert.equal(await p.eval(`S.space`), space, 'the spaces stay put');
     // back in the tree, the outline moves there
     await p.eval(`(() => { const r = document.querySelector('#tree .row'); r.dispatchEvent(new PointerEvent('pointerdown', {bubbles: true})); r.focus(); return true; })()`);
@@ -209,7 +211,7 @@ test('inline as the default; ⌘T from the terminal opens another; it shows it h
     // ⌘J typed in a terminal minimizes the terminals (#338)
     await intoTerminal('#tdrawer .td-pane:not([hidden]) iframe');
     for (const type of ['keyDown', 'keyUp']) await p.send('Input.dispatchKeyEvent', {type, key: 'j', code: 'KeyJ', modifiers: 4, windowsVirtualKeyCode: 74});
-    await p.waitFor(`document.getElementById('tdrawer').hidden && PREFS.termMin === true`);
+    await p.waitFor(`document.getElementById('tdrawer').hidden && PREFS.termMin === true`, SLOW);
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
 });

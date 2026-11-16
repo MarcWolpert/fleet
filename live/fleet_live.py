@@ -178,6 +178,62 @@ def hist_obj(key):
     return dict(zip(METRICS, HIST.get(key)))
 
 
+# ---------------------------------------------------------------- in a Flatpak (#358)
+# The sandbox sees only its own processes and files, so Fleet runs what it uses on the host: this computer's collector
+# and inspector (under the host's python3), ssh, docker, terminals, the app window, and tmux (the package's own, from
+# the app's folder on the host, so the terminals' shells outlive Fleet). The package's ttyd stays in the sandbox.
+FLATPAK_INFO = "/.flatpak-info"
+HOST_ENV = ("TERMINFO_DIRS",)   # what a program on the host needs from Fleet's environment
+
+
+def in_flatpak():
+    return os.path.exists(FLATPAK_INFO)
+
+
+def flatpak_app_path():
+    """The host's path to the Flatpak's /app."""
+    try:
+        with open(FLATPAK_INFO) as f:
+            for line in f:
+                if line.startswith("app-path="):
+                    return line.split("=", 1)[1].strip()
+    except OSError:
+        pass
+    return ""
+
+
+def host_path(p):
+    """Where a file under /app is, seen from the host."""
+    return flatpak_app_path() + p[len("/app"):] if in_flatpak() and p.startswith("/app/") else p
+
+
+def host_argv(argv, env=None):
+    if not in_flatpak() or not argv:
+        return list(argv)
+    a0 = str(argv[0])
+    if a0 == "flatpak-spawn" or a0.startswith("/app/"):
+        return list(argv)
+    if a0 == sys.executable:   # this computer's collector and inspector read the host, under its own python3
+        argv = ["python3"] + list(argv[1:])
+    return ["flatpak-spawn", "--host", "--watch-bus"] + ["--env=%s=%s" % (k, env[k]) for k in HOST_ENV if env and env.get(k)] + list(argv)
+
+
+def host_which(name):
+    if not in_flatpak():
+        return shutil.which(name)
+    out = run(["sh", "-c", "command -v %s" % shlex.quote(name)], timeout=5).strip()
+    return out or None
+
+
+if in_flatpak():
+    class _HostPopen(subprocess.Popen):
+        def __init__(self, args, *a, **k):
+            if isinstance(args, (list, tuple)):
+                args = host_argv(list(args), k.get("env"))
+            super().__init__(args, *a, **k)
+    subprocess.Popen = _HostPopen   # subprocess.run and webbrowser go through it too
+
+
 # ---------------------------------------------------------------- helpers
 def run(cmd, timeout=10):
     try:
@@ -1699,7 +1755,7 @@ class MacCollector:
         # Docker (Docker Desktop): containers with compose labels, usage from docker stats.
         if t - self.last_slow > 2.5 * 1:
             self.last_slow = t
-            if shutil.which("docker"):
+            if shutil.which("docker"):   # (the Mac reader: it runs on a Mac, never in a Flatpak, and travels to remote Macs as it is)
                 ps_out = run(["docker", "ps", "--no-trunc", "--format", "{{json .}}"], timeout=8)
                 st_out = run(["docker", "stats", "--no-stream", "--format", "{{json .}}"], timeout=12) if ps_out.strip() else ""
                 self.docker_cache = (ps_out, st_out)
@@ -2492,6 +2548,9 @@ def inspect_process(m, pid):
                 cmd, stdin = ps_launch(windows_inspect_script(pid))
             elif local:
                 cmd, stdin = [sys.executable, os.path.join(HERE, "inspect_linux.py"), str(pid), str(INSPECT_SECS)], None
+                if in_flatpak():   # the host's python3 reads the host: the script comes on stdin (#358)
+                    with open(os.path.join(HERE, "inspect_linux.py"), "rb") as f:
+                        cmd, stdin = [sys.executable, "-", str(pid), str(INSPECT_SECS)], f.read()
             elif cfg.get("os") == "macos":
                 cmd, stdin = ["ssh"] + SSH_MARK + [cfg["ssh"], "python3 -"], mac_inspect_script(pid, INSPECT_SECS).encode()
             elif cfg.get("os") == "windows":
@@ -2679,7 +2738,7 @@ def terminal_choices():
         have = [("wt", "Windows Terminal")] if shutil.which("wt") else []
         return have + [("cmd", "Command Prompt")], (have[0][0] if have else "cmd")
     env = os.environ.get("TERMINAL", "")
-    have = ([("env", "$TERMINAL (%s)" % env)] if env and shutil.which(env) else []) + [(k, k) for k, _ in LINUX_TERMINALS if shutil.which(k)]
+    have = ([("env", "$TERMINAL (%s)" % env)] if env and host_which(env) else []) + [(k, k) for k, _ in LINUX_TERMINALS if host_which(k)]
     return have, (have[0][0] if have else "")
 
 
@@ -2771,11 +2830,16 @@ RUN_DIR = {}   # "path": a private folder for this run (ttyd's page, tmux's sett
 
 def run_dir():
     if not RUN_DIR.get("path") or not os.path.isdir(RUN_DIR["path"]):
-        RUN_DIR["path"] = tempfile.mkdtemp(prefix="fleet-run-")
+        base = os.environ.get("XDG_CACHE_HOME") if in_flatpak() else None   # in a Flatpak: a folder the host sees too
+        if base:
+            os.makedirs(base, exist_ok=True)
+        RUN_DIR["path"] = tempfile.mkdtemp(prefix="fleet-run-", dir=base)
     return RUN_DIR["path"]
 
 
 def tmux_path():
+    if in_flatpak():   # the package's static tmux, run on the host from the app's folder (#358)
+        return host_path(os.path.join(os.path.dirname(HERE), "bin", "tmux"))
     return bundled("tmux") or shutil.which("tmux") or next((p for p in ("/opt/homebrew/bin/tmux", "/usr/local/bin/tmux", "/usr/bin/tmux") if os.path.exists(p)), None)
 
 
@@ -2818,7 +2882,10 @@ def session_argv(sid, argv, tmux_bin):
     without tmux, argv itself (a page reload then starts a new shell)."""
     if not tmux_bin:
         return reconnecting(argv)
-    return [tmux_bin, "-L", tmux_socket(), "-f", tmux_conf(), "new-session", "-A", "-s", "fleet-" + sid] + reconnecting(argv)
+    cmd = [tmux_bin, "-L", tmux_socket(), "-f", tmux_conf(), "new-session", "-A", "-s", "fleet-" + sid] + reconnecting(argv)
+    if in_flatpak():   # ttyd (in the sandbox) starts the tmux client on the host (#358)
+        return ["flatpak-spawn", "--host", "--env=TERMINFO_DIRS=" + bundle_env()["TERMINFO_DIRS"]] + cmd
+    return cmd
 
 
 def save_terms():
@@ -2896,6 +2963,9 @@ def bundle_env():
     through LD_LIBRARY_PATH (macOS's dyld ignores that variable), and tmux finds terminfo in the package first."""
     env = dict(os.environ)
     top = os.path.dirname(HERE)
+    if in_flatpak():   # tmux runs on the host: its terminfo is the app's, seen from there, then the host's
+        env["TERMINFO_DIRS"] = ":".join([host_path(os.path.join(top, "terminfo")), "/usr/share/terminfo", "/lib/terminfo", "/etc/terminfo"])
+        return env
     if not os.path.exists(os.path.join(top, "FLEET_BUNDLE")):
         return env
     lib, ti = os.path.join(top, "lib"), os.path.join(top, "terminfo")
@@ -3027,6 +3097,8 @@ def inline_argv(fleet, node_id, then=""):
         raise ValueError("That command is too long or has more than one line.")
     argv, title = terminal_target(fleet, node_id)
     if argv is None:   # this computer
+        if in_flatpak():   # tmux on the host starts your own login shell there (#358)
+            return (["sh", "-lc", then] if then else []), title
         sh = os.environ.get("SHELL") or "/bin/sh"
         return ([sh, "-lc", then] if then else [sh, "-l"]), title
     if then and argv[0] == "ssh" and len(argv) == 2:
@@ -3221,7 +3293,7 @@ def fmt_uptime(secs):
 
 def tailscale_bin():
     for p in ("tailscale", "/Applications/Tailscale.app/Contents/MacOS/Tailscale", r"C:\Program Files\Tailscale\tailscale.exe"):
-        if shutil.which(p) or os.path.exists(p):
+        if host_which(p) or os.path.exists(p):
             return p
     return "tailscale"
 
@@ -3517,7 +3589,7 @@ def open_app_window(url):
              "google-chrome", "chromium", "microsoft-edge", r"C:\Program Files\Google\Chrome\Application\chrome.exe",
              r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"]
     for c in cands:
-        if os.path.exists(c) or shutil.which(c):
+        if os.path.exists(c) or host_which(c):
             prof = os.path.join(os.path.expanduser("~"), ".cache", "fleet-live", "browser")
             extra = ["--class=fleet-live"] if platform.system() == "Linux" else []  # groups the window under fleet.desktop
             subprocess.Popen([c, "--app=" + url, "--user-data-dir=" + prof, "--window-size=1500,950"] + extra, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Fleet as a Flatpak (#358). Python comes from the runtime; the package carries its static ttyd and tmux. Fleet runs
+# what it uses on the host (org.freedesktop.Flatpak), as Mission Center's Flatpak does: a system monitor in a sandbox
+# would see only itself. build_flatpak.sh stages src/ and builds this.
+app-id: io.github.MarcWolpert.Fleet
+runtime: org.freedesktop.Platform
+runtime-version: '24.08'
+sdk: org.freedesktop.Sdk
+command: fleet
+finish-args:
+  - --share=network                      # Fleet's page and the terminals are on 127.0.0.1; ssh, on the host
+  - --talk-name=org.freedesktop.Flatpak  # flatpak-spawn --host: read this computer, run ssh, docker, tmux, terminals
+  - --filesystem=xdg-config/fleet:create # your machines and Fleet's settings, shared with a Fleet installed otherwise
+  - --filesystem=xdg-cache/fleet-live:create
+modules:
+  - name: fleet
+    buildsystem: simple
+    build-commands:
+      - mkdir -p /app/share/fleet && cp -R app/. /app/share/fleet/
+      - install -Dm755 fleet.sh /app/bin/fleet
+      - install -Dm644 io.github.MarcWolpert.Fleet.desktop /app/share/applications/io.github.MarcWolpert.Fleet.desktop
+      - install -Dm644 io.github.MarcWolpert.Fleet.metainfo.xml /app/share/metainfo/io.github.MarcWolpert.Fleet.metainfo.xml
+      - for s in 16 32 48 64 128 256 512; do install -Dm644 icons/fleet-$s.png /app/share/icons/hicolor/${s}x${s}/apps/io.github.MarcWolpert.Fleet.png; done
+      - install -Dm644 icons/fleet.svg /app/share/icons/hicolor/scalable/apps/io.github.MarcWolpert.Fleet.svg
+    sources:
+      - type: dir
+        path: src
