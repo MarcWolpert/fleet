@@ -74,7 +74,7 @@ if (S.tree === 'pins'){ S.tree = 'machines'; S.pinsOnly = true; }  // pins-only 
 function save(){ try { const {hover, mx, my, ...keep} = S; localStorage.setItem('fleet-live-ui', JSON.stringify(keep)); } catch (e) {} navRecord(); }
 
 /* ---------- model ---------- */
-let TPINS = {}, PREFS = {}, prefsBusy = false;
+let TPINS = {}, PREFS = {}, prefsBusy = false, prefsGen = 0;
 // where you've been, for Back and Forward (see "Panels, find, back and forward")
 const NAV = {stack:[], i:-1, applying:false};
 const TF = {q:'', open:false}, FIND = {q:'', i:0, n:0};
@@ -1489,9 +1489,10 @@ async function refreshNow(){
   if (busy) return; busy = true;
   try {
     const pinsAt = pinsSaves ? -1 : pinsSeq;   // a pin save on its way now or made before the answer: keep PINS (#95)
+    const pg = prefsGen;                         // a prefs save started or ended since the poll was asked for: keep PREFS (#175)
     const r = await fetch('/api/fleet', {cache:'no-store'});
     DATA = await r.json();
-    INTERVAL = DATA.interval || 3; WINDOW = DATA.window_s || INTERVAL * H; if (pinsAt === pinsSeq) PINS = DATA.pins || []; if (!prefsBusy){ PREFS = DATA.prefs || {}; applyTheme(currentTheme()); } if (!tpinBusy) TPINS = DATA.tilepins || {};
+    INTERVAL = DATA.interval || 3; WINDOW = DATA.window_s || INTERVAL * H; if (pinsAt === pinsSeq) PINS = DATA.pins || []; if (!prefsBusy && pg === prefsGen){ PREFS = DATA.prefs || {}; applyTheme(currentTheme()); } if (!tpinBusy) TPINS = DATA.tilepins || {};
     build(DATA);
     renderAutoConn();
     if (S.sel !== 'fleet' && !nodes[S.sel]) { /* keep selection; it may come back */ }
@@ -1729,13 +1730,15 @@ async function setColLayout(list){
   lastMainHTML = ''; renderMain(); if (COLMENU.open) renderColMenu();
   await savePrefs('the column layout');
 }
-// PREFS (~/.config/fleet/ui.json) is saved whole; while a save is on its way, polls don't overwrite it.
+// PREFS (~/.config/fleet/ui.json) is saved whole; while a save is on its way, polls don't overwrite it, nor
+// does a poll asked for before or during a save (the server may have read the old file for it): prefsGen moves on.
 let prefsSaves = 0;
 async function savePrefs(what){
-  prefsSaves++; prefsBusy = true;
+  prefsSaves++; prefsBusy = true; prefsGen++;
   try { const d = await api('/api/prefs', PREFS); if (prefsSaves === 1 && d.prefs) PREFS = d.prefs; }
   catch (e) { toast('Couldn’t save ' + what); }
   if (--prefsSaves === 0) prefsBusy = false;
+  prefsGen++;
 }
 const COLMENU = {open:false, x:0, y:0, focus:''};
 function renderColMenu(){

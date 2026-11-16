@@ -57,7 +57,10 @@ export function startServer(fx){
         const kept = {'/api/prefs': 'prefs', '/api/pins': 'pins', '/api/tilepins': 'tilepins'}[u.pathname];
         if (kept && fx.fleet) fx.fleet[kept] = answer[kept];
         json(answer); }); return; }
-      if (u.pathname === '/api/fleet') return json(fx.fleet);
+      if (u.pathname === '/api/fleet'){  // fx.holdFleet: the answer is made now (as the server reads ui.json) but sent when the test calls it (see heldPoll)
+        if (!fx.holdFleet) return json(fx.fleet);
+        const now = JSON.parse(JSON.stringify(fx.fleet)); fx.held = (fx.held || []).concat([() => json(now)]); return;
+      }
       if (u.pathname === '/api/procs') return json((fx.procs || {})[mid] || {procs: []});
       if (u.pathname === '/api/cpus') return json((fx.cpus || {})[mid] || {});
       if (u.pathname === '/api/disks') return json((fx.disks || {})[mid] || {disks: [], per_process: true});
@@ -195,3 +198,13 @@ async function openPage(cdp, fx, {ui = null, width = 1500, height = 950, fonts =
 }
 
 export const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// With fx.holdFleet set: asks the page to poll until the fixture server holds an /api/fleet answer back, and
+// returns the function that sends it. The page polls one at a time, so a new one held means the last is done.
+export async function heldPoll(p, fx){
+  for (const end = Date.now() + 6000; !(fx.held || []).length; await sleep(40)){
+    if (Date.now() > end) throw new Error('no /api/fleet poll was held');
+    await p.eval(`(() => { refreshNow(); return true; })()`);
+  }
+  return fx.held.shift();
+}
