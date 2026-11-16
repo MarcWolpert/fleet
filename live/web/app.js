@@ -1391,7 +1391,7 @@ async function refreshNow(){
     const n = S.sel === 'fleet' ? null : nodes[S.sel];
     const jobs = [];
     if ((S.view === 'details' || (S.detailsDocked && n && S.tree !== 'network')) && (n || roots[0])){ const mid = procMachineFor(n || roots[0]); if (mid) jobs.push(fetch('/api/procs?machine=' + encodeURIComponent(mid), {cache:'no-store'}).then(r => r.json()).then(d => { PROCS = {machine:mid, list:d.procs || [], gpuProcs:!!d.gpu_procs}; })); }
-    if (S.view !== 'details' && n && n.kind === 'machine' && S.metric === 'cpu' && S.cpuView === 'logical' && cpuSel(n).length && n.status === 'ok') jobs.push(fetch('/api/procs?machine=' + encodeURIComponent(n.id), {cache:'no-store'}).then(r => r.json()).then(d => { PROCS = {machine:n.id, list:d.procs || [], gpuProcs:!!d.gpu_procs}; }));
+    if (S.view !== 'details' && !S.detailsDocked && n && n.kind === 'machine' && S.metric === 'cpu' && S.cpuView === 'logical' && cpuSel(n).length && n.status === 'ok') jobs.push(fetch('/api/procs?machine=' + encodeURIComponent(n.id), {cache:'no-store'}).then(r => r.json()).then(d => { PROCS = {machine:n.id, list:d.procs || [], gpuProcs:!!d.gpu_procs}; }));
     if (S.view !== 'details' && n && n.kind === 'machine' && S.metric === 'cpu' && S.cpuView === 'logical') jobs.push(fetch('/api/cpus?machine=' + encodeURIComponent(n.id), {cache:'no-store'}).then(r => r.json()).then(d => { CPUS[n.id] = d; }));
     const nm = n && n.kind === 'machine' ? n : null;
     if (nm && S.metric === 'net' && S.view !== 'details') jobs.push(fetch('/api/ifs?machine=' + encodeURIComponent(nm.id), {cache:'no-store'}).then(r => r.json()).then(d => { IFS[nm.id] = d; }));

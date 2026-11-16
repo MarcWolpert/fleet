@@ -126,3 +126,32 @@ test('the full Details view follows the selection too, and its title names it', 
       {pids: [105, 106, 103, 101, 102, 111, 110], chips: ['Last ran on CCD 1'], title: 'Details · lab-linux · CCD 1 (CPUs 4–7, 12–15)'});
   } finally { await p.close(); }
 });
+
+// The /api requests each poll makes (everything after one /api/fleet up to the next), for two whole polls.
+async function twoPolls(p){
+  const seen = [], off = p.on('Network.requestWillBeSent', r => { const u = new URL(r.request.url); if (u.pathname.startsWith('/api/')) seen.push(u.pathname + u.search); });
+  try {
+    const end = Date.now() + 8000;
+    while (seen.filter(u => u === '/api/fleet').length < 3 && Date.now() < end) await sleep(40);
+  } finally { off(); }
+  const at = seen.reduce((a, u, i) => u === '/api/fleet' ? a.concat([i]) : a, []);
+  assert.ok(at.length >= 3, 'three polls in 8 s');
+  return [seen.slice(at[0] + 1, at[1]).sort(), seen.slice(at[1] + 1, at[2]).sort()];
+}
+
+const EACH = ['/api/cpus?machine=lx', '/api/procs?machine=lx'];
+for (const [docked, pick, want, name] of [
+  [true, true, EACH, 'a CPU pick with Details docked reads the machine\'s processes once per poll, not twice'],
+  [true, false, EACH, 'Details docked, nothing picked: the processes once per poll'],
+  [false, true, EACH, 'a CPU pick without Details docked: the processes once per poll, for the selection card'],
+  [false, false, ['/api/cpus?machine=lx'], 'nothing docked, nothing picked: no processes at all']]){
+  test(name, async () => {
+    const p = await open({detailsDocked: docked});
+    try {
+      if (pick) await p.click(tile(4));
+      await p.waitFor(`PROCS.machine === 'lx' || ${!docked && !pick}`);
+      assert.deepEqual(await twoPolls(p), [want, want]);
+      assert.deepEqual(p.errors, []);
+    } finally { await p.close(); }
+  });
+}
