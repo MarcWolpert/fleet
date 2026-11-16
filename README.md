@@ -52,7 +52,8 @@ plus an app window.
 | ✅ | Dock the Details process list beside the overview (drag the Details pill to the right) |
 | ✅ | Details columns: right-click a column header to hide, move or add columns, a layout per detail type |
 | ✅ | Themes: Fleet's own, Monokai Dimmed and 20 more built in (Dracula, Nord, Solarized, Gruvbox, Tokyo Night, Catppuccin, GitHub, …), or **Import theme** from any VS Code colour theme |
-| ✅ | Keyboard: ⌘K goes to any machine, container, job, command or theme; ⌘F finds a process; ⌘1–9 spaces, ⌥1–5 metrics, arrows in the tree, ⌘+/⌘− text size; `?` lists them all |
+| ✅ | Keyboard: ⌘K goes to any machine, container, job, command or theme; ⌘F finds in the panel you're in; ⌘[ ⌘] back and forward; ⌘1–9 spaces, ⌥1–5 metrics, arrows in the tree, ⌘+/⌘− text size; `?` lists them all |
+| ✅ | Details drop-down: click a process to see what it mostly waits on (CPU, disk, memory, GPU, locks, network…), its cache misses, limits, sockets, files and threads; the list holds still while it's open |
 | ✅ | macOS app and Linux package, with the Fleet icon |
 | ⬜ | Native app (the Mission Center fork) on macOS, Linux and Windows |
 | ⬜ | Actions (kill, stop, restart, run a job now), each confirmed and logged |
@@ -159,10 +160,11 @@ Fleet keeps what you arrange in the app beside it, so it survives restarts:
 | Keys | Does |
 |---|---|
 | ⌘K | Go to anything: machines, VMs, projects, containers, jobs, commands, themes |
-| ⌘F or `/` | Filter the process list |
+| ⌘F or `/` | Find in the panel you're in: filter the tree, find on the page, or filter Details |
+| ⌘[ ⌘] | Back, forward (also the ‹ › buttons and the mouse's side buttons) |
 | ⌘D, ⌘⇧D | Details on and off; dock it beside the overview |
 | ⌥1 … ⌥5 | CPU, Memory, GPU, Disk I/O, Network |
-| ⌘1 … ⌘9, ⌘[ ⌘] | Go to a space; previous or next space |
+| ⌘1 … ⌘9, ⌘⇧[ ⌘⇧] | Go to a space; previous or next space |
 | ↑ ↓ ← → | Move through the tree; collapse, expand, go to the parent |
 | P | Pin or unpin the selection as a space |
 | ⌘T | Open a terminal on the selection |
