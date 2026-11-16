@@ -1245,9 +1245,9 @@ function renderMain(){
   renderFilterBar();
   const main = $('main');
   const a = document.activeElement;
-  let refocus = null, refocusAt = 0, selStart = null;
+  let refocus = null, refocusAt = 0, selStart = null, selStop = null, selDir;   // selStop: not selEnd, the selection helper above
   if (a && main.contains(a)){
-    if (a.id) { refocus = '#' + a.id; selStart = a.selectionStart; }
+    if (a.id) { refocus = '#' + a.id; selStart = a.selectionStart; selStop = a.selectionEnd; selDir = a.selectionDirection; }
     else if (a.dataset) for (const k of ['select', 'mode', 'sort', 'pin', 'cpuview', 'netsel', 'gtoggle', 'gall', 'tilesort', 'lcpu', 'lgroup', 'tpin']) if (a.dataset[k] != null){ refocus = `[data-${k}="${CSS.escape(a.dataset[k])}"]`; break; }
     if (refocus) refocusAt = Math.max(0, [...main.querySelectorAll(refocus)].indexOf(a));   // a view can draw the same button twice (a card and a table)
   }
@@ -1276,7 +1276,7 @@ function renderMain(){
   if (now.length === scrolled.length) now.forEach((e, i) => { if (scrolled[i][0]) e.scrollTop = scrolled[i][0]; if (scrolled[i][1]) e.scrollLeft = scrolled[i][1]; });
   markPanel(); if (FIND.q) applyFind(false);
   if (ends){ const x = selAt(main, ends[0]), y = selAt(main, ends[1]); if (x && y) try { sel.setBaseAndExtent(x[0], x[1], y[0], y[1]); } catch (e) {} }
-  if (refocus){ const all = main.querySelectorAll(refocus), e = all[refocusAt] || all[0]; if (e){ e.focus({preventScroll:true}); if (selStart != null && e.setSelectionRange) try { e.setSelectionRange(selStart, selStart); } catch (x) {} } }
+  if (refocus){ const all = main.querySelectorAll(refocus), e = all[refocusAt] || all[0]; if (e){ e.focus({preventScroll:true}); if (selStart != null && e.setSelectionRange) try { e.setSelectionRange(selStart, selStop, selDir); } catch (x) {} } }
 }
 function renderAll(){ renderSpaces(); renderToolbar(); renderTree(); renderMain(); refreshTip(); }
 
@@ -1911,8 +1911,13 @@ function fleetCommand(name, arg){
     case 'back': return navGo(-1) || true;
     case 'fwd': return navGo(1) || true;
     case 'findproc': {
-      if (S.tree === 'network'){ S.tree = 'machines'; }
-      if (!S.detailsDocked && S.view !== 'details'){ S.view = 'details'; save(); lastMainHTML = ''; renderAll(); refreshNow(); }
+      // the docked panel's filter when it lists processes, else the full Details view's (as ⌘D opens it)
+      const net = S.tree === 'network';
+      if (net) S.tree = 'machines';
+      if (net || !shownDetails()){
+        if (!shownDetails()){ S.view = 'details'; S.detailsDocked = false; }
+        save(); lastMainHTML = ''; renderAll(); refreshNow();
+      }
       const f = $('pfilter'); if (f){ f.focus(); f.select(); }
       return true;
     }
@@ -2007,6 +2012,8 @@ document.addEventListener('keydown', e => {
   if (e.key.startsWith('Arrow')){
     const a = document.activeElement;
     if (a && a !== document.body && !a.closest('#tree, .side, .spacebar')) return;
+    // focus on the body: the tree's only if you're in the tree (or no panel yet); after a click in the page or Details they scroll it
+    if ((!a || a === document.body) && PANEL && PANEL !== 'tree') return;
     if (treeStep(e.key)) e.preventDefault();
   }
 });
@@ -2030,7 +2037,7 @@ function gotoCommands(){
     {label:'Pin or unpin the selection as a space', hint:'P', ic:'pin', run:() => fleetCommand('pin')},
     {label:'Open a terminal on the selection', hint:MODK + 'T', ic:'terminal', run:() => fleetCommand('terminal')},
     {label:'Pin a grouping…', ic:'plus', run:() => openPicker()},
-    {label:'Import a theme…', ic:'upload', run:() => { openSettings().then(() => { const f = $('themefile'); if (f) f.click(); }); }},
+    {label:'Import a theme…', ic:'upload', run:() => { (SET.open ? Promise.resolve() : openSettings()).then(() => { const f = $('themefile'); if (f) f.click(); }); }},   // an open Settings keeps its unsaved edits
     {label:'Keyboard shortcuts', hint:'?', ic:'info', run:() => openKeys()}
   ], allThemes().map(t => ({label:'Theme: ' + t.name, ic:'palette', run:() => pickTheme(t.id)})));
 }
@@ -2063,12 +2070,12 @@ function renderGoto(){
   box.innerHTML = GOTO.items.length ? GOTO.items.map((x, i) => {
     const ic = x.n ? icon(iconOf(x.n)) : icon(x.ic || 'chev'), col = x.n ? (x.n.kind === 'machine' ? 'var(--ink-2)' : colOf(x.n)) : 'var(--ink-3)';
     const where = x.n && x.path.length ? `<span class="pw">${esc(x.path.join(' › '))}</span>` : '';
-    return `<div class="grow${i === GOTO.i ? ' on' : ''}" role="option" id="go-${i}" aria-selected="${i === GOTO.i}" data-goi="${i}"><span class="ico" style="color:${col}">${ic}</span>`
+    return `<div class="gorow${i === GOTO.i ? ' on' : ''}" role="option" id="go-${i}" aria-selected="${i === GOTO.i}" data-goi="${i}"><span class="ico" style="color:${col}">${ic}</span>`
       + `<span class="pn"><span>${esc(x.label)}</span>${where}</span>${x.hint ? `<kbd>${esc(x.hint)}</kbd>` : `<span class="pk">${esc(x.kind)}</span>`}`
       + (x.n && x.n.kind !== 'cron' && x.n.kind !== 'cronfolder' ? `<button type="button" class="gopin${PINS.includes(x.n.id) ? ' on' : ''}" data-gopin="${esc(x.n.id)}" aria-pressed="${PINS.includes(x.n.id)}" aria-label="${PINS.includes(x.n.id) ? 'Unpin' : 'Pin'} ${esc(x.label)}" title="Pin as a space (⇧Enter)">${icon('pin')}</button>` : '') + `</div>`;
   }).join('') : `<div class="more">Nothing matches “${esc(GOTO.q)}”.</div>`;
   $('gotoq').setAttribute('aria-activedescendant', GOTO.items.length ? 'go-' + GOTO.i : '');
-  const on = box.querySelector('.grow.on'); if (on) on.scrollIntoView({block:'nearest'});
+  const on = box.querySelector('.gorow.on'); if (on) on.scrollIntoView({block:'nearest'});
 }
 function openGoto(){
   if ($('goto')) return;
@@ -2081,7 +2088,7 @@ function openGoto(){
     const gp = e.target.closest('[data-gopin]'); if (gp){ e.stopPropagation(); gotoPin(gp.dataset.gopin); return; }
     const r = e.target.closest('[data-goi]'); if (r) runGoto(+r.dataset.goi);
   });
-  el.addEventListener('mousemove', e => { const r = e.target.closest('[data-goi]'); if (r && +r.dataset.goi !== GOTO.i){ GOTO.i = +r.dataset.goi; el.querySelectorAll('.grow').forEach((g, i) => { g.classList.toggle('on', i === GOTO.i); g.setAttribute('aria-selected', i === GOTO.i); }); } });
+  el.addEventListener('mousemove', e => { const r = e.target.closest('[data-goi]'); if (r && +r.dataset.goi !== GOTO.i){ GOTO.i = +r.dataset.goi; el.querySelectorAll('.gorow').forEach((g, i) => { g.classList.toggle('on', i === GOTO.i); g.setAttribute('aria-selected', i === GOTO.i); }); } });
   el.addEventListener('input', e => { if (e.target.id === 'gotoq'){ GOTO.q = e.target.value; GOTO.i = 0; renderGoto(); } });
   el.addEventListener('keydown', e => {
     if (e.key === 'Escape'){ e.preventDefault(); e.stopPropagation(); closeGoto(); }

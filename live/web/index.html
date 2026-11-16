@@ -581,13 +581,13 @@ kbd{display:inline-block;min-width:22px;padding:2px 7px;border-radius:6px;border
 .goto-bg{padding-top:12vh}
 .goto{width:min(620px,100%);background:var(--pop);border:1px solid var(--line-2);border-radius:14px;box-shadow:0 30px 80px #000b;display:flex;flex-direction:column;max-height:min(64vh,620px);overflow:hidden}
 .goto .picklist{overflow:auto;padding:6px}
-.grow{display:flex;align-items:center;gap:9px;min-height:36px;padding:5px 10px;border-radius:8px;color:var(--ink-2);cursor:pointer}
-.grow.on{background:var(--sel);color:var(--ink)}
-.grow .ico{display:grid;place-items:center;flex:none}.grow .ico svg{width:16px;height:16px}
-.grow .pn{flex:1;min-width:0;display:flex;flex-direction:column;overflow:hidden}
-.grow .pn>span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.grow .pw{font-size:11.5px;color:var(--ink-3)}
-.grow .pk{font-size:11.5px;color:var(--ink-3);white-space:nowrap}
+.gorow{display:flex;align-items:center;gap:9px;min-height:36px;padding:5px 10px;border-radius:8px;color:var(--ink-2);cursor:pointer}
+.gorow.on{background:var(--sel);color:var(--ink)}
+.gorow .ico{display:grid;place-items:center;flex:none}.gorow .ico svg{width:16px;height:16px}
+.gorow .pn{flex:1;min-width:0;display:flex;flex-direction:column;overflow:hidden}
+.gorow .pn>span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.gorow .pw{font-size:11.5px;color:var(--ink-3)}
+.gorow .pk{font-size:11.5px;color:var(--ink-3);white-space:nowrap}
 .goto .pick-f kbd{font-size:11px;padding:0 5px;min-width:0}
 
 /* Details drop-down: one process up close */
@@ -687,7 +687,7 @@ tr.fmatch>td{background:color-mix(in srgb, var(--stale) 16%, transparent)!import
 .tg-pin{margin-left:auto;display:flex}.tg-h .count + .tg-pin{margin-left:6px}
 
 .gopin{flex:none;width:24px;height:24px;margin-left:4px;border-radius:6px;display:grid;place-items:center;color:var(--ink-3);opacity:.5}
-.grow:hover .gopin,.grow.on .gopin,.gopin.on{opacity:1}.gopin.on{color:var(--accent)}.gopin:hover{background:var(--hover);color:var(--ink)}
+.gorow:hover .gopin,.gorow.on .gopin,.gopin.on{opacity:1}.gopin.on{color:var(--accent)}.gopin:hover{background:var(--hover);color:var(--ink)}
 .gopin svg{width:13px;height:13px}
 
 .pinlist{display:flex;flex-direction:column;gap:2px}

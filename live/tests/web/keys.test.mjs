@@ -3,7 +3,7 @@
 import {test, before, after} from 'node:test';
 import assert from 'node:assert/strict';
 import {launch} from './harness.mjs';
-import {fixture, ui} from './fixtures.mjs';
+import {fixture, ui, PIDS} from './fixtures.mjs';
 
 let browser;
 before(async () => { browser = await launch(); });
@@ -128,6 +128,23 @@ test('⌘N opens the dialog to pin a new space, and the shortcut list says so', 
   } finally { await p.close(); }
 });
 
+test('the Go to list\'s row style stays in Go to: the spacers in card headers stay plain spacers (regression)', async () => {
+  const p = await open({sel: 'lx'});
+  try {
+    await p.waitFor(`document.querySelectorAll('#main .card-h .grow').length >= 2`);
+    // every spacer: no padding, no minimum height, no pointer
+    const SPACERS = `[...new Set([...document.querySelectorAll('#main .card-h .grow')].map(s => { const c = getComputedStyle(s); return [c.padding, c.minHeight, c.cursor].join(' '); }))]`;
+    assert.deepEqual(await p.eval(SPACERS), ['0px auto auto']);
+    // the machine view's "Where this machine's usage goes" header is one line: its toggle sits beside its title
+    assert.equal(await p.eval(`(() => { const h = [...document.querySelectorAll('#main .card-h')].find(h => h.querySelector('.seg')); const t = h.querySelector('h2').getBoundingClientRect(), s = h.querySelector('.seg').getBoundingClientRect(); return s.top < t.bottom && t.top < s.bottom; })()`), true);
+    // Go to's rows keep their look
+    await press(p, 'k', {mod: true, code: 'KeyK'});
+    await p.waitFor(`document.querySelector('#gotolist [data-goi]')`);
+    assert.equal(await p.eval(`(() => { const c = getComputedStyle(document.querySelector('#gotolist [data-goi]')); return [c.display, c.minHeight, c.padding, c.cursor].join(' '); })()`), 'flex 36px 5px 10px pointer');
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
 test('⌃Tab cycles through the spaces and ⌃⇧Tab the other way, round and round', async () => {
   const fx = fixture(); fx.fleet.pins = ['lx', 'mac'];
   const p = await open({sel: 'fleet', space: 'fleet'}, fx);
@@ -142,6 +159,133 @@ test('⌃Tab cycles through the spaces and ⌃⇧Tab the other way, round and ro
     await press(p, '?');
     await p.waitFor(`document.getElementById('keys')`);
     assert.ok(await p.eval(`[...document.querySelectorAll('#keys .keytbl tr')].some(r => /Tab|⇥/.test(r.textContent) && /space/i.test(r.textContent))`), 'listed');
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
+test('⌘F and Go to\'s Find a process select a leftover filter, and a refresh keeps it selected, so typing replaces it (regression)', async () => {
+  const fx = fixture();
+  const p = await open({view: 'details', filter: 'postgres'}, fx);
+  const SELN = `(() => { const f = document.getElementById('pfilter'); return [document.activeElement === f, f.value, f.selectionStart, f.selectionEnd]; })()`;
+  try {
+    await p.waitFor(`${PIDS}.length === 1`);
+    // ⌘F in Details, then a poll that changes the page
+    await press(p, 'f', {mod: true, code: 'KeyF'});
+    assert.deepEqual(await p.eval(SELN), [true, 'postgres', 0, 8]);
+    fx.procs.lx.procs[2][4] = 0.75;   // postgres: 3.1% to 4.7% of 16 cores
+    await p.eval(`(refreshNow(), true)`);
+    await p.waitFor(`document.querySelector('.ptbl tbody tr[data-pid="103"]').textContent.includes('4.7%')`);
+    assert.deepEqual(await p.eval(SELN), [true, 'postgres', 0, 8]);
+    await p.send('Input.insertText', {text: 'nginx'});
+    await p.waitFor(`${PIDS}.length === 2`);
+    assert.deepEqual(await p.eval(SELN), [true, 'nginx', 5, 5]);
+    assert.deepEqual(await p.eval(PIDS), [101, 102]);
+    // from the overview, Go to's Find a process opens Details on the filter; the process list arriving keeps it selected
+    await p.eval(`(() => { const f = document.getElementById('pfilter'); f.value = 'postgres'; f.dispatchEvent(new Event('input', {bubbles: true})); f.blur(); return true; })()`);
+    await press(p, 'd', {mod: true, code: 'KeyD'});
+    await p.waitFor(`!document.getElementById('pfilter')`);
+    await press(p, 'k', {mod: true, code: 'KeyK'});
+    await p.waitFor(`document.activeElement && document.activeElement.id === 'gotoq'`);
+    await p.eval(`(() => { const i = document.getElementById('gotoq'); i.value = 'find a process'; i.dispatchEvent(new Event('input', {bubbles: true})); return true; })()`);
+    await press(p, 'Enter');
+    await p.waitFor(`${PIDS}.length === 1`);
+    assert.deepEqual(await p.eval(SELN), [true, 'postgres', 0, 8]);
+    await p.send('Input.insertText', {text: 'nginx'});
+    await p.waitFor(`${PIDS}.length === 2`);
+    assert.deepEqual(await p.eval(SELN), [true, 'nginx', 5, 5]);
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
+// Go to's Find a process, typed into Go to and run
+async function findProcess(p){
+  await press(p, 'k', {mod: true, code: 'KeyK'});
+  await p.waitFor(`document.activeElement && document.activeElement.id === 'gotoq'`);
+  await p.eval(`(() => { const i = document.getElementById('gotoq'); i.value = 'find a process'; i.dispatchEvent(new Event('input', {bubbles: true})); return true; })()`);
+  await press(p, 'Enter');
+}
+const WHERE = `(() => { const f = document.activeElement; return {tree: S.tree, view: S.view, docked: !!S.detailsDocked,
+  pressed: [...document.querySelectorAll('[data-tree]')].filter(b => b.getAttribute('aria-pressed') === 'true').map(b => b.dataset.tree),
+  netRows: document.querySelectorAll('#tree .row[data-netsel]').length, machineRows: document.querySelectorAll('#tree .row[data-select]').length > 0,
+  focus: f && f.id === 'pfilter' ? (f.closest('.dpanel') ? 'docked filter' : 'Details filter') : (f && (f.id || f.tagName))}; })()`;
+
+test('Find a process with Details docked and the network tree showing: the machine tree, the docked panel\'s filter (regression)', async () => {
+  const p = await open({tree: 'network', detailsDocked: true, sel: 'lx'});
+  try {
+    await p.waitFor(`document.querySelectorAll('#tree .row[data-netsel]').length > 0`);
+    await findProcess(p);
+    await p.waitFor(`document.activeElement && document.activeElement.id === 'pfilter'`, 1500).catch(() => {});
+    const w = await p.eval(WHERE);
+    assert.deepEqual(w, {tree: 'machines', view: 'overview', docked: true, pressed: ['machines'], netRows: 0, machineRows: true, focus: 'docked filter'});
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
+test('Find a process with Details docked and nothing selected: the full Details view\'s filter (regression)', async () => {
+  const p = await open({detailsDocked: true, sel: 'fleet'});
+  try {
+    await p.waitFor(`document.querySelector('.dpanel .dhead')`);
+    await findProcess(p);
+    await p.waitFor(`document.activeElement && document.activeElement.id === 'pfilter'`, 1500).catch(() => {});
+    const w = await p.eval(WHERE);
+    assert.deepEqual(w, {tree: 'machines', view: 'details', docked: false, pressed: ['machines'], netRows: 0, machineRows: true, focus: 'Details filter'});
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
+test('Go to\'s Import a theme while Settings is open keeps the unsaved Settings and opens the file chooser (regression)', async () => {
+  const p = await open();
+  const choosers = [];
+  try {
+    await p.send('Page.setInterceptFileChooserDialog', {enabled: true});
+    p.on('Page.fileChooserOpened', e => choosers.push(e.mode));
+    await press(p, ',', {mod: true, code: 'Comma'});
+    await p.waitFor(`document.querySelector('#sheet [data-addmachine]')`);
+    await p.click('#sheet [data-addmachine]');
+    await p.waitFor(`document.activeElement && document.activeElement.dataset.field === '0:name'`);
+    await p.send('Input.insertText', {text: 'my new box'});
+    await press(p, 'k', {mod: true, code: 'KeyK'});
+    await p.waitFor(`document.activeElement && document.activeElement.id === 'gotoq'`);
+    await p.eval(`(() => { const i = document.getElementById('gotoq'); i.value = 'import'; i.dispatchEvent(new Event('input', {bubbles: true})); return true; })()`);
+    await p.key('Enter');
+    await p.waitFor(`!document.getElementById('goto')`);
+    const t0 = Date.now(); while (!choosers.length && Date.now() - t0 < 3000) await new Promise(r => setTimeout(r, 40));
+    await new Promise(r => setTimeout(r, 300));   // a refetch of the settings would land by now
+    assert.deepEqual(await p.eval(`({open: SET.open, machines: SET.draft.machines, shown: [...document.querySelectorAll('#sheet [data-field$=":name"]')].map(i => i.value)})`),
+      {open: true, machines: [{id: '', name: 'my new box', ssh: '', os: 'linux', tile: 'terminal'}], shown: ['my new box']});
+    assert.deepEqual(choosers, ['selectSingle']);
+    // with Settings closed it opens Settings first, as before
+    await p.eval(`(closeSettings(), true)`);
+    await press(p, 'k', {mod: true, code: 'KeyK'});
+    await p.waitFor(`document.activeElement && document.activeElement.id === 'gotoq'`);
+    await p.eval(`(() => { const i = document.getElementById('gotoq'); i.value = 'import'; i.dispatchEvent(new Event('input', {bubbles: true})); return true; })()`);
+    await p.key('Enter');
+    const t1 = Date.now(); while (choosers.length < 2 && Date.now() - t1 < 3000) await new Promise(r => setTimeout(r, 40));
+    assert.deepEqual(await p.eval(`({open: SET.open, machines: SET.draft.machines})`), {open: true, machines: []});
+    assert.deepEqual(choosers, ['selectSingle', 'selectSingle']);
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
+test('after a click in the page or Details, the arrows scroll it and leave the tree alone; after a click in the tree they move through it (regression)', async () => {
+  const p = await open({view: 'details', sel: 'lx'});
+  // a synthetic arrow on whatever has focus: did the page take it?
+  const arrow = key => p.eval(`(() => { const t = document.activeElement || document.body; const e = new KeyboardEvent('keydown', {key: ${JSON.stringify(key)}, bubbles: true, cancelable: true}); t.dispatchEvent(e); return {sel: S.sel, taken: e.defaultPrevented}; })()`);
+  try {
+    await p.waitFor(`${PIDS}.length === 12`);
+    await p.click('.ptbl tbody tr[data-pid="103"] td:last-child');   // a cell in Details for lab-linux
+    await p.waitFor(`!document.activeElement || document.activeElement === document.body || !document.activeElement.closest('#tree')`);
+    assert.deepEqual(await arrow('ArrowDown'), {sel: 'lx', taken: false});
+    assert.deepEqual(await arrow('ArrowUp'), {sel: 'lx', taken: false});
+    // a click on the page's own heading, focus on the body: still the page's
+    await p.click('#main .wrap h1, #main .wrap .dtitle b');
+    assert.equal(await p.eval(`document.activeElement === document.body`), true);
+    assert.deepEqual(await arrow('ArrowDown'), {sel: 'lx', taken: false});
+    // in the tree, the arrows are the tree's
+    const next = await p.eval(`(() => { const rows = [...document.querySelectorAll('#tree .row')], i = rows.findIndex(r => r.dataset.select === 'lx'); return rows[i + 1].dataset.select; })()`);
+    await p.click('#tree .row[data-select="lx"] .nm');
+    await p.eval(`(document.activeElement && document.activeElement.blur(), true)`);   // a redraw can leave the focus on the body
+    assert.deepEqual(await arrow('ArrowDown'), {sel: next, taken: true});
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
 });

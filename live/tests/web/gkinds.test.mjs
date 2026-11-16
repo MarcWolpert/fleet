@@ -115,7 +115,7 @@ test('⌘K finds groups by name or kind and pins them from the results; ⌘F in 
   const [p] = await open();
   const press = (key, o = {}) => p.eval(`(() => { const t = document.activeElement || document.body; t.dispatchEvent(new KeyboardEvent('keydown', Object.assign({key: ${JSON.stringify(key)}, code: ${JSON.stringify(o.code || '')}, bubbles: true, cancelable: true}, ${JSON.stringify(o.mod ? {metaKey: true, ctrlKey: true} : {})}, {shiftKey: ${!!o.shift}}))); return true; })()`);
   const type = (id, v) => p.eval(`(() => { const i = document.getElementById(${JSON.stringify(id)}); i.value = ${JSON.stringify(v)}; i.dispatchEvent(new Event('input', {bubbles: true})); return true; })()`);
-  const RESULTS = `[...document.querySelectorAll('#gotolist .grow')].map(r => r.querySelector('.pn span').textContent + ' | ' + (r.querySelector('.pk') || {}).textContent)`;
+  const RESULTS = `[...document.querySelectorAll('#gotolist .gorow')].map(r => r.querySelector('.pn span').textContent + ' | ' + (r.querySelector('.pk') || {}).textContent)`;
   try {
     await press('k', {mod: true, code: 'KeyK'});
     await p.waitFor(`document.activeElement && document.activeElement.id === 'gotoq'`);
@@ -125,7 +125,7 @@ test('⌘K finds groups by name or kind and pins them from the results; ⌘F in 
     await type('gotoq', 'lab');
     await p.waitFor(`${RESULTS}.some(r => r.startsWith('Lab |'))`);
     // pin from the results: the button, then ⇧Enter on the highlighted one; the list stays open
-    await p.eval(`(() => { [...document.querySelectorAll('#gotolist .grow')].find(r => r.textContent.startsWith('Lab')).querySelector('[data-gopin]').click(); return true; })()`);
+    await p.eval(`(() => { [...document.querySelectorAll('#gotolist .gorow')].find(r => r.textContent.startsWith('Lab')).querySelector('[data-gopin]').click(); return true; })()`);
     await p.waitFor(`document.querySelector('#spaces [data-space="div:g1"]')`);
     assert.equal(await p.eval(`!!document.getElementById('goto')`), true);
     await type('gotoq', 'stuff');
