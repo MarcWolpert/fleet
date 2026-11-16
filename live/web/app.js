@@ -137,6 +137,7 @@ function build(d){
   roots.length = 0;
   d.machines.forEach(s => roots.push(machineFrom(s, false)));
   roots.forEach(compute);
+  buildDivisions();
 }
 
 const cur = (n, m) => n.series[m][H-1];
@@ -146,14 +147,17 @@ function hostOf(n){ let p = n.kind === 'machine' ? n.parent : n; while (p && p.k
 function machineOf(n){ let p = n; while (p && p.kind !== 'machine') p = p.parent; return p; }
 function rootOf(n){ while (n.parent) n = n.parent; return n; }
 function ownerOf(n){ return n.kind === 'cron' ? n.parent.parent : n.kind === 'cronfolder' ? n.parent : null; }
-function within(n, id){ for (let p = n; p; p = p.parent) if (p.id === id) return true; return false; }
+function within(n, id){ for (let p = n; p; p = p.parent) if (p.id === id) return true; const d = nodes[id]; return !!(d && d.kind === 'division' && d.children.some(m => within(n, m.id))); }   // a division holds its members
 function byType(m, metric, i){ const o = {base:0, compose:0, container:0, vm:0}; m.children.forEach(c => { o[c.type] += i == null ? cur(c, metric) : c.series[metric][i]; }); return o; }
 function ctxOf(key){
   if (key === 'fleet') return {name:'All machines',
     bt:(metric, i) => { const o = {base:0, compose:0, container:0, vm:0}; roots.forEach(r => { const b = byType(r, metric, i); for (const k in o) o[k] += b[k]; }); return o; },
     cap:metric => roots.filter(r => hasData(r)).reduce((s, r) => s + capOf(r, metric), 0)};
   const m = nodes[key];
-  return {name:m.name, bt:(metric, i) => byType(m, metric, i), cap:metric => capOf(m, metric)};
+  if (m && m.kind === 'division' && !m.parent) return {name:m.name,
+    bt:(metric, i) => { const o = {base:0, compose:0, container:0, vm:0}; m.children.forEach(r => { const b = byType(r, metric, i); for (const k in o) o[k] += b[k]; }); return o; },
+    cap:metric => m.children.filter(r => hasData(r)).reduce((s, r) => s + capOf(r, metric), 0)};
+  return {name:m.name, bt:(metric, i) => byType(m, metric, i), cap:metric => capOf(m.kind === 'machine' ? m : hostOf(m), metric)};
 }
 function cronCount(n){ let c = 0; (function v(x){ if (x.kind === 'cron') c++; x.children.forEach(v); })(n); return c; }
 function shareOfHost(n, metric){ return cur(n, metric) / capOf(hostOf(n), metric) * 100; }
@@ -183,8 +187,9 @@ function gpuCell(n){ const w = whichGpu(n); return fmt(cur(n, 'gpu'), 'gpu') + (
 
 /* ---------- small renderers ---------- */
 const $ = id => document.getElementById(id);
-function colOf(n){ return TCOL[n.type] || 'var(--ink-2)'; }
+function colOf(n){ return n.kind === 'division' ? n.color : TCOL[n.type] || 'var(--ink-2)'; }
 function iconOf(n){
+  if (n.kind === 'division') return 'layers';
   if (n.kind === 'machine') return n.tile || 'vm';
   if (n.kind === 'cronfolder' || n.kind === 'cron') return 'clock';
   if (n.kind === 'base') return 'chip';
@@ -213,12 +218,13 @@ function pinBtn(id){ const on = PINS.includes(id); return `<button type="button"
 function pillPct(key){
   if (key === 'fleet'){ const c = ctxOf('fleet'); return pct(sumv(c.bt(S.metric)) / c.cap(S.metric) * 100); }
   const n = nodes[key]; if (!n) return '';
+  if (n.kind === 'division' && !n.parent){ const c = ctxOf(key), cap = c.cap(S.metric); return cap ? pct(sumv(c.bt(S.metric)) / cap * 100) : '—'; }
   if (n.kind === 'machine' && !hasData(n)) return statusText(n);
   return pct(n.kind === 'machine' && !n.parent ? cur(n, S.metric) / capOf(n, S.metric) * 100 : shareOfHost(n, S.metric));
 }
 function miniBar(key){
   const n = key === 'fleet' ? null : nodes[key];
-  if (n && n.kind !== 'machine') return `<i style="width:${Math.min(100, shareOfHost(n, S.metric)).toFixed(1)}%;background:${colOf(n)}"></i>`;
+  if (n && n.kind !== 'machine' && !(n.kind === 'division' && !n.parent)) return `<i style="width:${Math.min(100, shareOfHost(n, S.metric)).toFixed(1)}%;background:${colOf(n)}"></i>`;
   const c = ctxOf(key), bt = c.bt(S.metric), cap = c.cap(S.metric);
   if (!cap) return '';
   return TYPES.map(t => `<i style="width:${(bt[t.id]/cap*100).toFixed(2)}%;background:${TCOL[t.id]}"></i>`).join('');
@@ -226,7 +232,7 @@ function miniBar(key){
 function renderSpaces(){
   const pills = [{key:'fleet', name:'All machines', tile:'fleet'}].concat(PINS.map(id => {
     const n = nodes[id];
-    return n ? {key:id, name:n.name, tile:n.kind === 'machine' ? n.tile : iconOf(n), tcol:n.kind === 'machine' ? '' : colOf(n), pinned:true, sub:n.kind === 'machine' ? '' : rootOf(n).name}
+    return n ? {key:id, name:n.name, tile:n.kind === 'machine' ? n.tile : iconOf(n), tcol:n.kind === 'machine' ? '' : colOf(n), pinned:true, sub:n.kind === 'machine' || (n.kind === 'division' && !n.parent) ? '' : rootOf(n).name}
              : {key:id, name:id.split('/').pop(), tile:'cube', pinned:true, gone:true};
   }));
   $('spaces').innerHTML = pills.map(p => `<div class="space${S.space===p.key?' active':''}${p.pinned?' pinned':''}${p.gone?' gone':''}" title="${esc(p.name)}${p.sub ? ' · on ' + esc(p.sub) : ''}${p.gone ? ' · not seen right now' : ''}">`
@@ -241,6 +247,7 @@ function renderSpaces(){
 /* ---------- + picker: pin any grouping ---------- */
 const PICK = {open:false, q:''};
 function kindLabel(n){
+  if (n.kind === 'division') return 'division';
   if (n.kind === 'machine') return n.parent ? 'VM' : 'machine';
   if (n.kind === 'group') return 'group';
   if (n.kind === 'project') return 'Compose project';
@@ -261,13 +268,15 @@ function renderPickerList(){
   const box = $('picklist'); if (!box) return;
   const a = document.activeElement, refocus = a && box.contains(a) && a.dataset ? a.dataset.pin : null;
   const q = PICK.q.trim().toLowerCase();
-  let list = pickCandidates();
+  const divs = Object.values(nodes).filter(n => n.kind === 'division').map(n => ({n, d:0, path:n.parent ? [hostOf(n).name] : [], div:true}));
+  let list = divs.concat(pickCandidates());
   if (q) list = list.filter(x => [x.n.name, kindLabel(x.n), x.n.os || '', (x.n.meta && x.n.meta.image) || '', x.path.join(' ')].join(' ').toLowerCase().includes(q));
   const shown = list.slice(0, 400);
-  box.innerHTML = shown.length ? shown.map(({n, d, path}) => {
+  box.innerHTML = shown.length ? shown.map(({n, d, path, div}, i) => {
+    const sec = divs.length && !q ? (i === 0 ? '<div class="pick-sec">Divisions</div>' : !div && shown[i - 1].div ? '<div class="pick-sec">Machines and what runs on them</div>' : '') : '';
     const on = PINS.includes(n.id);
     const where = q && path.length ? `<span class="pw">${esc(path.join(' › '))}</span>` : '';
-    return `<button type="button" class="prow${on ? ' on' : ''}" data-pin="${esc(n.id)}" aria-pressed="${on}" style="padding-left:${10 + (q ? 0 : d * 16)}px">`
+    return sec + `<button type="button" class="prow${on ? ' on' : ''}" data-pin="${esc(n.id)}" aria-pressed="${on}" style="padding-left:${10 + (q ? 0 : d * 16)}px">`
       + `<span class="ico" style="color:${n.kind === 'machine' ? 'var(--ink-2)' : colOf(n)}">${icon(iconOf(n))}</span>`
       + `<span class="pn"><span>${esc(n.name)}</span>${where}</span><span class="pk">${esc(kindLabel(n))}${n.children.length && n.kind !== 'base' ? ' · ' + n.children.length : ''}</span>`
       + `<span class="pp">${icon('pin')}${on ? 'Pinned' : 'Pin'}</span></button>`;
@@ -329,10 +338,12 @@ function renderToolbar(){
 /* ---------- machine tree ---------- */
 function isOpen(n){
   if (S.open[n.id] !== undefined) return S.open[n.id];
+  if (n.kind === 'division') return true;
   if (n.kind === 'machine') return S.space !== 'fleet' || !n.parent;
   return n.kind === 'group' && n.type === 'vm';
 }
 function rowVal(n){
+  if (n.kind === 'division' && !n.parent) return pillPct(n.id);
   if (n.kind === 'machine' && !hasData(n)) return statusText(n);
   return pct(n.kind === 'machine' && !n.parent ? cur(n, S.metric) / capOf(n, S.metric) * 100 : shareOfHost(n, S.metric));
 }
@@ -358,12 +369,12 @@ function renderTree(){
   $('tree').innerHTML = entries.map(e => e.open ? tgroupOpen(e) : e.close ? '</div>' : treeRow(e)).join('');
   function treeRow({n, d, pk}){
     const kids = n.children.length > 0, open = kids && opened(n);
-    const count = (n.kind === 'group' || n.kind === 'cronfolder' || n.kind === 'project') ? `<span class="count">${n.children.length}</span>` : '';
+    const count = (n.kind === 'group' || n.kind === 'cronfolder' || n.kind === 'project' || n.kind === 'division') ? `<span class="count">${n.children.length}</span>` : '';
     const dot = n.kind === 'cron' ? `<i class="dot${n.running?' on':''}" data-dot="${esc(n.id)}" title="running now"></i>` : n.kind === 'machine' ? `<i class="sdot ${statusClass(n)}" data-sdot="${esc(n.id)}" title="${statusText(n)}"></i>` : '';
     const gw = S.metric === 'gpu' && n.parent && hostOf(n).gpus.length > 1 ? whichGpu(n) : '';
     const gtag = gw ? `<span class="gtag" title="${esc(whichGpuLong(n))}">${gw}</span>` : '';
     const st = n.kind === 'machine' ? ' ' + statusClass(n) : '';
-    const pin = (n.kind === 'machine' || n.kind === 'project' || n.kind === 'service' || n.kind === 'container' || n.kind === 'group') ? pinBtn(n.id) : '<span style="width:22px;flex:none"></span>';
+    const pin = (n.kind === 'machine' || n.kind === 'project' || n.kind === 'service' || n.kind === 'container' || n.kind === 'group' || n.kind === 'division') ? pinBtn(n.id) : '<span style="width:22px;flex:none"></span>';
     return `<div class="row ${n.kind}${st}${S.sel===n.id?' sel':''}" style="--d:${d}" role="treeitem" aria-level="${d+1}" ${kids?`aria-expanded="${open}"`:''} aria-selected="${S.sel===n.id}" data-select="${esc(n.id)}" data-pk="${esc(pk)}">`
       + `<span class="tdrag" draggable="true" title="Drag into a division" aria-hidden="true">${icon('grip')}</span>`
       + `<button type="button" class="chev${open?' open':''}${kids?'':' leaf'}" ${kids?`data-toggle="${esc(n.id)}" aria-label="${open?'Collapse':'Expand'} ${esc(n.name)}"`:'tabindex="-1" aria-hidden="true"'}>${icon('chev', 2.4)}</button>`
@@ -448,7 +459,7 @@ function renderNetTree(){
 function whereRows(key){
   const c = ctxOf(key), rows = [];
   METRICS.forEach(m => {
-    if (m.id === 'gpu' && key !== 'fleet'){
+    if (m.id === 'gpu' && key !== 'fleet' && !(nodes[key] && nodes[key].kind === 'division')){   // a division adds up its members' GPUs, like the fleet
       const mm = nodes[key];
       if (!mm.gpus.length){ rows.push({label:'GPU', empty:true}); return; }
       mm.gpus.forEach((g, gi) => rows.push({label:'GPU ' + gi, sub:g.name, metric:'gpu', bt:gpuBt(mm, g.key), cap:100, tip:`gseg|${key}|${g.key}`}));
@@ -755,21 +766,23 @@ function logicalCard(m){
 function typeSeries(getBt){ return TYPES.map(t => ({label:t.label, color:TCOL[t.id], data:Array.from({length:H}, (_, i) => getBt(i)[t.id])})).filter(s => s.data.some(v => v > 0)); }
 function heroMachineTile(m){ return `<span class="tile ${m.tile}">${icon(m.tile)}</span>`; }
 
-function fleetView(){
-  const c = ctxOf('fleet'), nVm = Object.values(nodes).filter(n => n.kind === 'machine' && n.parent).length;
-  const live = roots.filter(r => isLive(r)).length;
+function fleetView(dv){
+  const list = dv ? dv.children : roots, key = dv ? dv.id : 'fleet';
+  const c = ctxOf(key), nVm = Object.values(nodes).filter(n => n.kind === 'machine' && n.parent && list.some(r => within(n, r.id))).length;
+  const live = list.filter(r => isLive(r)).length;
   const stat = m => ({k:mlabel(m), v:pct(sumv(c.bt(m)) / c.cap(m) * 100), s:`${fmt(sumv(c.bt(m)), m)} of ${capText(c.cap(m), m)}`});
   const series = typeSeries(i => c.bt(S.metric, i));
   const fleetUsed = sumv(c.bt(S.metric));
-  const mrows = sortedRoots().map(r => {
+  const mrows = (dv ? list.slice().sort(cmpNodes) : sortedRoots()).map(r => {
     const bt = byType(r, S.metric), used = sumv(bt), cap = capOf(r, S.metric);
     const den = S.mode === 'cap' ? cap : (used || 1);
     const off = !hasData(r);
     const bar = off ? `<div class="sbar empty">${esc(diagnose(r).title)}</div>` : cap ? `<div class="sbar">${TYPES.filter(t => bt[t.id] > 0).map(t => `<span class="s" style="width:${Math.min(100, bt[t.id]/den*100).toFixed(3)}%;background:${TCOL[t.id]}" data-tip="seg|${esc(r.id)}|${S.metric}|${t.id}"></span>`).join('')}</div>` : `<div class="sbar empty">no ${mlabel(S.metric)}</div>`;
     return `<div class="mrow"><button type="button" class="mbtn" data-select="${esc(r.id)}"><span class="tile ${r.tile}">${icon(r.tile)}</span><span>${esc(r.name)}</span><i class="sdot ${statusClass(r)}" title="${statusText(r)}"></i></button>${bar}<div class="tot">${!off && cap ? pct(used/cap*100) + ' used' : '—'}<small>${off ? '' : pct(used/(fleetUsed||1)*100) + ' of fleet ' + mlabel(S.metric)}</small></div></div>`;
   }).join('');
-  return `<div class="hero"><span class="tile fleet">${icon('fleet')}</span><div><h1>All machines</h1><div class="facts"><span>${live} of ${roots.length} machines live</span><span>${nVm} VMs</span><span>${cronCount({children:roots})} scheduled jobs</span><span>${c.cap('cpu')} cores</span><span>${Math.round(c.cap('mem'))} GB RAM</span></div></div>${heroStats([stat('cpu'), stat('mem'), stat('gpu')])}</div>`
-    + `<div class="grid2">${whereCard('fleet', 'Where your fleet’s usage goes')}${graphCard(`Fleet ${mlabel(S.metric)}`, 'live machines, by type', series, graphMax(c.cap(S.metric), series, S.metric), S.metric)}</div>`
+  const tile = dv ? `<span class="tile" style="background:color-mix(in srgb, ${dv.color} 22%, transparent);color:${dv.color}">${icon('layers')}</span>` : `<span class="tile fleet">${icon('fleet')}</span>`;
+  return `<div class="hero">${tile}<div><h1>${dv ? esc(dv.name) : 'All machines'}</h1><div class="facts">${dv ? '<span>division</span>' : ''}<span>${live} of ${list.length} machines live</span><span>${nVm} VMs</span><span>${cronCount({children:list})} scheduled jobs</span><span>${c.cap('cpu')} cores</span><span>${Math.round(c.cap('mem'))} GB RAM</span></div></div>${heroStats([stat('cpu'), stat('mem'), stat('gpu')])}</div>`
+    + `<div class="grid2">${whereCard(key, dv ? `Where ${esc(dv.name)}’s usage goes` : 'Where your fleet’s usage goes')}${graphCard(`${dv ? esc(dv.name) : 'Fleet'} ${mlabel(S.metric)}`, 'live machines, by type', series, graphMax(c.cap(S.metric), series, S.metric), S.metric)}</div>`
     + `<section class="card"><div class="card-h"><h2>By machine · ${mlabel(S.metric)}</h2><span class="sub">each bar is that machine’s own ${S.mode === 'cap' ? 'capacity' : 'usage'}</span><span class="grow"></span>${modeSeg()}</div>${legendHTML(S.mode === 'cap')}${mrows}</section>`;
 }
 
@@ -1103,7 +1116,7 @@ function renderMain(){
   else {
     const n = S.sel === 'fleet' ? null : nodes[S.sel];
     if (S.view === 'details') html = detailsView(n || (roots[0] || {id:'', name:'—'}));
-    else html = !n ? fleetView() : n.kind === 'machine' ? machineView(n) : n.kind === 'cronfolder' ? cronFolderView(n) : n.kind === 'cron' ? cronView(n) : n.hist ? leafView(n) : groupView(n);
+    else html = !n ? fleetView() : n.kind === 'division' && !n.parent ? fleetView(n) : n.kind === 'machine' ? machineView(n) : n.kind === 'cronfolder' ? cronFolderView(n) : n.kind === 'cron' ? cronView(n) : n.hist ? leafView(n) : groupView(n);
     if (S.detailsDocked && S.view !== 'details')
       panel = n ? detailsView(n, true) : `<div class="dhead"><div class="dtitle"><b>Details</b><span>Select a machine or anything in it to see its processes.</span></div><button type="button" class="iconbtn" data-closedock="1" aria-label="Close the Details panel">${icon('x', 2.2)}</button></div>`;
   }
@@ -2241,7 +2254,7 @@ function tgroupOpen({open:g, key, d}){
 function updGroup(key, id, f){
   const all = Object.assign({}, PREFS.tgroups || {});
   all[key] = (all[key] || []).map(g => g.id === id ? (f ? f(g) : null) : g).filter(Boolean);
-  PREFS = Object.assign({}, PREFS, {tgroups:all}); renderTree(); savePrefs('the divisions');
+  PREFS = Object.assign({}, PREFS, {tgroups:all}); divisionsChanged(); savePrefs('the divisions');
 }
 function renameGroup(key, id){
   const n = document.querySelector(`#tree .tgroup[data-tgroup="${CSS.escape(id)}"] .tg-n`); if (!n) return;
@@ -2287,7 +2300,7 @@ function finishMarquee(hits){
   let c = 0; while (cs.has(c) && c < TG_COLORS.length - 1) c++;
   list.push({id:'g' + Date.now().toString(36), name:'Division ' + k, c, ids});
   all[key] = list;
-  PREFS = Object.assign({}, PREFS, {tgroups:all}); renderTree(); savePrefs('the divisions');
+  PREFS = Object.assign({}, PREFS, {tgroups:all}); divisionsChanged(); savePrefs('the divisions');
 }
 
 // Moving items between groups: by the drag handle on every row, or from the row's menu (issue #22).
@@ -2306,7 +2319,7 @@ function moveToGroup(key, id, gid, withId){
     list.push({id:'g' + Date.now().toString(36), name:'Division ' + k, c, ids:[withId, id]});
   }
   all[key] = list;
-  PREFS = Object.assign({}, PREFS, {tgroups:all}); renderTree(); savePrefs('the divisions');
+  PREFS = Object.assign({}, PREFS, {tgroups:all}); divisionsChanged(); savePrefs('the divisions');
 }
 function groupMoveItems(id, pk){
   const key = treeScope() + '|' + pk, gs = (PREFS.tgroups || {})[key] || [], mine = gs.find(g => g.ids.includes(id));
@@ -2343,3 +2356,23 @@ $('tree').addEventListener('drop', e => {
   if (!row && groupOf(key, id)) moveToGroup(key, id, null);   // empty space: out of its group
 });
 $('tree').addEventListener('dragend', () => { TDRAG.id = null; document.querySelectorAll('#tree .dragging, #tree .droptarget').forEach(x => x.classList.remove('dragging', 'droptarget')); });
+
+// A division is a node too (div:<id>), rebuilt with the model: its members are its children (their own parents
+// don't change). A division of machines stands alone, like All machines; a deeper one hangs off its members'
+// parent, so its share of their host works as for any group. (Network divisions stay in the network tree.)
+function buildDivisions(){
+  for (const k of Object.keys(nodes)) if (k.startsWith('div:')) delete nodes[k];
+  for (const [key, list] of Object.entries(PREFS.tgroups || {})){
+    const at = key.indexOf('|'), scope = key.slice(0, at), pk = key.slice(at + 1);
+    if (scope === 'network') continue;
+    list.forEach(g => {
+      const members = g.ids.map(id => nodes[id]).filter(Boolean); if (!members.length) return;
+      const types = new Set(members.map(m => m.type));
+      const d = {id:'div:' + g.id, name:g.name, kind:'division', type:types.size === 1 ? [...types][0] : 'base', children:members,
+        parent:pk === 'root' ? null : (nodes[pk] || null), color:TG_COLORS[(g.c || 0) % TG_COLORS.length]};
+      d.series = sumSeries(members); d.gseries = members.reduce((t, c) => addG(t, c.gseries), {});
+      nodes[d.id] = d;
+    });
+  }
+}
+function divisionsChanged(){ buildDivisions(); renderSpaces(); renderTree(); if (PICK.open) renderPickerList(); }
