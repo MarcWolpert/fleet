@@ -1080,6 +1080,30 @@ def group_lcpus_windows(lcpus):
 class MacCollector:
     """This Mac, read directly: ps, host_processor_info, vm_stat, netstat, ioreg, docker, crontab, launchd."""
 
+    @staticmethod
+    def responsible_pid(pid):
+        """The process macOS holds responsible for pid: for an XPC service (a VM run by Apple's Virtualization
+        framework, under launchd), the app that asked for it. 0 if there is none or it can't tell."""
+        try:
+            f = ctypes.CDLL(None).responsibility_get_pid_responsible_for_pid
+            f.restype, f.argtypes = ctypes.c_int, [ctypes.c_int]
+            return max(0, int(f(int(pid)))) if pid > 0 else 0
+        except Exception:
+            return 0
+
+    @staticmethod
+    def is_docker_vm(p, by_pid, responsible=0):
+        """Docker Desktop's Linux VM: a VM process Docker started as its own child (older versions), or one
+        macOS holds Docker responsible for (Apple's Virtualization framework runs it as an XPC service)."""
+        def chain(q):
+            out, seen = [], 0
+            while q and seen < 20:
+                out.append(q[10])
+                q = by_pid.get(q[1])
+                seen += 1
+            return " ".join(out).lower()
+        return "docker" in chain(p) or bool(responsible and responsible != p[0] and "docker" in chain(by_pid.get(responsible)))
+
     def __init__(self):
         self.prev = {}
         self.ncpu = int(run(["sysctl", "-n", "hw.logicalcpu"]).strip() or os.cpu_count())
@@ -1359,8 +1383,10 @@ class MacCollector:
                 # Apple's Virtualization VMs run in an XPC service launchd starts (parent pid 1, arguments only
                 # the service's path), so neither says whose VM it is; its open files do.
                 vz = "com.apple.Virtualization.VirtualMachine" in a and not m and "docker" not in anc
-                own = self.vz_owner(p[0]) if vz else ""
-                if "docker" in anc or own == "docker":
+                # macOS may say Docker is responsible for it (#210); if not, its open files may (#103)
+                docker = self.is_docker_vm(p, by_pid, self.responsible_pid(p[0]))
+                own = self.vz_owner(p[0]) if vz and not docker else ""
+                if docker or own == "docker":
                     docker_vm = p
                     p[11] = "dockervm"
                     continue
