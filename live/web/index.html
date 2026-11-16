@@ -708,6 +708,15 @@ button.sdot:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
 .autoc-name{background:var(--side);border:1px solid var(--line-2);border-radius:8px;padding:6px 9px;color:var(--ink);font:13px var(--sans);width:170px}
 .addm-btn svg{width:14px;height:14px}
 .sheet.addm{width:min(640px,100%)}
+.sheet.choosem{width:min(520px,100%)}
+.chm-list{display:flex;flex-direction:column;gap:2px;max-height:min(52vh,460px);overflow:auto;margin:6px 0 12px;padding:2px}
+.chm{display:flex;align-items:center;gap:10px;padding:6px 8px 6px calc(8px + var(--d, 0) * 24px);border-radius:8px;cursor:pointer}
+.chm:hover{background:var(--track)}
+.chm .tile{width:24px;height:24px;border-radius:7px}
+.chm-n{font-weight:500}.chm-s{margin-left:auto;font:12px var(--mono);color:var(--ink-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.chm-tools{display:flex;gap:14px}
+.chm-name{display:flex;flex-direction:column;gap:5px;font-size:11.5px;color:var(--ink-3)}
+.chm-name input{background:var(--side);border:1px solid var(--line-2);border-radius:8px;padding:7px 9px;color:var(--ink);font:13px var(--sans)}
 .addm ol{margin:0 0 4px;padding-left:20px;display:flex;flex-direction:column;gap:9px;font-size:13px;color:var(--ink-2);line-height:1.5}
 .addm ol code,.addm p code{font:500 12px/1.4 var(--mono);background:color-mix(in srgb, var(--ink) 7%, transparent);border-radius:5px;padding:1px 6px;color:var(--ink)}
 .addm .mgrid{margin-top:4px}

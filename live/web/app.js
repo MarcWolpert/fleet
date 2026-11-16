@@ -2778,6 +2778,7 @@ function openAutoConn(btn){
   const r = btn.getBoundingClientRect();
   openCtx({title:'Connect when Fleet starts', items:[
     opt('all', 'All machines'), ...names.map(k => opt(k, k)), opt('none', 'None'), '—',
+    {label:'Choose machines…', run:openChooseMachines},
     {label:'Save what’s connected now as a set…', run:startNaming},
     ...names.map(k => ({label:`Delete “${k}”`, run:() => connApi({delete:k})}))]}, r.left, r.top - 8, btn);
 }
@@ -2831,3 +2832,40 @@ function tileHTML(kind, os, big){
 // a Settings card's machine: its chosen OS, or this computer's own
 function cardOS(m){ return m.kind === 'local' ? machineOS(nodes[m.id] || Object.values(nodes).find(n => n.kind === 'machine' && n.agent === 'local')) : osKey(m.os || 'linux'); }
 function machineOS(n){ return n && n.kind === 'machine' ? osKey(n.os) : ''; }
+
+// Choose machines…: tick which machines Fleet connects to when it starts, VMs indented under their hosts (#216)
+function openChooseMachines(){
+  if ($('choosem')) return;
+  const c = (DATA && DATA.connect) || {auto:'all', presets:{}}, inSet = c.presets && c.presets[c.auto];
+  const ticked = id => c.auto === 'all' ? true : c.auto === 'none' ? false : !!(inSet && inSet.includes(id));
+  const rows = [];
+  (function walk(list, d){ list.forEach(n => {
+    if (n.kind !== 'machine') return;
+    if (switchable(n)) rows.push({n, d});
+    const vg = n.children.find(x => x.kind === 'group' && x.type === 'vm');
+    if (vg) walk(vg.children, switchable(n) ? d + 1 : d);
+  }); })(roots, 0);
+  const name = c.auto !== 'all' && c.auto !== 'none' ? c.auto : 'My machines';
+  const el = document.createElement('div'); el.id = 'choosem-bg'; el.className = 'sheet-bg';
+  el.innerHTML = `<div class="sheet choosem" id="choosem" role="dialog" aria-modal="true" aria-labelledby="choosem-t">
+    <div class="sheet-h"><h2 id="choosem-t">Connect when Fleet starts</h2><button type="button" class="iconbtn" data-chmclose="1" aria-label="Close">${icon('x', 2.2)}</button></div>
+    <div class="sheet-b"><p class="sub">Tick the machines Fleet connects to when it starts. VMs are listed under the machine they run on. This computer is always read: it needs no SSH.</p>
+      <div class="chm-tools"><button type="button" class="linkbtn" data-chmall="1">Tick all</button><button type="button" class="linkbtn" data-chmall="0">Untick all</button></div>
+      <div class="chm-list">${rows.map(({n, d}) => `<label class="chm" data-depth="${d}" style="--d:${d}"><input type="checkbox" data-chm="${esc(n.id)}"${ticked(n.id) ? ' checked' : ''}>${tileHTML(n.tile, machineOS(n), false)}<span class="chm-n">${esc(n.name)}</span><span class="chm-s">${esc(n.ssh || '')}</span></label>`).join('') || '<p class="sub">No machines over SSH yet.</p>'}</div>
+      <label class="chm-name">Save as<input name="setname" maxlength="60" value="${esc(name)}" autocomplete="off"></label></div>
+    <div class="sheet-f"><button type="button" class="btn" data-chmclose="1">Cancel</button><button type="button" class="btn primary" data-chmsave="1">Save and use at start</button></div></div>`;
+  document.body.appendChild(el);
+  const close = () => { el.remove(); const b = document.querySelector('[data-autoconn]'); if (b) b.focus(); };
+  el.addEventListener('keydown', e => { if (e.key === 'Escape'){ e.preventDefault(); e.stopPropagation(); close(); } });
+  el.addEventListener('click', async e => {
+    if (e.target === el || e.target.closest('[data-chmclose]')){ close(); return; }
+    const all = e.target.closest('[data-chmall]'); if (all){ el.querySelectorAll('[data-chm]').forEach(i => { i.checked = all.dataset.chmall === '1'; }); return; }
+    if (e.target.closest('[data-chmsave]')){
+      const v = el.querySelector('[name=setname]').value.trim();
+      if (!v || /^(all|none)$/i.test(v)){ toast('Give the set a name other than All or None'); el.querySelector('[name=setname]').focus(); return; }
+      await connApi({save:v, machines:[...el.querySelectorAll('[data-chm]')].filter(i => i.checked).map(i => i.dataset.chm)});
+      close();
+    }
+  });
+  const first = el.querySelector('[data-chm]'); if (first) first.focus();
+}

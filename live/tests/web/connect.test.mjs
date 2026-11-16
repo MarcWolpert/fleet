@@ -19,7 +19,7 @@ function fx1(){
     if (path !== '/api/connect') return null;
     const d = JSON.parse(body || '{}'), c = fx.fleet.connect;
     if ('machine' in d){ const m = fx.fleet.machines.find(x => x.id === d.machine); m.on = d.on; m.status = d.on ? 'connecting' : 'disabled'; m.has_data = !!d.on; }
-    else if ('save' in d){ c.presets[d.save] = fx.fleet.machines.filter(m => m.on).map(m => m.id); c.auto = d.save; }
+    else if ('save' in d){ c.presets[d.save] = d.machines || fx.fleet.machines.filter(m => m.on).map(m => m.id); c.auto = d.save; }
     else if ('delete' in d){ delete c.presets[d.delete]; if (c.auto === d.delete) c.auto = 'all'; }
     else if ('auto' in d) c.auto = d.auto;
     return {ok: true, connect: c};
@@ -58,7 +58,7 @@ test('Connect automatically: All, a saved set or None; save what is connected no
     assert.match(await p.eval(`document.querySelector('[data-autoconn]').textContent`), /Auto: All/);
     await p.eval(`(document.querySelector('[data-autoconn]').click(), true)`);
     await p.waitFor(`document.querySelector('#ctxmenu [role=menuitem]')`);
-    assert.deepEqual(await p.eval(MENU), ['✓ All machines', 'Lab boxes', 'None', '—', 'Save what’s connected now as a set…', 'Delete “Lab boxes”']);
+    assert.deepEqual(await p.eval(MENU), ['✓ All machines', 'Lab boxes', 'None', '—', 'Choose machines…', 'Save what’s connected now as a set…', 'Delete “Lab boxes”']);
     await pick(p, 'Lab boxes');
     await p.waitFor(`/Auto: Lab boxes/.test(document.querySelector('[data-autoconn]').textContent)`);
     assert.deepEqual(posts(fx), [{auto: 'Lab boxes'}]);
@@ -102,6 +102,34 @@ test('a VM stopped on its host reads stopped, not off; off means only that its c
     assert.equal(await p.eval(TITLE), 'stopped on its host · click to disconnect');
     await p.eval(`(document.querySelector('#tree [data-conn="lx2"]').click(), true)`);
     await p.waitFor(`${TITLE} === 'off · click to connect'`);
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
+test('Choose machines…: tick which machines connect at start, VMs under their hosts, and save it as a set (#216)', async () => {
+  const fx = fx1();
+  const lx = fx.fleet.machines.find(m => m.id === 'lx');
+  lx.vms = [{id: 'guest', name: 'lab-guest', tile: 'vm', status: 'ok', error: '', os: 'Linux · x86_64', agent: 'ssh guest', on: true, cronLabel: 'Cron jobs',
+    gpus: [], cap: [8, 60, 0, 500, 125], ncpu: 8, groups: [], has_data: true, last_ok: Date.now() / 1000, ssh: 'guest',
+    base: {id: 'guest/base', g: []}, baseCron: [], compose: [], containers: [], vms: []}];
+  fx.fleet.connect.auto = 'Lab boxes';   // Lab boxes = lx
+  const p = await browser.page(fx, {ui: ui({sel: 'fleet'})});
+  const ROWS = `[...document.querySelectorAll('#choosem [data-chm]')].map(i => [i.dataset.chm, +i.closest('.chm').dataset.depth, i.checked])`;
+  try {
+    await p.waitFor(`document.querySelector('[data-autoconn]')`);
+    await p.eval(`(document.querySelector('[data-autoconn]').click(), true)`);
+    await p.waitFor(`document.querySelector('#ctxmenu [role=menuitem]')`);
+    await pick(p, 'Choose machines…');
+    await p.waitFor(`document.querySelector('#choosem [data-chm]')`);
+    const rows = await p.eval(ROWS);
+    assert.deepEqual(rows.find(r => r[0] === 'guest'), ['guest', 1, false], 'the VM, under its host, not in the set');
+    assert.deepEqual(rows.find(r => r[0] === 'lx'), ['lx', 0, true]);
+    assert.deepEqual(rows.map(r => r[0]).sort(), ['guest', 'lx', 'lx2', 'mac', 'win']);
+    assert.equal(await p.eval(`document.querySelector('#choosem [name=setname]').value`), 'Lab boxes');
+    await p.eval(`(() => { document.querySelector('#choosem [data-chm="guest"]').click(); const n = document.querySelector('#choosem [name=setname]'); n.value = 'Lab and guest'; return true; })()`);
+    await p.eval(`(document.querySelector('#choosem [data-chmsave]').click(), true)`);
+    await p.waitFor(`!document.getElementById('choosem') && /Auto: Lab and guest/.test(document.querySelector('[data-autoconn]').textContent)`);
+    assert.deepEqual(posts(fx).pop(), {save: 'Lab and guest', machines: ['lx', 'guest']});
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
 });
