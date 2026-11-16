@@ -50,6 +50,9 @@ plus an app window.
 | ✅ | Open terminal: ssh to any machine, or a shell inside any container, in your preferred terminal |
 | ✅ | Pick processors, a CCD or a P/E-core group, or a GPU, and see just those, with what runs on them |
 | ✅ | Dock the Details process list beside the overview (drag the Details pill to the right) |
+| ✅ | Details columns: right-click a column header to hide, move or add columns, a layout per detail type |
+| ✅ | Themes: Fleet's own, Monokai Dimmed and 20 more built in (Dracula, Nord, Solarized, Gruvbox, Tokyo Night, Catppuccin, GitHub, …), or **Import theme** from any VS Code colour theme |
+| ✅ | Keyboard: ⌘K goes to any machine, container, job, command or theme; ⌘F finds a process; ⌘1–9 spaces, ⌥1–5 metrics, arrows in the tree, ⌘+/⌘− text size; `?` lists them all |
 | ✅ | macOS app and Linux package, with the Fleet icon |
 | ⬜ | Native app (the Mission Center fork) on macOS, Linux and Windows |
 | ⬜ | Actions (kill, stop, restart, run a job now), each confirmed and logged |
@@ -145,7 +148,39 @@ tile = "desktop"
 | `vm_on`, `domain` | this machine is a VM on another one; `domain` is its libvirt name when it differs |
 | `tile` | icon: `laptop`, `desktop`, `terminal`, `server`, `globe`, `vm` |
 
-Pinned spaces live in `~/.config/fleet/pins.json` and are managed from the app.
+Fleet keeps what you arrange in the app beside it, so it survives restarts:
+`pins.json` (pinned spaces), `tilepins.json` (pinned tiles and CPU groups) and
+`ui.json` (Details column layouts, the theme, imported themes).
+
+## Keyboard shortcuts
+
+⌘ on a Mac, Ctrl elsewhere. Press `?` in the app for the full list.
+
+| Keys | Does |
+|---|---|
+| ⌘K | Go to anything: machines, VMs, projects, containers, jobs, commands, themes |
+| ⌘F or `/` | Filter the process list |
+| ⌘D, ⌘⇧D | Details on and off; dock it beside the overview |
+| ⌥1 … ⌥5 | CPU, Memory, GPU, Disk I/O, Network |
+| ⌘1 … ⌘9, ⌘[ ⌘] | Go to a space; previous or next space |
+| ↑ ↓ ← → | Move through the tree; collapse, expand, go to the parent |
+| P | Pin or unpin the selection as a space |
+| ⌘T | Open a terminal on the selection |
+| ⌘+ ⌘− ⌘0 | Text bigger, smaller, actual size |
+| ⌘, | Settings |
+
+## Themes
+
+Settings → Appearance has Fleet's own theme (the default), Monokai Dimmed and
+20 more. Their chart colours were re-tuned where needed so the four kinds of
+workload stay distinct for colour-blind readers. **Import theme** reads a VS Code
+colour theme (`.json`, comments allowed) or a Fleet theme:
+
+```json
+{"name": "Paper", "type": "light", "colors": {"chrome": "#eeeeee", "ink": "#222222", "accent": "#0055cc"}}
+```
+
+Any token in `live/web/themes.js` (`THEME_KEYS`) can be set; the rest are derived.
 
 ## How it works
 
