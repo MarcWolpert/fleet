@@ -216,6 +216,7 @@ function hasData(n){ return n.kind !== 'machine' || n.hasData || n.status === 'o
 function isStale(n){ return n.kind === 'machine' && n.status !== 'ok' && n.status !== 'hostonly' && n.hasData; }
 function staleFor(n){ return n.lastOk ? Math.max(0, Date.now() / 1000 - n.lastOk) : 0; }
 function statusClass(n){ return isLive(n) ? 'ok' : n.status === 'hostonly' ? 'hostonly' : isStale(n) ? 'stale' : n.status === 'off' ? 'off' : n.status === 'connecting' ? 'connecting' : 'offline'; }
+const STATUSES = ['ok', 'hostonly', 'stale', 'off', 'connecting', 'offline'];   // every class statusClass gives
 function statusText(n){ return n.status === 'ok' ? 'live' : n.status === 'off' ? 'off' : n.status === 'hostonly' ? 'seen from host' : isStale(n) ? 'reconnecting' : n.status === 'connecting' ? 'connecting' : 'offline'; }
 function stalePill(n){ return isStale(n) ? `<span class="spill" title="Showing the last reading until ${esc(n.name)} answers again">reconnecting · ${ago(staleFor(n)).replace(' ago', '')}</span>` : ''; }
 function pinBtn(id){ const on = PINS.includes(id); return `<button type="button" class="pinbtn${on ? ' on' : ''}" data-pin="${esc(id)}" aria-pressed="${on}" aria-label="${on ? 'Unpin' : 'Pin'} ${esc(nodes[id] ? nodes[id].name : id)} as a space" title="${on ? 'Unpin from the space bar' : 'Pin to the space bar'}">${icon('pin')}</button>`; }
@@ -447,7 +448,8 @@ function updateTree(){
   document.querySelectorAll('[data-val]').forEach(e => { const n = nodes[e.dataset.val]; if (n) e.textContent = rowVal(n); });
   document.querySelectorAll('[data-spark]').forEach(e => { const n = nodes[e.dataset.spark]; if (n) e.firstElementChild.setAttribute('points', sparkPts(n.series[S.metric], 60, 16)); });
   document.querySelectorAll('[data-dot]').forEach(e => { const n = nodes[e.dataset.dot]; if (n) e.classList.toggle('on', !!n.running); });
-  document.querySelectorAll('[data-sdot]').forEach(e => { const n = nodes[e.dataset.sdot]; if (n){ e.className = 'sdot ' + statusClass(n); e.title = statusText(n); } });
+  // the row's status class greys its name or value (index.html): it changes with the dot (#129)
+  document.querySelectorAll('[data-sdot]').forEach(e => { const n = nodes[e.dataset.sdot]; if (n){ const c = statusClass(n), r = e.closest('.row.machine'); e.className = 'sdot ' + c; e.title = statusText(n); if (r) STATUSES.forEach(k => r.classList.toggle(k, k === c)); } });
   document.querySelectorAll('[data-val]').forEach(e => { const n = nodes[e.dataset.val]; if (n && n.kind === 'machine') e.classList.toggle('dim', !isLive(n)); });
 }
 
