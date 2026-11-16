@@ -115,16 +115,74 @@ test('while a process is open the rows hold their places; Resume live order sort
   } finally { await p.close(); }
 });
 
-test('Esc closes it; a process that exits or a machine that fails says so', async () => {
-  const fx = fixture(); let ans = look({pid: 103, gone: true});
-  fx.proc = () => ans;
+const settle = ms => new Promise(r => setTimeout(r, ms));
+async function polls(p, n = 3){ for (let i = 0; i < n; i++){ await p.eval(`(refreshNow(), true)`); await settle(150); } await settle(300); }
+
+test('a drop-down off screen asks nothing: another machine, another view; back on its machine it looks again (#288)', async () => {
+  const fx = fixture(); fx.proc = () => look();
+  const p = await open(fx);
+  try {
+    await click(p, 'tr[data-pid="103"] td:nth-child(4)');
+    await p.waitFor(`document.querySelector('tr.pinsp [data-wait]')`);
+    const n0 = fx.procCalls.length;
+    await click(p, '#tree .row[data-select="lx2"] .nm');                    // another machine in the tree
+    await p.waitFor(`document.querySelector('.ptbl').dataset.mid === 'lx2' && !${PANEL}`);
+    await polls(p);
+    assert.equal(fx.procCalls.length, n0, 'no look while Details shows lx2');
+    await click(p, '#tree .row[data-select="lx"] .nm');                     // back: the drop-down is still open, and looks again
+    await p.waitFor(`document.querySelector('.ptbl').dataset.mid === 'lx' && ${PANEL}`);
+    await p.eval(`(refreshNow(), true)`);
+    await p.waitFor(`document.querySelector('[data-watched]') && /\\b2 looks\\b/.test(document.querySelector('[data-watched]').textContent)`);
+    assert.deepEqual(fx.procCalls.slice(n0), ['lx:103']);
+    const n1 = fx.procCalls.length;
+    await click(p, '#metrics [data-metric="cpu"]');                          // the overview
+    await p.waitFor(`!document.querySelector('.ptbl')`);
+    await polls(p);
+    assert.equal(fx.procCalls.length, n1, 'no look from the overview');
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
+test('closing the docked Details panel stops the open drop-down\'s looks (#288)', async () => {
+  const fx = fixture(); fx.proc = () => look();
+  const p = await browser.page(fx, {ui: ui({sel: 'lx', detailsDocked: true}), width: 1400, height: 800});
+  try {
+    await p.waitFor(`document.querySelectorAll('.dpanel .ptbl tbody tr[data-pid]').length === 12`);
+    await click(p, '.dpanel tr[data-pid="103"] td:nth-child(4)');
+    await p.waitFor(`document.querySelector('.dpanel tr.pinsp [data-wait]')`);
+    const n0 = fx.procCalls.length;
+    await click(p, '.dpanel [data-closedock]');
+    await p.waitFor(`!document.querySelector('.dpanel')`);
+    await polls(p);
+    assert.equal(fx.procCalls.length, n0);
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
+test('a process that has exited is not asked about again; its drop-down still says so (#288)', async () => {
+  const fx = fixture(); fx.proc = () => look({pid: 103, gone: true});
   const p = await open(fx);
   try {
     await click(p, 'tr[data-pid="103"] td:nth-child(4)');
     await p.waitFor(`${PANEL} && ${PANEL}.textContent.includes('exited')`);
-    ans = {pid: 103, error: 'lab-linux took too long to answer'};
+    await polls(p);
+    assert.deepEqual(fx.procCalls, ['lx:103']);
+    assert.ok(await p.eval(`${PANEL}.textContent.includes('exited')`));
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
+test('Esc closes it; a process that exits or a machine that fails says so', async () => {
+  // the machine fails first: an exited process is not asked about again (#288), so its look comes last
+  const fx = fixture(); let ans = {pid: 103, error: 'lab-linux took too long to answer'};
+  fx.proc = () => ans;
+  const p = await open(fx);
+  try {
+    await click(p, 'tr[data-pid="103"] td:nth-child(4)');
+    await p.waitFor(`${PANEL} && ${PANEL}.textContent.includes('lab-linux took too long to answer')`);
+    ans = look({pid: 103, gone: true});
     await p.eval(`(refreshNow(), true)`);
-    await p.waitFor(`${PANEL}.textContent.includes('lab-linux took too long to answer')`);
+    await p.waitFor(`${PANEL}.textContent.includes('exited')`);
     await p.eval(`(() => { document.body.focus(); document.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape', bubbles: true})); return true; })()`);
     await p.waitFor(`!${PANEL}`);
     assert.deepEqual(p.errors, []);

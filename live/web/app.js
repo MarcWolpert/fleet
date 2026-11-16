@@ -2214,6 +2214,9 @@ function closeInspect(){ if (!INSP.pid) return; Object.assign(INSP, {via:null, m
 async function inspectTick(){
   // a process in Docker's VM is looked at only the way you picked (#218): a helper container, or its own container
   if (!INSP.pid || INSP.busy || (typeof INSP.pid === 'string' && !INSP.via)) return;
+  // only while its drop-down is on screen, and not once the process has exited: Details on another machine or
+  // closed, or another view, asks the machine nothing; back on its machine, the looks go on (#288)
+  if (!document.querySelector('tr.pinsp') || (INSP.data && INSP.data.gone)) return;
   const mid = INSP.mid, pid = INSP.pid;
   INSP.busy = true;
   let d;
