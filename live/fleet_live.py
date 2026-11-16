@@ -22,6 +22,8 @@ METRICS = ("cpu", "mem", "gpu", "disk", "net")
 CONFIG_PATH = os.path.expanduser("~/.config/fleet/machines.toml")
 LAST_CLIENT = [0.0]   # when a Fleet window last asked for data
 HIDDEN_POLL_S = 75.0  # longest gap between a hidden window's polls: Chrome's once-a-minute timers, plus slack
+REOPENED = [0.0]      # when reopen_if_unseen last opened the app window
+REOPEN_LOCK = threading.Lock()
 PINS_PATH = os.path.expanduser("~/.config/fleet/pins.json")
 TILEPINS_PATH = os.path.expanduser("~/.config/fleet/tilepins.json")  # pinned tiles and CPU groups, per machine
 PREFS_PATH = os.path.expanduser("~/.config/fleet/ui.json")  # UI layout (Details columns per detail type)
@@ -2715,8 +2717,12 @@ def reopen_if_unseen(url, since, wait=8.0):
     deadline = max(since + wait, LAST_CLIENT[0] + HIDDEN_POLL_S)
     while LAST_CLIENT[0] < since and time.time() < deadline:
         time.sleep(max(0.0, min(1.0, deadline - time.time())))
-    if LAST_CLIENT[0] < since:
-        open_app_window(url)
+    # Waiters started within a minute of a closed window's last poll share that deadline and wake together:
+    # a window opened since this one started loads the newest files and serves it too.
+    with REOPEN_LOCK:
+        if LAST_CLIENT[0] < since and REOPENED[0] < since:
+            REOPENED[0] = time.time()
+            open_app_window(url)
 
 
 def watch_own_files(url):
