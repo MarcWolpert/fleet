@@ -64,6 +64,11 @@ def jobs(m):
     return [(j["name"], j["running"], [round(x, 3) for x in j["u"]]) for j in m.view["jobs"]]
 
 
+def cron(m, i):
+    """The node of job i of the machine's job list: named by what the job is (#109), not by its place."""
+    return fleet_live.job_ids("m1", m.view["jobs"])[i]
+
+
 def container(cid, name):
     return {"id": cid, "name": name, "image": name + ":latest", "status": "Up 2 hours", "project": "", "service": "", "file": "",
             "networks": "", "rx": 0, "tx": 0}
@@ -124,7 +129,7 @@ class JobsByCommand(unittest.TestCase):
             proc(702, 701, "b.sh", "/bin/bash /usr/local/bin/b.sh", 1.0),
         ], cron=[A_SH, B_SH, HOURLY])
         self.assertEqual(jobs(m), [("a.sh", False, IDLE), ("b.sh", True, [1.04, 0.0, 0.0, 0.0, 0.0]), ("cron.hourly", False, IDLE)])
-        self.assertEqual(nodes(m), {1: "m1/base", 500: "m1/base", 600: "m1/base", 700: "m1/base", 701: "m1/base/cron/1", 702: "m1/base/cron/1"})
+        self.assertEqual(nodes(m), {1: "m1/base", 500: "m1/base", 600: "m1/base", 700: "m1/base", 701: cron(m, 1), 702: cron(m, 1)})
 
     def test_jobs_with_one_interpreter_stay_apart(self):
         m = derive(HOST + [
@@ -133,14 +138,14 @@ class JobsByCommand(unittest.TestCase):
             proc(712, 711, "python3", "python3 /opt/jobs/sync.py", 0.5),
         ], cron=[REPORT, SYNC])
         self.assertEqual(jobs(m), [("report.py", False, IDLE), ("sync.py", True, [0.5, 0.0, 0.0, 0.0, 0.0])])
-        self.assertEqual(nodes(m), {1: "m1/base", 500: "m1/base", 600: "m1/base", 710: "m1/base", 711: "m1/base/cron/1", 712: "m1/base/cron/1"})
+        self.assertEqual(nodes(m), {1: "m1/base", 500: "m1/base", 600: "m1/base", 710: "m1/base", 711: cron(m, 1), 712: cron(m, 1)})
 
     def test_a_shell_that_execs_the_lone_command(self):
         # dash and bash exec a lone command in place of themselves: cron's child is the script itself.
         m = derive(HOST + [proc(720, 500, "cron", "/usr/sbin/CRON -f"), proc(721, 720, "b.sh", "/bin/bash /usr/local/bin/b.sh", 0.75)],
                    cron=[A_SH, B_SH])
         self.assertEqual(jobs(m), [("a.sh", False, IDLE), ("b.sh", True, [0.75, 0.0, 0.0, 0.0, 0.0])])
-        self.assertEqual(nodes(m), {1: "m1/base", 500: "m1/base", 600: "m1/base", 720: "m1/base", 721: "m1/base/cron/1"})
+        self.assertEqual(nodes(m), {1: "m1/base", 500: "m1/base", 600: "m1/base", 720: "m1/base", 721: cron(m, 1)})
 
     def test_a_percent_sign_is_what_cron_hands_the_shell(self):
         # crontab(5): \% is a literal %; the shell gets the line with it unescaped.
@@ -150,7 +155,7 @@ class JobsByCommand(unittest.TestCase):
             proc(732, 731, "pg_dump", "pg_dump shop", 0.5),
         ], cron=[A_SH, DUMP])
         self.assertEqual(jobs(m), [("a.sh", False, IDLE), ("pg_dump", True, [0.5, 0.0, 0.0, 0.0, 0.0])])
-        self.assertEqual(nodes(m), {1: "m1/base", 500: "m1/base", 600: "m1/base", 730: "m1/base", 731: "m1/base/cron/1", 732: "m1/base/cron/1"})
+        self.assertEqual(nodes(m), {1: "m1/base", 500: "m1/base", 600: "m1/base", 730: "m1/base", 731: cron(m, 1), 732: cron(m, 1)})
 
 
 BACKUP = {"sched": "0 4 * * *", "cmd": "/usr/local/bin/backup.sh", "src": "crontab"}
@@ -170,8 +175,8 @@ class WholeRun(unittest.TestCase):
             proc(750, 1, "tar", "tar -xf /tmp/other.tar", 0.5),     # the same program, not started by cron: Base
         ], cron=[A_SH, BACKUP])
         self.assertEqual(jobs(m), [("a.sh", False, IDLE), ("backup.sh", True, [1.81, 0.0, 0.0, 0.0, 0.0])])
-        self.assertEqual(nodes(m), {1: "m1/base", 500: "m1/base", 600: "m1/base", 740: "m1/base", 741: "m1/base/cron/1", 742: "m1/base/cron/1",
-                                    743: "m1/base/cron/1", 744: "m1/base/cron/1", 745: "m1/base/cron/1", 750: "m1/base"})
+        self.assertEqual(nodes(m), {1: "m1/base", 500: "m1/base", 600: "m1/base", 740: "m1/base", 741: cron(m, 1), 742: cron(m, 1),
+                                    743: cron(m, 1), 744: cron(m, 1), 745: cron(m, 1), 750: "m1/base"})
         self.assertEqual(base(m), [1.01, 0.0, 0.0, 0.0, 0.0], "Base keeps sshd, cron's child and the other tar")
 
     def test_a_job_of_busybox_crond(self):
@@ -181,7 +186,7 @@ class WholeRun(unittest.TestCase):
                     proc(742, 741, "backup.sh", "/bin/sh /usr/local/bin/backup.sh"),
                     proc(743, 742, "tar", "tar -czf /backups/home.tgz /home", 1.0)], cron=[BACKUP])
         self.assertEqual(jobs(m), [("backup.sh", True, [1.0, 0.0, 0.0, 0.0, 0.0])])
-        self.assertEqual(nodes(m), {1: "m1/base", 500: "m1/base", 741: "m1/base/cron/0", 742: "m1/base/cron/0", 743: "m1/base/cron/0"})
+        self.assertEqual(nodes(m), {1: "m1/base", 500: "m1/base", 741: cron(m, 0), 742: cron(m, 0), 743: cron(m, 0)})
 
 
 # systemctl list-timers --all --no-legend --no-pager, as collect_linux.py keeps it (the line before the unit names)
@@ -205,8 +210,8 @@ class Timers(unittest.TestCase):
         self.assertEqual(jobs(self.m()), [("a.sh", False, IDLE), ("logrotate", True, [0.75, 0.0, 0.0, 0.0, 0.0]), ("apt-daily", False, IDLE)])
 
     def test_its_processes_are_under_the_timer(self):
-        self.assertEqual(nodes(self.m()), {1: "m1/base", 500: "m1/base", 600: "m1/base", 800: "m1/base/cron/1", 801: "m1/base/cron/1",
-                                           820: "m1/base"})
+        m = self.m()
+        self.assertEqual(nodes(m), {1: "m1/base", 500: "m1/base", 600: "m1/base", 800: cron(m, 1), 801: cron(m, 1), 820: "m1/base"})
 
     def test_base_keeps_the_rest(self):
         self.assertEqual(base(self.m()), [0.75, 0.0, 0.0, 0.0, 0.0], "sshd and nginx")
