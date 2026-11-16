@@ -13,14 +13,13 @@ const WEB = fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-web-'));
 fs.cpSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'web'), WEB, {recursive: true});
 process.env.FLEET_TEST_WEB = WEB;
 const {launch} = await import('./harness.mjs');
-const {fixture, ui} = await import('./fixtures.mjs');
+const {fixture, ui, CCD1} = await import('./fixtures.mjs');
 
 let browser;
 before(async () => { browser = await launch(); });
 after(async () => { await browser.close(); fs.rmSync(WEB, {recursive: true, force: true}); });
 
 const SLOW = 20000;
-const CCD1 = [8, 9, 10, 11, 12, 13, 14, 15];
 const settle = ms => new Promise(r => setTimeout(r, ms));
 function fx1(){
   const fx = fixture();

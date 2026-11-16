@@ -1213,7 +1213,7 @@ function selectionFilters(m, all, gpuProcs){
   const cpus = cpuSel(m);
   if (cpus.length){
     const short = cpuSelLabel(m, cpus), label = /^CPUs? /.test(short) ? short : `${short} (${cpus.length === 1 ? 'CPU ' : 'CPUs '}${cpuRanges(cpus)})`;
-    out.push({kind:'cpu', short, label, chip:'Last ran on ' + short,
+    out.push({kind:'cpu', short, label, chip:'Last ran on ' + short, gone:'last ran on ' + short,
       tip:`Details lists only the processes that last ran on ${label} at the latest reading. Processes move between processors, so this is where each one ran last, not where it always runs.`,
       apply:!all || all.some(p => p[12] >= 0) ? (p => cpus.includes(p[12])) : null,
       why:`${os} doesn’t report which processor a process last ran on, so Details isn’t filtered by ${short}.`});
@@ -1222,7 +1222,7 @@ function selectionFilters(m, all, gpuProcs){
   if (keys.length){
     const idx = keys.map(k => +k.replace('gpu', ''));
     const short = idx.map(i => 'GPU ' + i).join(' + '), label = idx.map(i => `GPU ${i}${m.gpus[i] ? ' (' + m.gpus[i].name + ')' : ''}`).join(', ');
-    out.push({kind:'gpu', short, label, chip:'On ' + short, tip:`Details lists only the processes using ${label} at the latest reading.`,
+    out.push({kind:'gpu', short, label, chip:'On ' + short, gone:'uses ' + short, tip:`Details lists only the processes using ${label} at the latest reading.`,
       apply:gpuProcs === false ? null : (p => (p[13] || []).some(i => idx.includes(i))),
       why:`${os} doesn’t report which GPU a process uses, so Details isn’t filtered by ${short}.`});
   }
@@ -1231,7 +1231,7 @@ function selectionFilters(m, all, gpuProcs){
     const D = DISKS[m.id], ds = D ? D.disks.filter(d => names.includes(d.name)) : [];
     const short = names.length === 1 ? names[0] : names.length + ' disks', label = names.length === 1 && ds[0] ? `${names[0]} (${diskLabel(ds[0])})` : names.join(', ');
     const per = D ? D.per_process : !/^(macOS|Windows)/.test(os);
-    out.push({kind:'disk', short, label, chip:'I/O on ' + short, tip:`Details lists only the processes that read or wrote ${label} since the last reading.`,
+    out.push({kind:'disk', short, label, chip:'I/O on ' + short, gone:'reads or writes ' + short, tip:`Details lists only the processes that read or wrote ${label} since the last reading.`,
       apply:per ? (p => (p[14] || []).some(x => names.includes(x))) : null,
       why:`${os} doesn’t report which disk a process uses, so Details isn’t filtered by ${short}.`});
   }
@@ -1239,7 +1239,7 @@ function selectionFilters(m, all, gpuProcs){
   if (ifn.length){
     const D = IFS[m.id], xs = D ? D.ifs.filter(x => ifn.includes(x.name)) : [];
     const short = ifn.length === 1 ? ifn[0] : ifn.length + ' interfaces', label = ifn.length === 1 && xs[0] ? `${ifn[0]} (${ifKind(xs[0])})` : ifn.join(', ');
-    out.push({kind:'net', short, label, chip:'Traffic via ' + short, tip:`Details lists only the processes whose network traffic goes through ${label} (their connections, their container’s network or their VM’s interface).`,
+    out.push({kind:'net', short, label, chip:'Traffic via ' + short, gone:'sends traffic via ' + short, tip:`Details lists only the processes whose network traffic goes through ${label} (their connections, their container’s network or their VM’s interface).`,
       apply:p => (p[15] || []).some(x => ifn.includes(x)), why:''});
   }
   return out;
@@ -1300,7 +1300,11 @@ function detailsView(n, docked){
   const scopeAll = n.id === mid;
   let list = all ? (scopeAll ? all : all.filter(p => nodes[p[10]] && within(nodes[p[10]], n.id))) : [];
   const FS = selectionFilters(m, all, PROCS.machine === mid ? PROCS.gpuProcs : undefined);
-  FS.forEach(f => { if (f.apply) list = list.filter(f.apply); });
+  // the process whose drop-down is open stays while it's open, even once a selection filter no longer takes it (it
+  // moved off the selected CCD): its row and what the drop-down has gathered don't vanish under you (#411)
+  const held = [];
+  FS.forEach(f => { if (f.apply) list = list.filter(p => f.apply(p) || (INSP.pid === p[0] && INSP.mid === mid && held.push(f) > 0)); });
+  const heldTip = held.length ? 'Open, so it stays: it no longer ' + held.map(f => f.gone).join(', and no longer ') : '';
   const q = S.filter.trim().toLowerCase();
   if (q) list = list.filter(p => String(p[0]) === q || (p[1] || '').toLowerCase().includes(q) || (p[9] || '').toLowerCase().includes(q) || (p[2] || '').toLowerCase().includes(q));
   const ownerName = id => nodes[id] ? nodes[id].name : '';
@@ -1341,7 +1345,7 @@ function detailsView(n, docked){
   let inspShown = false;
   // a column with a width of its own (#334) is that wide whatever its cells hold; the rest size to their content
   const CW = colWidths(), cellW = c => CW[c.k] ? ` style="max-width:${CW[c.k]}px"` : '';
-  const rowHTML = p => `<tr data-pid="${esc(p[0])}" aria-expanded="${isInsp(p)}" class="drow${isInsp(p) ? ' open' : ''}">${COLS.map(c => `<td class="${c.l ? 'l' : ''} ${c.cls || ''}${CW[c.k] ? ' fw' : ''}"${cellW(c)}>${c.show(p)}</td>`).join('')}</tr>`  // data-pid: columns can move or hide
+  const rowHTML = p => `<tr data-pid="${esc(p[0])}" aria-expanded="${isInsp(p)}" class="drow${isInsp(p) ? ' open' : ''}${isInsp(p) && heldTip ? ' held" title="' + esc(heldTip) : ''}">${COLS.map(c => `<td class="${c.l ? 'l' : ''} ${c.cls || ''}${CW[c.k] ? ' fw' : ''}"${cellW(c)}>${c.show(p)}</td>`).join('')}</tr>`  // data-pid: columns can move or hide
     + (isInsp(p) ? (inspShown = true, `<tr class="pinsp" data-row="insp:${esc(p[0])}"><td colspan="${COLS.length}">${inspectPanel(p)}</td></tr>`) : '');
   if (groupBy){
     // Groups start collapsed, each header a summary; open ones are remembered per Group-by mode (S.groupOpen)
@@ -1822,7 +1826,12 @@ setInterval(refreshNow, 2000);
     try {
       const hs = await Promise.all(['/', '/app.js'].map(u => fetch(u, {method:'HEAD', cache:'no-store'}).then(r => (r.headers.get('last-modified') || '') + (r.headers.get('content-length') || ''))));
       const s = hs.join('|');
-      if (sig !== null && s !== sig && !PICK.open && !SET.open && !(document.activeElement && document.activeElement.id === 'pfilter')){ save(); location.reload(); return; }
+      // not while you're in the middle of something (the picker, Settings, the filter, a process's drop-down, #411): the
+      // reload waits till you're done
+      if (sig !== null && s !== sig){
+        if (PICK.open || SET.open || INSP.pid || (document.activeElement && document.activeElement.id === 'pfilter')) return;
+        save(); location.reload(); return;
+      }
       sig = s;
     } catch (e) {}
   }
