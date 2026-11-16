@@ -1956,19 +1956,20 @@ const METRIC_KEYS = ['cpu', 'mem', 'gpu', 'disk', 'net'];
 const SHORTCUTS = [
   ['Go to anything: machines, containers, jobs, commands', [MODK + 'K']],
   ['Find in the panel you’re in: the tree, the page or Details', [MODK + 'F', '/']],
-  ['Back, forward', [MODK + '[', MODK + ']']],
+  // On Linux and Windows, Fleet runs in a Chrome window, which keeps Ctrl+N, Ctrl+T and Ctrl+Tab for itself: Alt+ keys there (#325)
+  ['Back, forward', IS_MAC ? [MODK + '[', MODK + ']'] : ['Alt+←', 'Alt+→']],
   ['Details on and off', [MODK + 'D']],
   ['Dock Details beside the overview', [MODK + SHIFTK + 'D']],
   ['CPU, Memory, GPU, Disk I/O, Network', [ALTK + '1 … ' + ALTK + '5']],
   ['Go to a space (1 is All machines)', [MODK + '1 … ' + MODK + '9']],
   ['Previous or next space', [MODK + SHIFTK + '[', MODK + SHIFTK + ']']],
-  ['Cycle through the spaces, or the other way', [CTRLK + TABK, CTRLK + SHIFTK + TABK]],
+  ['Cycle through the spaces, or the other way', IS_MAC ? [CTRLK + TABK, CTRLK + SHIFTK + TABK] : ['Alt+PgDn', 'Alt+PgUp']],
   ['Move through the tree', ['↑', '↓']],
   ['Collapse or expand; go to the parent', ['←', '→']],
-  ['New space: pick a grouping to pin', [MODK + 'N']],
+  ['New space: pick a grouping to pin', [IS_MAC ? MODK + 'N' : 'Alt+N']],
   ['Pin or unpin the selection as a space', ['P']],
-  ['Open a terminal on the selection', [MODK + 'T']],
-  ['Bigger, smaller, actual size', [MODK + '+', MODK + '−', MODK + '0']],
+  ['Open a terminal on the selection', [IS_MAC ? MODK + 'T' : 'Alt+T']],
+  ['Bigger, smaller, actual size', IS_MAC ? [MODK + '+', MODK + '−', MODK + '0'] : ['Ctrl+Plus', 'Ctrl+Minus', 'Ctrl+0']],
   ['Settings', [MODK + ',']],
   ['Refresh now', [MODK + 'R']],
   ['Close a menu, sheet or panel; clear the filter', ['Esc']],
@@ -2090,6 +2091,12 @@ document.addEventListener('keydown', e => {
   }
   if (e.altKey && !mod && /^Digit[1-5]$/.test(e.code)) return run('metric', METRIC_KEYS[+e.code.slice(5) - 1]);
   if (e.altKey && !mod && !IS_MAC && !typing && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) return run(e.key === 'ArrowLeft' ? 'back' : 'fwd');
+  // the keys Chrome keeps on Linux and Windows (Ctrl+N, Ctrl+T, Ctrl+Tab) have Alt+ ones there that reach the page (#325)
+  if (e.altKey && !mod && !IS_MAC && !typing && !e.shiftKey){
+    if (e.code === 'KeyN') return run('newspace');
+    if (e.code === 'KeyT') return run('terminal');
+    if (e.key === 'PageDown' || e.key === 'PageUp') return run('space-step', e.key === 'PageDown' ? 1 : -1);
+  }
   if (typing || e.metaKey || e.ctrlKey || e.altKey || overlayOpen()) return;
   if (e.key === '/') return run('find');
   if (e.key === '?') return run('keys');

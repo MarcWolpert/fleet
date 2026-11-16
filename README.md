@@ -246,7 +246,7 @@ and `connect.json` (which machines connect when Fleet starts, and your saved set
 
 ## Keyboard shortcuts
 
-⌘ on a Mac, Ctrl elsewhere. Press `?` in the app for the list.
+⌘ on a Mac, Ctrl elsewhere. On Linux and Windows, Fleet runs in a Chrome window, which keeps Ctrl+N, Ctrl+T and Ctrl+Tab for itself, so there those three are Alt+N, Alt+T and Alt+PgDn / Alt+PgUp, and back and forward are Alt+← and Alt+→. Press `?` in the app, or open **Tutorial**, for the list in your platform's keys.
 
 | Keys | Does |
 |---|---|

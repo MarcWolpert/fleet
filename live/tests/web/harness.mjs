@@ -149,7 +149,7 @@ export async function launch(){
 // url: drive a running Fleet Live (e.g. an isolated instance) instead of a fixture server.
 // native: open the page as Fleet.app does (?native=1), with a stand-in for its message handler that keeps
 // what the page posts to it in window.nativePosts.
-async function openPage(cdp, fx, {ui = null, width = 1500, height = 950, fonts = false, url = null, native = false} = {}){
+async function openPage(cdp, fx, {ui = null, width = 1500, height = 950, fonts = false, url = null, native = false, platform = null} = {}){
   const server = url ? {url, close: async () => {}} : await startServer(fx);
   const start = server.url + (native ? '?native=1' : '');
   const {targetId} = await cdp.send('Target.createTarget', {url: 'about:blank'});
@@ -160,6 +160,8 @@ async function openPage(cdp, fx, {ui = null, width = 1500, height = 950, fonts =
   await send('Runtime.enable'); await send('Page.enable'); await send('Network.enable');
   if (!fonts) await send('Network.setBlockedURLs', {urls: ['*fonts.googleapis.com*', '*fonts.gstatic.com*']});
   await send('Emulation.setDeviceMetricsOverride', {width, height, deviceScaleFactor: 1, mobile: false});
+  // platform: the page sees another OS (navigator.platform and the user agent), e.g. 'Linux x86_64' or 'Win32'
+  if (platform) await send('Emulation.setUserAgentOverride', {userAgent: platform === 'Win32' ? 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' : platform.startsWith('Linux') ? 'Mozilla/5.0 (X11; Linux x86_64)' : 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)', platform});
   // Seed the saved UI state once per tab; a reload keeps whatever the page saved since.
   if (ui) await send('Page.addScriptToEvaluateOnNewDocument', {source: `if (!sessionStorage.getItem('seeded')){ localStorage.setItem('fleet-live-ui', ${JSON.stringify(JSON.stringify(ui))}); sessionStorage.setItem('seeded', '1'); }`});
   if (native) await send('Page.addScriptToEvaluateOnNewDocument', {source: `window.nativePosts = []; window.webkit = {messageHandlers: {fleet: {postMessage: m => window.nativePosts.push(JSON.parse(JSON.stringify(m)))}}};`});
