@@ -9,7 +9,7 @@
 [![Reads](https://img.shields.io/badge/reads-Linux%20%7C%20Windows%20%7C%20macOS-lightgrey)](#add-your-machines)
 [![Based on Mission Center](https://img.shields.io/badge/based%20on-Mission%20Center-3584e4)](https://gitlab.com/mission-center-devs/mission-center)
 
-[What it shows](#what-it-shows) · [Install](#install) · [Add your machines](#add-your-machines) · [Configuration](#configuration) · [Keyboard](#keyboard-shortcuts) · [How it works](#how-it-works) · [Roadmap](#roadmap) · [Contributing](#contributing)
+[What it shows](#what-it-shows) · [Tour](#tour) · [Getting started](#getting-started) · [Configuration](#configuration) · [Keyboard](#keyboard-shortcuts) · [How it works](#how-it-works) · [Roadmap](#roadmap) · [Contributing](#contributing)
 
 </div>
 
@@ -33,6 +33,14 @@ home-server (Linux)
 
 It reads each machine over SSH, **read-only**, and installs nothing on it. Everything stays on your
 computer: Fleet listens on `127.0.0.1` only.
+
+![Fleet's All machines view: the machine tree on the left with home-server open, and on the right where the whole fleet's CPU, memory, GPU, disk and network go, split by type](docs/fleet/screenshots/fleet.png)
+
+*All machines.* In the tree, each machine splits into **Base system** (the OS, its daemons and apps, with
+its **Cron jobs** under it), **Docker Compose** (projects, then their services), **Containers** and **VMs**.
+Every row has a sparkline and its share of the host. The page shows where the fleet's usage goes, split by
+those same types. The bar along the top holds your **spaces**: All machines, plus anything you **pin**
+(here the VM app-vm and the Compose project photos), each opening the tree on just that.
 
 ## What it shows
 
@@ -76,7 +84,82 @@ import any VS Code colour theme. A colour-blind mode for protanopia, deuteranopi
 monochromacy (colours checked to stay apart for each; statuses also change shape), and higher contrast.
 Right-click anything for what fits it; a keyboard shortcut for everything.
 
-## Install
+## Tour
+
+The pictures show a made-up fleet: a Linux home server with two GPUs, Compose projects, containers and
+VMs; the Mac that Fleet runs on; a Windows PC; and a small backup box.
+[docs/fleet/screenshots/make.mjs](docs/fleet/screenshots/make.mjs) draws them from that demo data with
+Fleet's own page, so they can be redrawn whenever the app changes.
+
+### A machine, processor by processor
+
+![home-server's page with CPU › Logical processors: 24 live processor tiles in two groups, CCD 0 and CCD 1, beside where the machine's usage goes](docs/fleet/screenshots/cpus.png)
+
+*home-server's page.* The top says what the machine is (OS, CPU, GPUs, how Fleet reaches it, uptime) and
+how busy its CPU, memory and GPUs are now. **CPU › Logical processors** gives every logical processor a
+live tile, grouped the way the chip is built: by **CCD** on AMD (a chiplet of cores that share one L3
+cache), by **P-cores and E-cores** on Intel, by core cluster on Apple silicon. Click a processor or a
+group's name, and Details lists only the processes that last ran there.
+
+### Each GPU
+
+![GPU › Each GPU on home-server: an NVIDIA GPU and an Intel GPU, each a group of live tiles for utilisation, 3D, compute, copy, video, VRAM, temperature, power, clock and fan](docs/fleet/screenshots/gpus.png)
+
+*GPU › Each GPU.* Every GPU is a group of live tiles, one for each metric it reports, like Task Manager.
+Here GPU 0 runs the photo library's machine learning and GPU 1 transcodes video for the media container;
+the tree tags each row with the GPU it uses (`GPU0`, `GPU1`). Click a GPU to see what runs on it over time.
+
+### Details and its drop-down
+
+![Details docked beside the Compose project photos, with the ML worker's drop-down open: what it mostly waits on, its CPU, memory, CPU cache and disk](docs/fleet/screenshots/details.png)
+
+*Details, docked beside the Compose project photos.* **Details** is the process list of whatever you
+select, here docked beside its page (⌘⇧D, or drag the Details pill to the right). Click a process for its
+drop-down. It samples every thread for as long as it's open and says what the process mostly waits on:
+this ML worker runs, but stalls on memory. Below are its **cache misses** over a lookback you pick (10 s,
+1 min, 5 min or all), and its CPU, memory, disk, cgroup, sockets, files and busiest threads. The list holds
+still while the drop-down is open.
+
+### Groups and spaces
+
+![The tree with three groups outlined in colour: the fleet Home lab around two machines, the division Services around two containers and the flotilla Dev VMs around two VMs; Home lab's all-up view on the right, and Home lab pinned in the space bar](docs/fleet/screenshots/groups.png)
+
+*A fleet, a division and a flotilla.* Drag a box over items at the same level to group them. A group is
+named for what's in it: a **fleet** of machines, a **flotilla** of VMs, a **division** of containers, a
+**section** of cron jobs, a **squadron** of Compose projects, and a **task force** when it's mixed. Each
+kind has its own colour and icon, and outlines its members in the tree. Here the fleet Home lab holds
+home-server and backup-box. It's selected, so the page adds up its machines, and it's pinned as a space.
+
+### The network tree
+
+![The network tree in the GitHub Light theme: the tailnet, each machine, home-server's bridges with the containers and VM interfaces on them, and the bridge br0's traffic and attached interfaces](docs/fleet/screenshots/net.png)
+
+*The network tree, in the GitHub Light theme.* The second tree starts from your **tailnet** (your
+Tailscale network): each machine, its interfaces and bridges, the containers on each Docker network and
+each VM's interface (vnet0 is app-vm's), with traffic in and out on every row. Here the bridge br0 is
+selected: its traffic over time, and what's attached to it.
+
+### Which machines connect at start
+
+<img src="docs/fleet/screenshots/connect.png" alt="The Connect when Fleet starts dialog: backup-box, home-server and its VM app-vm ticked, workstation not, saved as the set Always on" width="520">
+
+*Choose machines, from Auto.* Fleet reads a machine only while its connection is on; the dot on its row turns
+it off and on. **Auto**, at the bottom of the tree, picks which machines Fleet connects to when it starts:
+**None** until you choose, **All**, or a set you tick and name here, with VMs under the machine they run
+on. So a start at login asks for no SSH key you didn't want.
+
+### Themes and colour vision
+
+<img src="docs/fleet/screenshots/appearance.png" alt="Settings › Appearance: 22 theme swatches with Fleet's own selected, Import theme, the Colour vision menu and Higher contrast" width="820">
+
+*Settings › Appearance.* Pick one of 22 themes, or import a VS Code colour theme. **Colour vision** swaps
+the colours of workload types, groups and statuses for ones that stay apart with protanopia, deuteranopia,
+tritanopia or monochromacy, and statuses change shape as well. **Higher contrast** makes text and lines
+stronger.
+
+## Getting started
+
+### Install
 
 Download Fleet from [Releases](https://github.com/MarcWolpert/fleet/releases/latest):
 
@@ -94,10 +177,10 @@ git clone https://github.com/MarcWolpert/fleet.git && cd fleet/live
 
 The first run writes `~/.config/fleet/machines.toml` with just this computer. Add the rest from the app.
 
-## Add your machines
+### Add your machines
 
-Use **+ Add a machine** at the bottom of the tree. It tests the connection before it adds anything. What
-each machine needs:
+Use **+ Add a machine** at the bottom of the tree. Give it an SSH destination, a name and its system; it
+tests the connection before it adds anything. What each machine needs:
 
 | | |
 |---|---|
@@ -106,6 +189,13 @@ each machine needs:
 | **Windows** | OpenSSH Server (Settings › System › Optional features) and your key in `C:\Users\you\.ssh\authorized_keys`, or for an administrator account in `C:\ProgramData\ssh\administrators_authorized_keys`. |
 | **macOS** | Remote Login on (System Settings › General › Sharing) and `python3` from the Command Line Tools: `xcode-select --install`. |
 | **A VM** | Add it like any machine, then set **Runs on** in Settings to nest it under its host. |
+
+### Choose what connects at start
+
+**Auto**, beside **+ Add a machine**, picks which machines Fleet connects to when it starts: **None** until
+you choose, **All**, or a set you tick in **Choose machines…** (see
+[the tour](#which-machines-connect-at-start)). The dot on a machine's row turns its connection off and on
+at any time.
 
 ## Configuration
 
