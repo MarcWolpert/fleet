@@ -6,7 +6,7 @@ Runs on macOS, Linux and Windows (Python 3.11+, standard library only).
 Each machine in ~/.config/fleet/machines.toml is watched by one thread:
   - kind = "local":   this computer, read directly
   - os = "linux":     collect_linux.py piped to `python3 -` over SSH
-  - os = "windows":   collect_windows.ps1 sent as `powershell -EncodedCommand`
+  - os = "windows":   collect_windows.ps1 piped to a short `powershell -EncodedCommand` bootstrap
 The remote collectors loop and stream one reading per interval until the SSH
 connection closes. Nothing is installed on any machine and nothing is changed.
 
@@ -206,6 +206,17 @@ def ps_compact(script):
     return "\n".join(l.strip() for l in script.splitlines() if l.strip() and not l.strip().startswith("#"))
 
 
+PS_BOOT = "iex ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String([Console]::In.ReadLine())))"
+
+
+def ps_launch(script):
+    """(argv, stdin) that run a long PowerShell script: the command is a short bootstrap that reads the script
+    as one base64 line from stdin, because OpenSSH's default shell, cmd.exe, takes at most 8,191 characters.
+    The caller keeps stdin open afterwards: the collector's lifeline."""
+    enc = base64.b64encode(PS_BOOT.encode("utf-16-le")).decode()
+    return ["powershell", "-NoProfile", "-NonInteractive", "-EncodedCommand", enc], base64.b64encode(script.encode("utf-8")) + b"\n"
+
+
 # ---------------------------------------------------------------- GPU metrics (issue #6)
 # Every GPU reports what it can as g["m"] = {metric: value} and g["lim"] = {metric: its maximum}.
 MIB = 1024 * 1024
@@ -288,9 +299,8 @@ class Machine:
     def ssh_cmd(self):
         base = ["ssh"] + SSH_MARK + [self.cfg["ssh"]]
         if self.cfg.get("os") == "windows":
-            script = "$FleetInterval=%s\n" % self.interval + ps_compact(open(os.path.join(HERE, "collect_windows.ps1"), encoding="utf-8").read())
-            enc = base64.b64encode(script.encode("utf-16-le")).decode()
-            return base + ["powershell -NoProfile -NonInteractive -EncodedCommand " + enc], None
+            argv, stdin = ps_launch("$FleetInterval=%s\n" % self.interval + ps_compact(open(os.path.join(HERE, "collect_windows.ps1"), encoding="utf-8").read()))
+            return base + [" ".join(argv)], stdin
         script = "INTERVAL=%s\n" % self.interval + open(os.path.join(HERE, "collect_linux.py"), encoding="utf-8").read()
         return base + ["python3 -"], script.encode()
 
@@ -301,8 +311,10 @@ class Machine:
         self.proc = p
         if stdin:
             p.stdin.write(stdin)
-            p.stdin.close()  # Linux: the script itself; python3 - runs it at EOF
-        # Windows: stdin stays open and unused; the collector exits when it closes (its lifeline)
+            if self.cfg.get("os") == "windows":
+                p.stdin.flush()  # Windows: the script as one line; stdin then stays open, the collector exits when it closes (its lifeline)
+            else:
+                p.stdin.close()  # Linux: the script itself; python3 - runs it at EOF
         err_tail = collections.deque(maxlen=5)
         threading.Thread(target=lambda: [err_tail.append(l.decode("utf-8", "replace").strip()) for l in p.stderr], daemon=True).start()
         for line in p.stdout:
@@ -346,9 +358,10 @@ class Machine:
                 if view:
                     self.got(view)
         elif platform.system() == "Windows":
-            script = "$FleetInterval=%s\n" % self.interval + ps_compact(open(os.path.join(HERE, "collect_windows.ps1"), encoding="utf-8").read())
-            enc = base64.b64encode(script.encode("utf-16-le")).decode()
-            p = subprocess.Popen(["powershell", "-NoProfile", "-NonInteractive", "-EncodedCommand", enc], stdout=subprocess.PIPE)
+            argv, script = ps_launch("$FleetInterval=%s\n" % self.interval + ps_compact(open(os.path.join(HERE, "collect_windows.ps1"), encoding="utf-8").read()))
+            p = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+            p.stdin.write(script)
+            p.stdin.flush()   # stdin stays open: the collector's lifeline
             for line in p.stdout:
                 s = line.decode("utf-8", "replace").strip()
                 if s.startswith("{"):

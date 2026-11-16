@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Fleet Live: one read-only snapshot of a Windows machine, printed as JSON.
-# Sent over SSH as `powershell -EncodedCommand`; installs and changes nothing.
+# Sent over SSH as one base64 line on stdin to a short `powershell -EncodedCommand` bootstrap; installs and changes nothing.
 # Runs as a loop: one compact JSON line every $FleetInterval seconds (prepended
 # by the collector) until the SSH connection closes. The first line also carries
 # the logical-processor topology (P/E efficiency class, L3 groups); scheduled
@@ -8,7 +8,7 @@
 $ErrorActionPreference = 'SilentlyContinue'; $ProgressPreference = 'SilentlyContinue'
 if (-not $FleetInterval) { $FleetInterval = 3 }
 $loop = 0; $taskCache = @(); $addrCache = @{}; $cmdCache = @{}; $diskInfo = @{}; $pnetCache = @{}
-# Stop when Fleet goes away. Fleet keeps our stdin open and never writes to it, so the pending read
+# Stop when Fleet goes away. Fleet keeps our stdin open and writes nothing after this script, so the pending read
 # completes (EOF) the moment the SSH session ends for any reason; also stop if our parent shell is
 # gone, and after 6 hours in any case (Fleet reconnects).
 $lifeline = $null
