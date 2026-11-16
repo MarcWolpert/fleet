@@ -3,7 +3,7 @@
 // right-click menu on the column headers, saved by the server (/api/prefs → ~/.config/fleet/ui.json).
 import {test, before, after} from 'node:test';
 import assert from 'node:assert/strict';
-import {launch} from './harness.mjs';
+import {launch, heldPoll} from './harness.mjs';
 import {fixture, ui, PIDS} from './fixtures.mjs';
 
 let browser;
@@ -105,4 +105,28 @@ test('Reset to default restores the type\'s default columns', async () => {
     assert.deepEqual(await p.eval(KEYS), ['name', 'pid', 'owner', 'gpu', 'gpus', 'cpu', 'mem', 'cmd']);
     assert.deepEqual(lastPost(fx).columns.gpu, ['name', 'pid', 'owner', 'gpu', 'gpus', 'cpu', 'mem', 'cmd']);
   } finally { await p.close(); }
+});
+
+test('a poll the server answered before a column change was saved doesn\'t bring the old layout back', async () => {
+  // The server reads ui.json as it builds /api/fleet and sends it after; a save can start and finish in between.
+  const fx = fixture();
+  const p = await open({metric: 'cpu'}, fx);
+  const noUser = ['name', 'pid', 'owner', 'state', 'cpu', 'mem', 'threads', 'cpugroup', 'cmd'];
+  try {
+    fx.holdFleet = true;
+    const stale = await heldPoll(p, fx);  // made with the default layout
+    await rightClick(p, 'user');
+    await click(p, '[data-colact="hide|user"]');
+    await p.waitFor(`!prefsBusy`);
+    assert.deepEqual(fx.fleet.prefs, {columns: {cpu: noUser}});
+    stale();
+    await heldPoll(p, fx);  // the page polls again, so the stale answer has been read and drawn
+    assert.deepEqual(await p.eval(KEYS), noUser);
+    // and the next change builds on the new layout
+    await click(p, '[data-colact="right|name"]');
+    await p.waitFor(`!prefsBusy`);
+    assert.deepEqual(fx.fleet.prefs, {columns: {cpu: ['pid', 'name', 'owner', 'state', 'cpu', 'mem', 'threads', 'cpugroup', 'cmd']}});
+    assert.deepEqual(await p.eval(KEYS), ['pid', 'name', 'owner', 'state', 'cpu', 'mem', 'threads', 'cpugroup', 'cmd']);
+    assert.deepEqual(p.errors, []);
+  } finally { fx.holdFleet = false; (fx.held || []).splice(0).forEach(send => send()); await p.close(); }
 });

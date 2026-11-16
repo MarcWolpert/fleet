@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
-import {launch, WEB} from './harness.mjs';
+import {launch, WEB, heldPoll} from './harness.mjs';
 import {fixture, ui} from './fixtures.mjs';
 
 let browser;
@@ -103,6 +103,24 @@ test('Fleet is the default; Settings → Appearance picks a theme, applies it at
     assert.equal(JSON.parse(await p.eval(`localStorage.getItem('fleet-theme')`)).id, 'monokai-dimmed');
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
+});
+
+test('a poll the server answered before a theme pick was saved doesn\'t put the old theme back', async () => {
+  // The server reads ui.json as it builds /api/fleet and sends it after; a save can start and finish in between.
+  const fx = fixture();
+  const p = await open(fx);
+  try {
+    await settings(p);
+    fx.holdFleet = true;
+    const stale = await heldPoll(p, fx);  // made with no theme saved (Fleet)
+    await p.eval(`(() => { document.querySelector('[data-themeid="github-light"]').click(); return true; })()`);
+    await p.waitFor(`!prefsBusy`);
+    assert.deepEqual(fx.fleet.prefs, {theme: 'github-light'});
+    stale();
+    await heldPoll(p, fx);  // the page polls again, so the stale answer has been read
+    assert.deepEqual(await p.eval(`[document.documentElement.dataset.fleetTheme, ${VAR('card')}, JSON.parse(localStorage.getItem('fleet-theme')).id]`), ['github-light', '#ffffff', 'github-light']);
+    assert.deepEqual(p.errors, []);
+  } finally { fx.holdFleet = false; (fx.held || []).splice(0).forEach(send => send()); await p.close(); }
 });
 
 test('the theme the server has is used at load (it survives restarts), light themes included', async () => {
