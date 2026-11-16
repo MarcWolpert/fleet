@@ -143,7 +143,8 @@ const EACH = ['/api/cpus?machine=lx', '/api/procs?machine=lx'];
 for (const [docked, pick, want, name] of [
   [true, true, EACH, 'a CPU pick with Details docked reads the machine\'s processes once per poll, not twice'],
   [true, false, EACH, 'Details docked, nothing picked: the processes once per poll'],
-  [false, true, EACH, 'a CPU pick without Details docked: the processes once per poll, for the selection card'],
+  // the selection card's list never holds Docker Desktop's processes, so it asks for none (#312)
+  [false, true, ['/api/cpus?machine=lx', '/api/procs?machine=lx&docker=0'], 'a CPU pick without Details docked: the processes once per poll, for the selection card'],
   [false, false, ['/api/cpus?machine=lx'], 'nothing docked, nothing picked: no processes at all']]){
   test(name, async () => {
     const p = await open({detailsDocked: docked});

@@ -1554,6 +1554,10 @@ function sigOf(){ return Object.keys(nodes).join('|') + '#' + PINS.join('|'); }
 // The Network tree's data comes on its own: the server runs tailscale status for /api/net, which can take seconds,
 // and the fleet's numbers never wait for it. One is on its way at a time (#144).
 let netBusy = false;
+// What a process list is for, so this Mac's server reads Docker Desktop's containers (a docker top each) only for the
+// ones shown (#312): Details names its node unless that's the whole machine (a division's members are anywhere); the
+// CPU, disk and interface cards' lists ask for none (&docker=0), since those rows never say a CPU, disk or interface.
+function procsScope(n, mid){ return n && n.id !== mid && n.kind !== 'division' ? '&scope=' + encodeURIComponent(n.id) : ''; }
 function refreshNet(){
   if (netBusy || S.tree !== 'network') return; netBusy = true;
   fetch('/api/net', {cache:'no-store'}).then(r => r.json()).then(d => { NET = d; if (S.tree === 'network'){ updateTree(); renderMain(); } })
@@ -1581,15 +1585,15 @@ async function refreshNow(){
     if (S.sel !== 'fleet' && !nodes[S.sel]) { /* keep selection; it may come back */ }
     const n = S.sel === 'fleet' ? null : nodes[S.sel];
     const jobs = [];
-    if ((S.view === 'details' || (S.detailsDocked && n && S.tree !== 'network')) && (n || roots[0])){ const mid = procMachineFor(n || roots[0]); if (mid) jobs.push(fetch('/api/procs?machine=' + encodeURIComponent(mid), {cache:'no-store'}).then(r => r.json()).then(d => takeProcs(mid, d))); }
-    if (S.view !== 'details' && !S.detailsDocked && n && n.kind === 'machine' && S.metric === 'cpu' && S.cpuView === 'logical' && cpuSel(n).length && n.status === 'ok') jobs.push(fetch('/api/procs?machine=' + encodeURIComponent(n.id), {cache:'no-store'}).then(r => r.json()).then(d => takeProcs(n.id, d)));
+    if ((S.view === 'details' || (S.detailsDocked && n && S.tree !== 'network')) && (n || roots[0])){ const mid = procMachineFor(n || roots[0]); if (mid) jobs.push(fetch('/api/procs?machine=' + encodeURIComponent(mid) + procsScope(n, mid), {cache:'no-store'}).then(r => r.json()).then(d => takeProcs(mid, d))); }
+    if (S.view !== 'details' && !S.detailsDocked && n && n.kind === 'machine' && S.metric === 'cpu' && S.cpuView === 'logical' && cpuSel(n).length && n.status === 'ok') jobs.push(fetch('/api/procs?machine=' + encodeURIComponent(n.id) + '&docker=0', {cache:'no-store'}).then(r => r.json()).then(d => takeProcs(n.id, d)));
     if (S.view !== 'details' && n && n.kind === 'machine' && S.metric === 'cpu' && S.cpuView === 'logical') jobs.push(fetch('/api/cpus?machine=' + encodeURIComponent(n.id), {cache:'no-store'}).then(r => r.json()).then(d => { CPUS[n.id] = d; }));
     const nm = n && n.kind === 'machine' ? n : null;
     // Each interface / Each disk shows nm's; Details filtered by a disk or interface pick needs its machine's to tell whether that's still there.
     const dn = shownDetails(), dmid = dn && procMachineFor(dn), lists = (shown, pick) => [...new Set([shown && nm ? nm.id : null, pick && pick.mid === dmid && pick.names.length ? dmid : null].filter(Boolean))];
     lists(S.metric === 'net' && S.view !== 'details', S.ifSel).forEach(id => jobs.push(fetch('/api/ifs?machine=' + encodeURIComponent(id), {cache:'no-store'}).then(r => r.json()).then(d => { IFS[id] = d; })));
     lists(S.metric === 'disk' && S.view !== 'details', S.diskSel).forEach(id => jobs.push(fetch('/api/disks?machine=' + encodeURIComponent(id), {cache:'no-store'}).then(r => r.json()).then(d => { DISKS[id] = d; })));
-    if (nm && S.view !== 'details' && !S.detailsDocked && ((S.metric === 'disk' && S.diskView === 'each' && diskSel(nm).length) || (S.metric === 'net' && S.ifView === 'each' && ifSel(nm).length)) && nm.status === 'ok') jobs.push(fetch('/api/procs?machine=' + encodeURIComponent(nm.id), {cache:'no-store'}).then(r => r.json()).then(d => takeProcs(nm.id, d)));
+    if (nm && S.view !== 'details' && !S.detailsDocked && ((S.metric === 'disk' && S.diskView === 'each' && diskSel(nm).length) || (S.metric === 'net' && S.ifView === 'each' && ifSel(nm).length)) && nm.status === 'ok') jobs.push(fetch('/api/procs?machine=' + encodeURIComponent(nm.id) + '&docker=0', {cache:'no-store'}).then(r => r.json()).then(d => takeProcs(nm.id, d)));
     await Promise.all(jobs.map(p => p.catch(() => null)));
     fails = 0; $('conn').hidden = true; $('live').hidden = false;
     const sig = sigOf();
