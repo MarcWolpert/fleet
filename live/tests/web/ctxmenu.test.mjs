@@ -106,3 +106,85 @@ test('the keyboard opens it on what has focus, moves through it, runs an item; e
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
 });
+
+// Tiles redraw on every poll, because their numbers change, and the menu stays open across that. So an item must act
+// on the tile it names, not on the button the menu opened on: that one is gone by the time a person picks (#292).
+const redraw = p => p.eval(`(() => { const was = CTX.origin; lastMainHTML = ''; renderMain(); return !!was && !was.isConnected; })()`);
+async function stalePick(p, sel, label){
+  await rclick(p, sel);
+  assert.equal(await redraw(p), true, 'the redraw replaced the tile the menu opened on');
+  await pick(p, label);
+  assert.equal(await p.eval(MENU), null);
+}
+const TPIN = k => p => p.waitFor(`!tpinBusy && JSON.stringify(TPINS[${JSON.stringify(k)}] || [])`).then(JSON.parse);
+const tpinsWith = async (p, k, want) => { await p.waitFor(`!tpinBusy && JSON.stringify(TPINS[${JSON.stringify(k)}] || []) === ${JSON.stringify(JSON.stringify(want))}`).catch(() => null); return TPIN(k)(p); };
+
+test('a CPU tile and a CCD: every item still works after a poll redrew the tiles', async () => {
+  const p = await open({sel: 'lx', metric: 'cpu', cpuView: 'logical'});
+  try {
+    await p.waitFor(`document.querySelector('[data-lcpu="4"]')`);
+    const sel = () => p.eval(`JSON.stringify(S.cpuSel || null)`).then(JSON.parse);
+    await stalePick(p, '[data-lcpu="4"]', 'See what runs on CPU 4');
+    assert.deepEqual(await sel(), {mid: 'lx', cpus: [4]});
+    await stalePick(p, '[data-lcpu="5"]', 'Add CPU 5 to the selection');
+    assert.deepEqual(await sel(), {mid: 'lx', cpus: [4, 5]});
+    await stalePick(p, '[data-lcpu="4"]', 'Take CPU 4 out of the selection');
+    assert.deepEqual(await sel(), {mid: 'lx', cpus: [5]});
+    await stalePick(p, '[data-lcpu="4"]', 'Pin CPU 4');
+    assert.deepEqual(await tpinsWith(p, 'cpu|lx', ['4']), ['4']);
+    await stalePick(p, '[data-lcpu="4"]', 'Unpin CPU 4');
+    assert.deepEqual(await tpinsWith(p, 'cpu|lx', []), []);
+    await stalePick(p, '[data-lgroup="4,5,6,7,12,13,14,15"]', 'See what runs on CCD 1');
+    assert.deepEqual(await sel(), {mid: 'lx', cpus: [4, 5, 6, 7, 12, 13, 14, 15]});
+    await stalePick(p, '[data-lgroup="4,5,6,7,12,13,14,15"]', 'Pin CCD 1');
+    assert.deepEqual(await tpinsWith(p, 'cpugroup|lx', ['CCD 1']), ['CCD 1']);
+    assert.deepEqual(await TPIN('cpu|lx')(p), []);
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
+test('a GPU header and a GPU metric tile: every item still works after a poll redrew the tiles', async () => {
+  const fx = fixture(), lx = fx.fleet.machines.find(m => m.id === 'lx');
+  lx.gpus = lx.gpus.map(g => Object.assign({}, g, {m: [['util', null, new Array(60).fill(3)], ['temp', null, new Array(60).fill(50)]]}));
+  const p = await open({sel: 'lx', metric: 'gpu', gpuView: 'each'}, fx);
+  try {
+    await p.waitFor(`document.querySelector('.ggroup[data-gpu="gpu1"] [data-gm="temp"]')`);
+    const sel = () => p.eval(`JSON.stringify(S.gpuSel || null)`).then(JSON.parse);
+    await stalePick(p, '.ggroup[data-gpu="gpu1"] .lgh', 'See what runs on GPU 1');
+    assert.deepEqual(await sel(), {mid: 'lx', keys: ['gpu1']});
+    await stalePick(p, '.ggroup[data-gpu="gpu0"] [data-gm="temp"]', 'See what runs on GPU 0');
+    assert.deepEqual(await sel(), {mid: 'lx', keys: ['gpu0']});
+    await stalePick(p, '.ggroup[data-gpu="gpu1"] .lgh', 'Pin GPU 1');
+    assert.deepEqual(await tpinsWith(p, 'gpu|lx', ['gpu1']), ['gpu1']);
+    await stalePick(p, '.ggroup[data-gpu="gpu0"] [data-gm="temp"]', 'Pin Temperature');
+    assert.deepEqual(await tpinsWith(p, 'gpum|lx', ['gpu0:temp']), ['gpu0:temp']);
+    assert.deepEqual(await sel(), {mid: 'lx', keys: ['gpu0']});
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
+test('a disk tile and an interface tile: every item still works after a poll redrew the tiles', async () => {
+  const p = await open({sel: 'lx', metric: 'disk', diskView: 'each'});
+  try {
+    await p.waitFor(`document.querySelector('[data-dsel="sda"]')`);
+    const sel = k => p.eval(`JSON.stringify(S.${k} || null)`).then(JSON.parse);
+    await stalePick(p, '[data-dsel="sda"]', 'See what runs on sda');
+    assert.deepEqual(await sel('diskSel'), {mid: 'lx', names: ['sda']});
+    await stalePick(p, '[data-dsel="nvme0n1"]', 'Add nvme0n1 to the selection');
+    assert.deepEqual(await sel('diskSel'), {mid: 'lx', names: ['sda', 'nvme0n1']});
+    await stalePick(p, '[data-dsel="sda"]', 'Take sda out of the selection');
+    assert.deepEqual(await sel('diskSel'), {mid: 'lx', names: ['nvme0n1']});
+    await stalePick(p, '[data-dsel="sda"]', 'Pin sda');
+    assert.deepEqual(await tpinsWith(p, 'disk|lx', ['sda']), ['sda']);
+    await p.eval(`(() => { S.metric = 'net'; S.ifView = 'each'; save(); renderAll(); refreshNow(); return true; })()`);
+    await p.waitFor(`document.querySelector('[data-isel="docker0"]')`);
+    await stalePick(p, '[data-isel="eth0"]', 'See what runs on eth0');
+    assert.deepEqual(await sel('ifSel'), {mid: 'lx', names: ['eth0']});
+    await stalePick(p, '[data-isel="docker0"]', 'Add docker0 to the selection');
+    assert.deepEqual(await sel('ifSel'), {mid: 'lx', names: ['eth0', 'docker0']});
+    await stalePick(p, '[data-isel="docker0"]', 'Pin docker0');
+    assert.deepEqual(await tpinsWith(p, 'net|lx', ['docker0']), ['docker0']);
+    assert.deepEqual(await sel('diskSel'), {mid: 'lx', names: ['nvme0n1']});
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});

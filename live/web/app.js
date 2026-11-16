@@ -2429,14 +2429,17 @@ function copyText(text, what){
 const termOk = n => n.kind === 'machine' ? (n.agent === 'local' || !!n.ssh) : (n.kind === 'service' || n.kind === 'container');
 function openTerminal(id, terminal){ api('/api/terminal', terminal ? {node:id, terminal} : {node:id}).then(r => toast(r.ok ? `Opened ${r.title} in ${r.terminal}` : (r.error || 'Couldn’t open a terminal'))).catch(() => toast('Couldn’t reach Fleet')); }
 function goNode(id, view){ S.view = view; select(id); if (view === 'details'){ S.detailsDocked = false; save(); lastMainHTML = ''; renderAll(); } }
+// Tiles redraw on every poll (their numbers change) while the menu stays open, so an item keeps what its tile's
+// button stands for, not the button: the one the menu opened on is usually gone by the time a person picks (#292).
 // a tile's own pin button, as a menu item
-function pinItem(scope, label){ const b = scope && scope.querySelector('[data-tpin]'); if (!b) return null; const on = b.getAttribute('aria-pressed') === 'true'; return {label:(on ? 'Unpin ' : 'Pin ') + label, run:() => b.click()}; }
+function pinItem(scope, label){ const b = scope && scope.querySelector('[data-tpin]'); if (!b) return null; const on = b.getAttribute('aria-pressed') === 'true', spec = b.dataset.tpin; return {label:(on ? 'Unpin ' : 'Pin ') + label, run:() => toggleTilePin(spec)}; }
 // a tile's own select button: pick just it, or add it to (take it out of) the selection
 function selItems(btn, what){
   if (!btn) return [];
-  const on = btn.getAttribute('aria-pressed') === 'true';
-  return [{label:`See what runs on ${what}`, run:() => { if (!on || document.querySelectorAll(`[aria-pressed="true"][${[...btn.attributes].find(a => /^data-(lcpu|lgroup|gsel|dsel|isel)$/.test(a.name)).name}]`).length > 1) btn.click(); }},
-    ...(btn.matches('[data-lgroup], .lgbtn') ? [] : [{label:on ? `Take ${what} out of the selection` : `Add ${what} to the selection`, run:() => btn.dispatchEvent(new MouseEvent('click', {bubbles:true, metaKey:true, ctrlKey:true}))}])];
+  const on = btn.getAttribute('aria-pressed') === 'true', attr = [...btn.attributes].find(a => /^data-(lcpu|lgroup|gsel|dsel|isel)$/.test(a.name)).name, v = btn.getAttribute(attr);
+  const live = () => document.querySelector(`[${attr}="${CSS.escape(v)}"]`);
+  return [{label:`See what runs on ${what}`, run:() => { const b = live(); if (b && (!on || document.querySelectorAll(`[aria-pressed="true"][${attr}]`).length > 1)) b.click(); }},
+    ...(btn.matches('[data-lgroup], .lgbtn') ? [] : [{label:on ? `Take ${what} out of the selection` : `Add ${what} to the selection`, run:() => { const b = live(); if (b) b.dispatchEvent(new MouseEvent('click', {bubbles:true, metaKey:true, ctrlKey:true})); }}])];
 }
 function ctxFor(t){
   if (!t || !t.closest || t.closest('.ptbl thead th, #ctxmenu, #colmenu, input, textarea, select')) return null;
