@@ -307,11 +307,22 @@ def disk_info(procs, containers):
 
 
 # ---- Network: which interface each process talks through, and its TCP bytes (from ss -ti) ----
-def net_users(ifaddr):
-    users, cur = {}, None
-    for line in run(["ss", "-tinpH", "state", "established"], timeout=8).splitlines():
+# Bytes per open connection at the last reading ss answered (None before the first), and per process since.
+NET = {"conns": None, "pids": {}}
+
+
+def net_users(ifaddr, procs):
+    """Each process's interfaces and its TCP bytes so far, a counter that only grows: ss knows the bytes of
+    connections still open, so each one's growth since the last reading is added to its processes (a new
+    connection counts in full, one that closed keeps what it moved; the first reading only sets where
+    counting starts). A process's count goes when the process does."""
+    text = run(["ss", "-tinpH", "state", "established"], timeout=8)
+    prev, conns, total = NET["conns"], {}, NET["pids"]
+    users, cur, key = {}, None, ""
+    for line in text.splitlines():
         if line[:1] not in (" ", "\t"):
             addrs = [x for x in line.split() if ":" in x and not x.startswith("users:")]
+            key = " ".join(addrs[:2])
             ifn = ""
             if addrs:
                 ip = addrs[0].rsplit(":", 1)[0].strip("[]")
@@ -328,9 +339,19 @@ def net_users(ifaddr):
             sent = re.search(r"bytes_(?:sent|acked):(\d+)", line)
             got = re.search(r"bytes_received:(\d+)", line)
             b = (int(sent.group(1)) if sent else 0) + (int(got.group(1)) if got else 0)
-            for pid in cur:
-                users[pid]["b"] += b
+            conns[key] = b
+            if prev is not None:
+                grew = b - prev[key] if key in prev and b >= prev[key] else b
+                for pid in cur:
+                    total[pid] = total.get(pid, 0) + grew
             cur = None
+    if text.strip():  # no output: ss failed (or nothing is open), and the last baseline still holds
+        NET["conns"] = conns
+    live = {str(p[0]) for p in procs}
+    for pid in [pid for pid in total if pid not in live and pid not in users]:
+        del total[pid]
+    for pid, b in total.items():
+        users.setdefault(pid, {"ifs": [], "b": 0})["b"] = b
     return users
 
 
@@ -486,7 +507,7 @@ def snapshot():
                            "networks": c.get("Networks", ""), "rx": rx, "tx": tx})
     out["containers"] = containers
     try:
-        out["pnet"] = net_users(ifaddr)
+        out["pnet"] = net_users(ifaddr, procs)
     except Exception:
         out["pnet"] = {}
     try:

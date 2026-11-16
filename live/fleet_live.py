@@ -415,9 +415,9 @@ class Machine:
             g = gpu_by_pid.get(pid, 0.0)
             if cid and pid in pid_gpu:
                 cont_gk.setdefault(cid, set()).update("gpu%d" % i for i, v in pid_gpu[pid].items() if v > 0)
-            pn = pnet.get(str(pid)) or {}
+            pn = pnet.get(str(pid)) or {}  # a process the collector doesn't list has moved nothing (b counts from 0)
             row = [pid, ppid, comm, user, state, c, rss / GB, d, g, threads, cmd, "", lastcpu, sorted(pid_gpu.get(pid, {})), list(pdisks.get(str(pid), [])),
-                   list(pn.get("ifs", [])), self.rate("pn.%d" % pid, pn.get("b", 0), t) / MB if pn else 0.0]
+                   list(pn.get("ifs", [])), self.rate("pn.%d" % pid, pn.get("b", 0), t) / MB]
             procs.append(row)
             by_pid[pid] = row
             u = [c, rss / GB, g, d, 0.0]
