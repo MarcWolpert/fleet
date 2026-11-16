@@ -263,14 +263,17 @@ function readThemeFile(text, fileName){
     if (!win && !g('sideBar.background', 'activityBar.background')) throw new Error('it has no editor colours (it may only point at another theme file)');
     const isDark = dark !== null ? dark : themeLum(themeFlat(win || g('sideBar.background', 'activityBar.background'), '#000000')) < 0.4;
     if (win) c.win = win;
-    // the frame: the darkest of the title bar, activity bar, side bar and tab strip (lightest, in a light theme)
+    // In a light theme a bar is used only if it is close to the editor (1.5:1 at most), so the text, which reads at
+    // 7:1 on the cards, still reads on it; a dark or coloured bar (a classic activity bar, a blue title bar) is not.
+    const nearWin = x => !win || isDark || themeContrast(x, win) <= 1.5;
+    // the frame: the darkest of the title bar, activity bar, side bar and tab strip
     const frames = ['titleBar.activeBackground', 'activityBar.background', 'sideBar.background', 'editorGroupHeader.tabsBackground']
-      .map(k => cols[k]).filter(themeHex).map(x => themeFlat(x, win || (isDark ? '#000000' : '#ffffff')));
+      .map(k => cols[k]).filter(themeHex).map(x => themeFlat(x, win || (isDark ? '#000000' : '#ffffff'))).filter(nearWin);
     if (frames.length){
       const pick = frames.reduce((a, b) => (themeLum(a) <= themeLum(b)) ? a : b);
       if (!win || (isDark ? themeLum(pick) <= themeLum(themeFlat(win, '#000000')) : true)) c.chrome = pick;
     }
-    const side = g('sideBar.background'); if (side && win && side !== win) c.side = side;
+    const side = g('sideBar.background'); if (side && win && side !== win && nearWin(themeFlat(side, win))) c.side = side;
     const widget = g('editorWidget.background', 'editorHoverWidget.background', 'dropdown.background');
     if (widget && win && (isDark ? themeLum(themeFlat(widget, win)) > themeLum(themeFlat(win, '#000000')) : true)) c.card = themeFlat(widget, win);
     const ink = g('editor.foreground', 'foreground'); if (ink) c.ink = ink;

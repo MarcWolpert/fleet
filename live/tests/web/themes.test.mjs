@@ -85,6 +85,40 @@ test('a VS Code theme with comments and trailing commas imports, and only colour
   assert.deepEqual([f.dark, f.c.chrome, f.c.accent], [false, '#eeeeee', '#0055cc']);
 });
 
+// Text is painted on the frame (chrome and chrome-2: the page and the space bar), the main view (win), the side
+// bar (side) and the cards: the main text reads on all of them at 4.5:1, the quieter text (ink-2, ink-3) at 3:1.
+const SURFACES = ['chrome', 'chrome-2', 'win', 'side', 'card'];
+function readable(v, name){
+  for (const s of SURFACES) for (const [k, min] of [['ink', 4.5], ['ink-2', 3], ['ink-3', 3]])
+    assert.ok(themeContrast(v[k], v[s]) >= min, `${name}: ${k} on ${s} is ${themeContrast(v[k], v[s]).toFixed(2)}:1`);
+}
+
+test('a light VS Code theme takes its frame from a light bar, never a dark or coloured one', async t => {
+  const imp = (type, colors) => readThemeFile(JSON.stringify({name: 'Paper', type, colors}), 'paper.json');
+  const light = {'editor.background': '#ffffff', 'editor.foreground': '#333333'};
+  const cases = [
+    // the classic light theme: a light title bar and side bar, a dark activity bar → the darker of the light bars
+    ['dark activity bar', imp('light', {...light, 'sideBar.background': '#f3f3f3', 'titleBar.activeBackground': '#dddddd', 'activityBar.background': '#2c2c2c'}),
+      {win: '#ffffff', chrome: '#dddddd', side: '#f3f3f3', ink: '#333333'}],
+    // a coloured title bar over a light side bar → the side bar
+    ['coloured title bar', imp('light', {...light, 'sideBar.background': '#f3f3f3', 'titleBar.activeBackground': '#007acc'}),
+      {win: '#ffffff', chrome: '#f3f3f3', side: '#f3f3f3', ink: '#333333'}],
+    // the coloured title bar is the only bar → no frame from the file (Fleet derives one from the editor)
+    ['only a coloured title bar', imp('light', {...light, 'titleBar.activeBackground': '#007acc'}), {win: '#ffffff', ink: '#333333'}],
+    // every bar is dark, the side bar too → neither the frame nor the side bar comes from the file
+    ['all bars dark', imp('light', {...light, 'sideBar.background': '#252526', 'titleBar.activeBackground': '#3c3c3c', 'activityBar.background': '#2c2c2c'}),
+      {win: '#ffffff', ink: '#333333'}],
+    // control: a dark theme still takes its darkest bar, a coloured title bar or not
+    ['dark theme', imp('dark', {'editor.background': '#1e1e1e', 'editor.foreground': '#d4d4d4', 'sideBar.background': '#181818', 'titleBar.activeBackground': '#007acc', 'activityBar.background': '#2c2c2c'}),
+      {win: '#1e1e1e', chrome: '#181818', side: '#181818', ink: '#d4d4d4'}]
+  ];
+  for (const [what, th, c] of cases) await t.test(what, () => {
+    assert.deepEqual(th, {id: 'custom-paper', name: 'Paper', dark: what === 'dark theme', c});
+    readable(themeTokens(th).vars, what);
+  });
+  assert.equal(themeTokens(cases[2][1]).vars.chrome, '#f0f0f0');
+});
+
 test('Fleet is the default; Settings → Appearance picks a theme, applies it at once and saves it', async () => {
   const fx = fixture();
   const p = await open(fx);
