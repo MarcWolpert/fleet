@@ -184,5 +184,33 @@ class WholeRun(unittest.TestCase):
         self.assertEqual(nodes(m), {1: "m1/base", 500: "m1/base", 741: "m1/base/cron/0", 742: "m1/base/cron/0", 743: "m1/base/cron/0"})
 
 
+# systemctl list-timers --all --no-legend --no-pager, as collect_linux.py keeps it (the line before the unit names)
+LOGROTATE = {"timer": "logrotate.timer", "unit": "logrotate.service",
+             "line": "Mon 2026-11-16 00:00:00 PST 9h left Sun 2026-11-15 00:00:00 PST 14h ago"}
+APT_DAILY = {"timer": "apt-daily.timer", "unit": "apt-daily.service",
+             "line": "Mon 2026-11-16 06:12:40 PST 15h left Sun 2026-11-15 07:44:02 PST 6h ago"}
+
+
+class Timers(unittest.TestCase):
+    """A timer's service runs as its own unit: its processes are the timer's, under the timer's node."""
+
+    def m(self):
+        return derive(HOST + [
+            proc(800, 1, "logrotate", "/usr/sbin/logrotate /etc/logrotate.conf", 0.5, unit="logrotate.service"),
+            proc(801, 800, "gzip", "gzip", 0.25, unit="logrotate.service"),
+            proc(820, 1, "nginx", "nginx: master process /usr/sbin/nginx", 0.25, unit="nginx.service"),  # a service with no timer: Base
+        ], cron=[A_SH], timers=[LOGROTATE, APT_DAILY])
+
+    def test_the_timer_that_runs_is_running(self):
+        self.assertEqual(jobs(self.m()), [("a.sh", False, IDLE), ("logrotate", True, [0.75, 0.0, 0.0, 0.0, 0.0]), ("apt-daily", False, IDLE)])
+
+    def test_its_processes_are_under_the_timer(self):
+        self.assertEqual(nodes(self.m()), {1: "m1/base", 500: "m1/base", 600: "m1/base", 800: "m1/base/cron/1", 801: "m1/base/cron/1",
+                                           820: "m1/base"})
+
+    def test_base_keeps_the_rest(self):
+        self.assertEqual(base(self.m()), [0.75, 0.0, 0.0, 0.0, 0.0], "sshd and nginx")
+
+
 if __name__ == "__main__":
     unittest.main()
