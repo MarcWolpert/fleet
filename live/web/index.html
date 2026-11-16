@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-<script>try{var t=JSON.parse(localStorage.getItem('fleet-theme')||'null');if(t&&t.vars){var st=document.documentElement.style;for(var k in t.vars)if(/^#[0-9a-f]{6,8}$/i.test(t.vars[k]))st.setProperty('--'+k,t.vars[k]);st.colorScheme=t.dark?'dark':'light';}}catch(e){}</script>
+<script>try{var t=JSON.parse(localStorage.getItem('fleet-theme')||'null');if(t&&t.vars){var st=document.documentElement.style;for(var k in t.vars)if(/^#[0-9a-f]{6,8}$/i.test(t.vars[k]))st.setProperty('--'+k,t.vars[k]);st.colorScheme=t.dark?'dark':'light';if(/^(protan|deutan|tritan|mono)$/.test(t.cvd||''))document.documentElement.dataset.cvd=t.cvd;if(t.hc)document.documentElement.classList.add('hc');}}catch(e){}</script>
 <style>
 :root{--os-linux:#f6be2c;--os-windows:#3d9bff;--os-macos:var(--ink-2);--os-macos-ink:var(--panel);
   color-scheme: dark;
@@ -703,6 +703,21 @@ button.sdot{border:0;padding:0;cursor:pointer;position:relative;font:inherit}
 button.sdot::after{content:'';position:absolute;inset:-7px}
 button.sdot:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
 .sdot[aria-pressed="false"]{background:transparent;box-shadow:inset 0 0 0 1.5px var(--ink-3)}
+/* colour vision (#219): statuses differ in shape too (live a dot, offline a square, stale a diamond, connecting a ring) */
+html[data-cvd] .sdot.offline{border-radius:1.5px}
+html[data-cvd] .sdot.stale{border-radius:1px;transform:rotate(45deg) scale(.86)}
+html[data-cvd] .sdot.connecting{background:transparent;box-shadow:inset 0 0 0 2px var(--stale)}
+/* higher contrast (#220) */
+html.hc :focus-visible{outline:3px solid var(--accent)!important;outline-offset:2px}
+html.hc .sdot{width:9px;height:9px}
+html.hc .spark polyline,html.hc .graph polyline{stroke-width:2}
+html.hc .card,html.hc .row.sel,html.hc .btn,html.hc .seg{border-color:var(--line-2)}
+html.hc .sub,html.hc .facts{color:var(--ink-2)}
+.access{display:flex;flex-wrap:wrap;align-items:flex-end;gap:10px 18px;margin-top:14px}
+.access label{display:flex;flex-direction:column;gap:5px;font-size:11.5px;color:var(--ink-3)}
+.access label.chk{flex-direction:row;align-items:center;gap:8px;font-size:13px;color:var(--ink);padding-bottom:7px}
+.access select{background:var(--side);border:1px solid var(--line-2);border-radius:8px;padding:7px 9px;color:var(--ink);font:13px var(--sans)}
+.access .sub{flex:1 1 100%;margin:0}
 .vmlook{display:flex;flex-direction:column;gap:10px;margin-top:10px}.vmlook>div{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.vmlook .sub{font-size:12px;color:var(--ink-3);flex:1 1 260px;min-width:0}
 .vmtag{font:600 9.5px/1 var(--sans);letter-spacing:.04em;color:var(--ink-3);border:1px solid var(--line-2);border-radius:4px;padding:1px 3px;margin-left:3px;vertical-align:1px}
 .autoc-btn span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:150px}

@@ -132,6 +132,36 @@ function themeEnsure(c, bg, min, to){ let x = c; for (let t = 0.1; themeContrast
 
 /* ---------- a theme → its tokens ---------- */
 const THEME_FALLBACK = FLEET_THEMES[0].c;
+// Colour vision (#219): one colour-blind palette per light or dark theme, checked with the dataviz validator: every pair
+// of workload types, of statuses (and of group kinds, which also differ by icon and name) stays OKLab ΔE ≥ 8 apart
+// under simulated protanopia, deuteranopia and tritanopia, and ≥ 15 for typical vision. Monochromacy: shades of grey.
+const CVD_SAFE = {
+  dark: {'t-base':'#c9c9ce', 't-compose':'#3d8bfd', 't-container':'#bd8400', 't-vm':'#dc267f', run:'#3d8bfd', warn:'#dc267f', stale:'#bd8400',
+    'g-fleet':'#3d8bfd', 'g-flotilla':'#dc267f', 'g-division':'#bd8400', 'g-section':'#ffe08a', 'g-squadron':'#1d4f9e', 'g-taskforce':'#ffb3d4'},
+  light: {'t-base':'#b9b9bf', 't-compose':'#2a6fd6', 't-container':'#b07400', 't-vm':'#c8226f', run:'#2a6fd6', warn:'#c8226f', stale:'#b07400',
+    'g-fleet':'#2a6fd6', 'g-flotilla':'#c8226f', 'g-division':'#b07400', 'g-section':'#0d3a80', 'g-squadron':'#6e0a3a', 'g-taskforce':'#e0b25a'}};
+const CVD_MONO = {
+  dark: {'t-base':'#63636a', 't-compose':'#f2f2f4', 't-container':'#b8b8be', 't-vm':'#8a8a90', run:'#f2f2f4', warn:'#8a8a90', stale:'#b8b8be',
+    'g-fleet':'#f2f2f4', 'g-flotilla':'#b8b8be', 'g-division':'#8a8a90', 'g-section':'#d9d9dd', 'g-squadron':'#a1a1a7', 'g-taskforce':'#72727a'},
+  light: {'t-base':'#c4c4ca', 't-compose':'#1c1c20', 't-container':'#56565d', 't-vm':'#8d8d94', run:'#1c1c20', warn:'#8d8d94', stale:'#56565d',
+    'g-fleet':'#1c1c20', 'g-flotilla':'#56565d', 'g-division':'#8d8d94', 'g-section':'#3a3a40', 'g-squadron':'#71717a', 'g-taskforce':'#a6a6ad'}};
+const CVD_KINDS = ['protan', 'deutan', 'tritan', 'mono'];
+// A theme's tokens with the reader's needs on top: o.cvd (a colour vision kind) and o.contrast (higher contrast, #220:
+// secondary text as strong as body text, the faintest at 7:1 or more, stronger lines). Every value stays a plain hex.
+function themeAccess(tk, o){
+  o = o || {};
+  const vars = Object.assign({}, tk.vars);
+  if (CVD_KINDS.includes(o.cvd)) Object.assign(vars, (o.cvd === 'mono' ? CVD_MONO : CVD_SAFE)[tk.dark ? 'dark' : 'light']);
+  if (o.contrast){
+    const ink = themeFlat(vars.ink, vars.win), win = vars.win;
+    vars['ink-2'] = ink;
+    vars['ink-3'] = themeEnsure(themeMix(ink, win, 0.2), win, 7, ink);
+    vars.line = themeMix(win, ink, 0.32);
+    vars['line-2'] = themeMix(win, ink, 0.5);
+    vars.track = themeMix(win, ink, 0.18);
+  }
+  return Object.assign({}, tk, {vars});
+}
 function themeTokens(th){
   const given = (th && th.c) || {}, c = {};
   // only well-formed colours get through, written back out as plain hex (they go into style attributes)
