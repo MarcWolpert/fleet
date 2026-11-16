@@ -122,3 +122,13 @@ test('the text filter narrows the groups first', async () => {
     assert.deepEqual((await view(p)).pids, [102]);
   } finally { await p.close(); }
 });
+
+test('the docked Details panel collapses its groups the same way', async () => {
+  const p = await browser.page(fixture(), {ui: ui({detailsDocked: true, group: 'state'})});
+  try {
+    await p.waitFor(`document.querySelectorAll('.dpanel .ptbl tr.gh').length > 0`);
+    assert.deepEqual(await view(p), {heads: ['running', 'sleeping', 'idle'], pids: [], note: 'Showing 0 of 12 processes. 12 are in 3 collapsed groups; open a group to see them.'});
+    await p.click(header('running'));
+    assert.deepEqual((await view(p)).pids, [104, 105, 106]);
+  } finally { await p.close(); }
+});

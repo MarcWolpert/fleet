@@ -304,7 +304,8 @@ function renderToolbar(){
   }
   $('crumbs').innerHTML = crumbs;
   $('metrics').innerHTML = METRICS.map(m => `<button type="button" data-metric="${m.id}" aria-pressed="${S.view === 'overview' && S.metric===m.id}">${m.label}</button>`).join('')
-    + `<span class="sep-pill" aria-hidden="true"></span><button type="button" data-details="1" aria-pressed="${S.view === 'details'}">Details</button>`;
+    + `<span class="sep-pill" aria-hidden="true"></span><button type="button" class="dpill" data-details="1" draggable="true" aria-pressed="${S.view === 'details' || !!S.detailsDocked}" title="Open Details, or drag it onto the right half to dock it as a panel"><span class="grip">${icon('grip')}</span>Details</button>`
+    + `<button type="button" class="dockbtn${S.detailsDocked ? ' on' : ''}" ${S.detailsDocked ? 'data-closedock' : 'data-dock'}="1" aria-pressed="${!!S.detailsDocked}" aria-label="${S.detailsDocked ? 'Undock Details' : 'Dock Details beside the overview'}" title="${S.detailsDocked ? 'Close the docked Details panel' : 'Dock Details as a panel on the right'}">${icon('panelright')}</button>`;
   document.querySelectorAll('[data-tree]').forEach(b => b.setAttribute('aria-pressed', String(S.tree === b.dataset.tree)));
   renderFilterBar();
 }
@@ -647,7 +648,7 @@ function selectionFilters(m, all, gpuProcs){
 function shownDetails(){
   const n = S.sel === 'fleet' ? null : nodes[S.sel];
   if (S.view === 'details') return n || roots[0] || null;
-  return null;
+  return S.detailsDocked && S.tree !== 'network' ? n : null;
 }
 // Left of the view pills: what Details is filtered to, each part with its own ×, plus Clear all; and a
 // dot on the CPU, GPU and Disk I/O pills while their selection filters Details.
@@ -746,7 +747,9 @@ function detailsView(n, docked){
   }
   const hasGroups = (m && m.groups || []).length > 1;
   const groupNote = Object.keys(gnames).length && all && !all.some(p => p[12] >= 0) && S.group === 'cpugroup' && !FS.some(f => f.kind === 'cpu') ? noteHTML('This OS doesn’t report which processor a process last ran on, so CPU groups can’t be assigned per process here.') : '';
-  const head = `<div class="hero"><span class="tile" style="background:var(--track);color:var(--ink-2)">${icon('chip')}</span><div><h1>Details · ${esc(n.name)}${FS.length ? ' · ' + esc(FS.map(f => f.label).join(' · ')) : ''}</h1><div class="facts"><span>${all ? list.length + ' processes' : 'loading…'}</span><span>on ${esc(m ? m.name : '')}</span>${hasGroups ? `<span>CPU groups: ${esc(m.groups.map(g => g.name).join(', '))}</span>` : ''}</div></div></div>`;
+  const head = docked
+    ? `<div class="dhead"><div class="dtitle"><b>Details · ${esc(n.name)}${FS.length ? ' · ' + esc(FS.map(f => f.label).join(' · ')) : ''}</b><span>${all ? list.length + ' processes' : 'loading…'} on ${esc(m ? m.name : '')}</span></div><button type="button" class="iconbtn" data-undock="1" title="Pop out to the full Details view" aria-label="Pop out Details">${icon('layers')}</button><button type="button" class="iconbtn" data-closedock="1" title="Close the Details panel" aria-label="Close the Details panel">${icon('x', 2.2)}</button></div>`
+    : `<div class="hero"><span class="tile" style="background:var(--track);color:var(--ink-2)">${icon('chip')}</span><div><h1>Details · ${esc(n.name)}${FS.length ? ' · ' + esc(FS.map(f => f.label).join(' · ')) : ''}</h1><div class="facts"><span>${all ? list.length + ' processes' : 'loading…'}</span><span>on ${esc(m ? m.name : '')}</span>${hasGroups ? `<span>CPU groups: ${esc(m.groups.map(g => g.name).join(', '))}</span>` : ''}</div></div><button type="button" class="btn" data-dock="1" style="margin-left:auto" title="Or drag the Details pill onto the right side">${icon('layers')}Dock to the right</button></div>`;
   const tools = `<div class="dtools"><input type="search" id="pfilter" placeholder="Filter by name, PID, user or command" value="${esc(S.filter)}" aria-label="Filter processes"><label>Group by <select id="pgroup"><option value="none"${S.group==='none'?' selected':''}>Nothing</option><option value="cpugroup"${S.group==='cpugroup'?' selected':''}>CPU group (CCD, P-/E-cores)</option><option value="owner"${S.group==='owner'?' selected':''}>Where it runs (tree node)</option><option value="user"${S.group==='user'?' selected':''}>User</option><option value="state"${S.group==='state'?' selected':''}>Status</option></select></label>${groupBy ? `<span class="gall"><button type="button" class="btn" data-gall="open">Expand all</button><button type="button" class="btn" data-gall="close">Collapse all</button></span>` : ''}</div>`;
   const thead = `<tr>${COLS.map(c => `<th class="${c.l ? 'l' : ''}" data-colk="${c.k}" ${c.k === SORT.k ? `aria-sort="${dir < 0 ? 'descending' : 'ascending'}"` : ''}><button type="button" data-sort="${c.k}" title="Sort; right-click to choose and arrange columns">${c.label}${c.k === SORT.k ? (dir < 0 ? ' ↓' : ' ↑') : ''}</button></th>`).join('')}</tr>`;
   const applied = FS.filter(f => f.apply);
@@ -783,13 +786,18 @@ function renderMain(){
     else if (a.dataset) for (const k of ['select', 'mode', 'sort', 'pin', 'netsel', 'gtoggle', 'gall']) if (a.dataset[k] != null){ refocus = `[data-${k}="${CSS.escape(a.dataset[k])}"]`; break; }
   }
   let html;
+  let panel = '';
   if (S.tree === 'network' && S.view !== 'details') html = netView();
   else {
     const n = S.sel === 'fleet' ? null : nodes[S.sel];
     if (S.view === 'details') html = detailsView(n || (roots[0] || {id:'', name:'—'}));
     else html = !n ? fleetView() : n.kind === 'machine' ? machineView(n) : n.kind === 'cronfolder' ? cronFolderView(n) : n.kind === 'cron' ? cronView(n) : n.hist ? leafView(n) : groupView(n);
+    if (S.detailsDocked && S.view !== 'details')
+      panel = n ? detailsView(n, true) : `<div class="dhead"><div class="dtitle"><b>Details</b><span>Select a machine or anything in it to see its processes.</span></div><button type="button" class="iconbtn" data-closedock="1" aria-label="Close the Details panel">${icon('x', 2.2)}</button></div>`;
   }
-  const full = `<div class="wrap">${html}</div>`;
+  const full = panel
+    ? `<div class="split"><div class="wrap">${html}</div><aside class="dpanel" style="width:${Math.round(S.dockW || 560)}px" aria-label="Details panel"><div class="dresize" data-resize="1" role="separator" aria-orientation="vertical" aria-label="Resize the Details panel" title="Drag to resize"></div>${panel}</aside></div>`
+    : `<div class="wrap">${html}</div>`;
   if (full === lastMainHTML) return;
   lastMainHTML = full;
   main.innerHTML = full;
@@ -897,7 +905,10 @@ document.addEventListener('click', e => {
   const sp = e.target.closest('[data-space]'); if (sp){ goSpace(sp.dataset.space); return; }
   const se = e.target.closest('[data-select]'); if (se){ select(se.dataset.select); return; }
   const me = e.target.closest('[data-metric]'); if (me){ S.metric = me.dataset.metric; S.view = 'overview'; save(); renderAll(); refreshNow(); return; }
-  const de = e.target.closest('[data-details]'); if (de){ S.view = 'details'; if (S.tree === 'network') S.tree = 'machines'; save(); renderAll(); refreshNow(); return; }
+  const de = e.target.closest('[data-details]'); if (de){ if (!S.dockTipShown){ S.dockTipShown = true; setTimeout(() => toast('Tip: drag Details onto the right half, or press the panel button beside it, to dock it next to the overview.'), 400); } S.view = 'details'; S.detailsDocked = false; if (S.tree === 'network') S.tree = 'machines'; save(); renderAll(); refreshNow(); return; }
+  if (e.target.closest('[data-dock]')){ dockDetails(); return; }
+  if (e.target.closest('[data-undock]')){ S.detailsDocked = false; S.view = 'details'; save(); renderAll(); return; }
+  if (e.target.closest('[data-closedock]')){ S.detailsDocked = false; save(); renderAll(); return; }
   const gt = e.target.closest('[data-gtoggle]');
   if (gt){ const g = gt.dataset.gtoggle, cur = (S.groupOpen && S.groupOpen[S.group]) || []; setGroupsOpen(S.group, cur.includes(g) ? cur.filter(x => x !== g) : cur.concat([g])); return; }
   const ga = e.target.closest('[data-gall]');
@@ -931,7 +942,7 @@ async function refreshNow(){
     if (S.sel !== 'fleet' && !nodes[S.sel]) { /* keep selection; it may come back */ }
     const n = S.sel === 'fleet' ? null : nodes[S.sel];
     const jobs = [];
-    if (S.view === 'details' && (n || roots[0])){ const mid = procMachineFor(n || roots[0]); if (mid) jobs.push(fetch('/api/procs?machine=' + encodeURIComponent(mid), {cache:'no-store'}).then(r => r.json()).then(d => { PROCS = {machine:mid, list:d.procs || [], gpuProcs:!!d.gpu_procs}; })); }
+    if ((S.view === 'details' || (S.detailsDocked && n && S.tree !== 'network')) && (n || roots[0])){ const mid = procMachineFor(n || roots[0]); if (mid) jobs.push(fetch('/api/procs?machine=' + encodeURIComponent(mid), {cache:'no-store'}).then(r => r.json()).then(d => { PROCS = {machine:mid, list:d.procs || [], gpuProcs:!!d.gpu_procs}; })); }
     if (S.tree === 'network') jobs.push(fetch('/api/net', {cache:'no-store'}).then(r => r.json()).then(d => { NET = d; }));
     await Promise.all(jobs.map(p => p.catch(() => null)));
     fails = 0; $('conn').hidden = true; $('live').hidden = false;
@@ -1068,6 +1079,61 @@ function setField(t){
 $('sheet').addEventListener('input', e => setField(e.target));
 $('sheet').addEventListener('change', e => { setField(e.target); });
 $('sheet').addEventListener('keydown', e => { if (e.key === 'Escape'){ e.preventDefault(); closeSettings(); } });
+
+
+/* ---------- Details panel: drag the Details pill to the right to dock it ---------- */
+function dockDetails(){ S.detailsDocked = true; if (S.view === 'details') S.view = 'overview'; if (S.tree === 'network') S.tree = 'machines'; save(); lastMainHTML = ''; renderAll(); refreshNow(); }
+// The drop zone lives exactly as long as the drag. Docking re-renders the bar and detaches the dragged
+// pill, so its dragend never reaches the document (and a poll can do the same mid-drag): every way a
+// drag can end calls endDrag(), and no mouse events fire during a drag, so the first one after it does too.
+let dragging = false;
+const DRAG_TYPE = 'application/x-fleet-details';
+function showDockZone(){
+  dragging = true;
+  if ($('dockzone')) return;
+  const z = document.createElement('div'); z.id = 'dockzone'; z.className = 'dockzone'; z.innerHTML = `<div>${icon('layers')}<b>Drop to dock Details here</b><span>It stays beside whatever you select</span></div>`;
+  document.body.appendChild(z);
+}
+function endDrag(){ dragging = false; const z = $('dockzone'); if (z) z.remove(); }
+const ourDrag = e => !!(e.dataTransfer && Array.from(e.dataTransfer.types || []).includes(DRAG_TYPE));
+document.addEventListener('dragstart', e => {
+  const pill = e.target.closest && e.target.closest('[data-details]'); if (!pill) return;
+  e.dataTransfer.setData('text/plain', 'fleet-details');
+  e.dataTransfer.setData(DRAG_TYPE, '1');
+  e.dataTransfer.effectAllowed = 'move';
+  pill.addEventListener('dragend', endDrag, {once:true});  // still heard if the pill is detached meanwhile
+  showDockZone();
+});
+document.addEventListener('dragover', e => {
+  if (!dragging){ if (!ourDrag(e)) return; showDockZone(); }  // the same drag came back into the window
+  const z = $('dockzone'); if (!z) return;
+  const over = e.clientX > innerWidth * 0.55;
+  z.classList.toggle('hot', over);
+  if (over){ e.preventDefault(); e.dataTransfer.dropEffect = 'move'; }
+});
+document.addEventListener('drop', e => {
+  if (!dragging) return;
+  e.preventDefault();
+  const dock = e.clientX > innerWidth * 0.55;
+  endDrag();
+  if (dock) dockDetails();
+});
+document.addEventListener('dragend', endDrag);
+document.addEventListener('dragleave', e => {
+  if (dragging && !e.relatedTarget && (e.clientX <= 0 || e.clientY <= 0 || e.clientX >= innerWidth || e.clientY >= innerHeight)) endDrag();
+});
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && (dragging || $('dockzone'))) endDrag(); });
+window.addEventListener('blur', () => { if (dragging || $('dockzone')) endDrag(); });
+['mousemove', 'pointermove', 'pointerdown'].forEach(t => document.addEventListener(t, e => { if ((t === 'pointerdown' || e.buttons === 0) && (dragging || $('dockzone'))) endDrag(); }, true));
+// Resize the docked panel by its left edge.
+document.addEventListener('pointerdown', e => {
+  const h = e.target.closest && e.target.closest('[data-resize]'); if (!h) return;
+  e.preventDefault();
+  const panel = h.parentElement; h.setPointerCapture(e.pointerId);
+  const move = ev => { const w = Math.max(360, Math.min(innerWidth - 520, innerWidth - ev.clientX - 8)); panel.style.width = w + 'px'; S.dockW = w; };
+  const up = () => { h.removeEventListener('pointermove', move); h.removeEventListener('pointerup', up); save(); lastMainHTML = ''; };
+  h.addEventListener('pointermove', move); h.addEventListener('pointerup', up);
+});
 
 
 /* ---------- Details columns: a layout per detail type ---------- */
