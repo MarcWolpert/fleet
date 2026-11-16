@@ -36,6 +36,14 @@ async function settings(p){
 // a file chosen in the Import theme picker
 const choose = (p, name, text) => p.eval(`(() => { const dt = new DataTransfer(); dt.items.add(new File([${JSON.stringify(text)}], ${JSON.stringify(name)}, {type: 'application/json'})); const f = document.getElementById('themefile'); f.files = dt.files; f.dispatchEvent(new Event('change', {bubbles: true})); return true; })()`);
 
+// Text is painted on the frame (chrome and chrome-2: the page and the space bar), the main view (win), the side
+// bar (side) and the cards: the main text reads on all of them at 4.5:1, the quieter text (ink-2, ink-3) at 3:1.
+const SURFACES = ['chrome', 'chrome-2', 'win', 'side', 'card'];
+function readable(v, name){
+  for (const s of SURFACES) for (const [k, min] of [['ink', 4.5], ['ink-2', 3], ['ink-3', 3]])
+    assert.ok(themeContrast(v[k], v[s]) >= min, `${name}: ${k} on ${s} is ${themeContrast(v[k], v[s]).toFixed(2)}:1`);
+}
+
 test('every built-in theme sets every token, as plain colours, with readable text', () => {
   assert.equal(FLEET_THEMES.length, 22);
   assert.equal(FLEET_THEMES[0].id, 'fleet');
@@ -46,6 +54,7 @@ test('every built-in theme sets every token, as plain colours, with readable tex
     assert.deepEqual(Object.keys(vars), plain(THEME_KEYS), th.name);
     for (const [k, v] of Object.entries(vars)) assert.match(v, /^#[0-9a-f]{6}([0-9a-f]{2})?$/, `${th.name} ${k}`);
     for (const k of ['ink', 'ink-2', 'ink-3']) assert.ok(themeContrast(vars[k], vars.card) >= 4.5, `${th.name}: ${k} on cards`);
+    readable(vars, th.name);
     assert.ok(themeContrast(vars['on-accent'], vars['accent-bg']) >= 3.5, `${th.name}: button text`);
   }
   // Fleet is exactly the stylesheet's own colours
@@ -69,29 +78,38 @@ test('a VS Code theme with comments and trailing commas imports, and only colour
     },
     "tokenColors": [{"scope": ["comment"], "settings": {"foreground": "#808090"}}, {"scope": "constant.numeric", "settings": {"foreground": "#e07040"}},],
   }`, 'sunset-color-theme.json');
-  assert.equal(th.id, 'custom-sunset-drive');
-  assert.equal(th.name, 'Sunset Drive');
-  assert.equal(th.dark, true);
-  assert.equal(th.c.win, '#202030');
-  assert.equal(th.c.chrome, '#1a1a28');
-  assert.equal(th.c['accent-bg'], '#c04080');
-  assert.equal(th.c['t-compose'], '#4080e0');
-  assert.equal(th.c['t-vm'], '#e07040');
-  assert.equal(th.c.warn, undefined);
+  // every colour it gives, where Fleet puts it, and nothing else (the warning colour isn't a colour, so no warn)
+  assert.deepEqual(th, {id: 'custom-sunset-drive', name: 'Sunset Drive', dark: true, c: {win: '#202030', chrome: '#1a1a28', side: '#1a1a28',
+    ink: '#e0d0f0', accent: '#c04080', 'accent-bg': '#c04080', run: '#50c080', 't-base': '#808090', 't-compose': '#4080e0', 't-container': '#50c080', 't-vm': '#e07040'}});
+  readable(themeTokens(th).vars, th.name);
+  // colours with transparency come in as they look on the editor
+  assert.deepEqual(readThemeFile(JSON.stringify({name: 'Glass', type: 'dark', colors: {'editor.background': '#1e1e1e', 'editor.foreground': '#ffffffcc',
+    descriptionForeground: '#ffffff80', 'sideBar.background': '#00000040'}}), 'glass.json'),
+    {id: 'custom-glass', name: 'Glass', dark: true, c: {win: '#1e1e1e', chrome: '#161616', side: '#161616', ink: '#d2d2d2', 'ink-3': '#8f8f8f'}});
   assert.throws(() => ctx.T.readThemeFile('{"name": "x", "include": "./base.json"}', 'x.json'), e => /no editor colours/.test(e.message));
   assert.throws(() => ctx.T.readThemeFile('not json', 'x.json'), e => /JSON/.test(e.message));
   // a Fleet theme names tokens directly
-  const f = readThemeFile('{"name": "Paper", "type": "light", "colors": {"chrome": "#eeeeee", "ink": "#222222", "accent": "#0055cc"}}', 'paper.json');
-  assert.deepEqual([f.dark, f.c.chrome, f.c.accent], [false, '#eeeeee', '#0055cc']);
+  const f = readThemeFile('{"name": "Paper", "type": "light", "colors": {"chrome": "#eeeeee", "ink": "#222222", "accent": "#0055cc", "win": "nope", "bogus": "#123456"}}', 'paper.json');
+  assert.deepEqual(f, {id: 'custom-paper', name: 'Paper', dark: false, c: {chrome: '#eeeeee', ink: '#222222', accent: '#0055cc'}});
 });
 
-// Text is painted on the frame (chrome and chrome-2: the page and the space bar), the main view (win), the side
-// bar (side) and the cards: the main text reads on all of them at 4.5:1, the quieter text (ink-2, ink-3) at 3:1.
-const SURFACES = ['chrome', 'chrome-2', 'win', 'side', 'card'];
-function readable(v, name){
-  for (const s of SURFACES) for (const [k, min] of [['ink', 4.5], ['ink-2', 3], ['ink-3', 3]])
-    assert.ok(themeContrast(v[k], v[s]) >= min, `${name}: ${k} on ${s} is ${themeContrast(v[k], v[s]).toFixed(2)}:1`);
-}
+test('a theme of just a frame and a text colour gets every other token by the rules (worked out by hand)', () => {
+  const {dark, vars} = themeTokens({dark: true, c: {chrome: '#000000', ink: '#ffffff'}});
+  assert.equal(dark, true);
+  // the three group colours that are searched for (farthest from the others) are checked by the #25 test
+  const searched = ['g-fleet', 'g-section', 'g-taskforce'];
+  assert.deepEqual(vars, {
+    // the frame and the surfaces: chrome moved toward the text by 4.5, 7.6, 10.3, 4, 6.3, 9.4, 1.8 and 2.7%
+    chrome: '#000000', 'chrome-2': '#0b0b0b', 'chrome-hover': '#131313', 'chrome-act': '#1a1a1a', win: '#0a0a0a', side: '#101010', card: '#181818',
+    pop: '#050505', panel: '#070707', 'card-2': '#212121', press: '#2c2c2c', edge: '#000000',
+    // the text, 20 and 38% toward the frame; lines and hovers are the text at 5, 8, 14 and 6.3% alpha
+    ink: '#ffffff', 'ink-2': '#cccccc', 'ink-3': '#9e9e9e', hover: '#ffffff0d', line: '#ffffff14', 'line-2': '#ffffff24', track: '#ffffff10',
+    // Fleet's accent, state and series colours (all readable on the cards already); the ↓/↑ labels 40% toward the text
+    accent: '#78aeed', 'accent-bg': '#78aeed', 'on-accent': '#000000', sel: '#78aeed30', run: '#33d17a', warn: '#ffa66b', stale: '#f6d32d',
+    't-base': '#8a8984', 't-compose': '#3987e5', 't-container': '#199e70', 't-vm': '#d95926', rd: '#88b7ef', wr: '#e89b7d',
+    'g-flotilla': '#d95926', 'g-division': '#199e70', 'g-squadron': '#3987e5', ...Object.fromEntries(searched.map(k => [k, vars[k]]))});
+  for (const k of searched){ assert.match(vars[k], /^#[0-9a-f]{6}$/, k); assert.ok(themeContrast(vars[k], vars.card) >= 2.2, k); }
+});
 
 test('a light VS Code theme takes its frame from a light bar, never a dark or coloured one', async t => {
   const imp = (type, colors) => readThemeFile(JSON.stringify({name: 'Paper', type, colors}), 'paper.json');
@@ -239,7 +257,7 @@ test('Import theme adds the theme, applies it, saves it, and it can be removed a
     await p.waitFor(`true`);
     const saved = lastPrefs(fx);
     assert.equal(saved.theme, 'custom-deep-ocean');
-    assert.equal(saved.themes[0].c.win, '#0f1c2e');
+    assert.deepEqual(saved.themes, [{id: 'custom-deep-ocean', name: 'Deep Ocean', dark: true, c: {win: '#0f1c2e', ink: '#cfe3ff', accent: '#3fa7ff', 'accent-bg': '#3fa7ff'}}]);
     await p.eval(`(() => { document.querySelector('[data-rmtheme="custom-deep-ocean"]').click(); return true; })()`);
     assert.equal(await p.eval(SWATCHES + '.length'), 22);
     assert.equal(await p.eval(VAR('chrome')), '#141416');
