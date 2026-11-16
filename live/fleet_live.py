@@ -2141,7 +2141,19 @@ def inspect_mac(pid):
 # A remote Mac runs exactly the reader this Mac runs: its source, with the helpers it calls, streamed to
 # `python3 -` (the system Python 3.9 of a Mac with the Command Line Tools is enough).
 MAC_HELPERS = ["run", "size_bytes", "docker_pct", "netio", "parse_cputime", "fmt_secs", "human_cron", "JOB_GUARDS", "JOB_WRAPPERS", "JOB_ARGS", "job_name",
-               "mac_gpu_stats"]
+               "mac_gpu_stats", "MAC_TOOL_DIRS", "mac_path"]
+# Where Docker Desktop (per user, then system-wide), OrbStack, Rancher Desktop and Homebrew (Colima's docker) put the
+# docker CLI. sshd on a Mac runs a command with PATH=/usr/bin:/bin:/usr/sbin:/sbin and no login shell (path_helper
+# runs only from /etc/zprofile), so none of them is on it; every other tool the reader calls is (#299).
+MAC_TOOL_DIRS = ("~/.docker/bin", "~/.orbstack/bin", "~/.rd/bin", "/opt/homebrew/bin", "/usr/local/bin")
+
+
+def mac_path(path, home):
+    """PATH with MAC_TOOL_DIRS after what it already has (a directory already on it keeps its place)."""
+    have = [d for d in (path or "").split(":") if d]
+    return ":".join(have + [d for d in (home + d[1:] if d.startswith("~") else d for d in MAC_TOOL_DIRS) if d not in have])
+
+
 MAC_IMPORTS = "import base64, collections, ctypes, ctypes.util, glob, json, os, platform, plistlib, re, shlex, shutil, subprocess, sys, tempfile, threading, time, zlib\n"  # the server's own imports but tomllib (3.11+)
 
 
@@ -2164,6 +2176,7 @@ def mac_collector_script(interval):
     parts = [MAC_IMPORTS, "MB = %r\nGB = %r\nINTERVAL = %s\n" % (MB, GB, interval)] + own_source(*(MAC_HELPERS + ["MacCollector"]))
     parts.append('''
 ONCE = globals().get("ONCE", False)
+os.environ["PATH"] = mac_path(os.environ.get("PATH", ""), os.path.expanduser("~"))   # sshd's short PATH has no docker
 c = MacCollector()
 while True:
     began = time.time()

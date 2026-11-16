@@ -2,7 +2,7 @@
 """Macs over SSH (#181): the server streams the same Mac reader it uses for this Mac, built from its own source,
 and summarises its readings the same way. These tests run that streamed script through `python3 -` on this Mac
 (the way sshd runs it there), also with the system Python 3.9 a fresh Mac has after xcode-select --install."""
-import ast, base64, builtins, importlib.util, json, os, subprocess, sys, unittest, zlib
+import ast, base64, builtins, importlib.util, json, os, shutil, stat, subprocess, sys, tempfile, unittest, zlib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 LIVE = os.path.dirname(HERE)
@@ -34,6 +34,30 @@ class StreamedMacCollector(unittest.TestCase):
                 self.assertGreater(view["ncpu"], 0)
                 self.assertTrue(any(p[0] == p[0] for p in view["procs"]))
                 self.assertEqual(len(view["cap"]), 5)
+
+    def test_docker_is_found_under_sshds_short_path(self):
+        # sshd on a Mac runs `python3 -` with PATH=/usr/bin:/bin:/usr/sbin:/sbin and no login shell, so path_helper
+        # never adds where Docker Desktop, OrbStack, Colima or Rancher put the docker CLI (#299). A stand-in docker in
+        # the account's ~/.docker/bin (Docker Desktop's per-user place) must still be found and read.
+        home = tempfile.mkdtemp(prefix="fleet-machome-")
+        self.addCleanup(shutil.rmtree, home, True)
+        os.makedirs(os.path.join(home, ".docker", "bin"))
+        fake = os.path.join(home, ".docker", "bin", "docker")
+        with open(fake, "w") as f:
+            f.write("#!/bin/sh\ncase \"$1\" in\n"
+                    "ps) echo '{\"ID\":\"0123456789abcdef\",\"Names\":\"blog-web-1\",\"Image\":\"nginx:1\",\"Status\":\"Up 2 minutes\","
+                    "\"Labels\":\"com.docker.compose.project=blog,com.docker.compose.service=web\",\"Networks\":\"blog_default\"}' ;;\n"
+                    "stats) echo '{\"ID\":\"0123456789ab\",\"CPUPerc\":\"50.00%\",\"MemUsage\":\"512MiB / 2GiB\",\"NetIO\":\"0B / 0B\",\"BlockIO\":\"0B / 0B\"}' ;;\n"
+                    "esac\n")
+        os.chmod(fake, os.stat(fake).st_mode | stat.S_IXUSR)
+        env = {"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "HOME": home, "LANG": "C"}
+        for py in PYTHONS:
+            with self.subTest(python=py):
+                r = subprocess.run([py, "-"], input=("ONCE = True\n" + fl.mac_collector_script(1)).encode(), capture_output=True, timeout=120, env=env)
+                self.assertEqual(r.returncode, 0, r.stderr.decode()[-800:])
+                raw = json.loads(zlib.decompress(base64.b64decode(r.stdout.decode().strip().splitlines()[-1])))
+                self.assertEqual([(c["id"], c["name"], c["project"], c["service"], c["u"][0]) for c in raw["containers"]],
+                                 [("0123456789ab", "blog-web-1", "blog", "web", 0.5)])
 
     def test_a_process_looked_at_over_ssh(self):
         for py in PYTHONS:
@@ -71,6 +95,21 @@ class StreamedSource(unittest.TestCase):
                     "flock -n /tmp/x.lock /usr/local/bin/a.sh", "nice -n 19 /home/me/backup.sh", "/usr/local/bin/sync.py --all"):
             with self.subTest(cmd=cmd):
                 self.assertEqual(ns["job_name"](cmd), fl.job_name(cmd))
+
+
+class MacPath(unittest.TestCase):
+    """Where the streamed Mac reader looks for the docker CLI, after what PATH already has (#299)."""
+
+    def test_sshds_path_gets_every_place_docker_lives(self):
+        self.assertEqual(fl.mac_path("/usr/bin:/bin:/usr/sbin:/sbin", "/Users/someone"),
+                         "/usr/bin:/bin:/usr/sbin:/sbin:/Users/someone/.docker/bin:/Users/someone/.orbstack/bin:/Users/someone/.rd/bin"
+                         ":/opt/homebrew/bin:/usr/local/bin")
+
+    def test_a_place_already_on_path_keeps_its_place(self):
+        self.assertEqual(fl.mac_path("/usr/local/bin:/usr/bin:/bin::", "/Users/someone"),
+                         "/usr/local/bin:/usr/bin:/bin:/Users/someone/.docker/bin:/Users/someone/.orbstack/bin:/Users/someone/.rd/bin:/opt/homebrew/bin")
+        self.assertEqual(fl.mac_path("", "/Users/someone"),
+                         "/Users/someone/.docker/bin:/Users/someone/.orbstack/bin:/Users/someone/.rd/bin:/opt/homebrew/bin:/usr/local/bin")
 
 
 class Config(unittest.TestCase):
