@@ -1,0 +1,139 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+"""#125: every Windows GPU is named by its own LUID. The GPU counters key each adapter by LUID; the collector
+also sends DXGI's adapter list (LUID, name, VRAM size), so names, VRAM totals and nvidia-smi's numbers land
+on the adapter they belong to, and GPUs are ordered by VRAM size, which doesn't change between readings.
+Readings are hand-made in collect_windows.ps1's shape.
+
+Run: python3 -m unittest discover -s live/tests -p 'test_*.py'   (or live/tests/run.sh)
+"""
+import os
+import sys
+import unittest
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+import fleet_live  # noqa: E402
+
+MIB, GB = 1024 * 1024, 2 ** 30
+L3090, LA2000, LIGPU, LAMD = "0x00000000_0x0000d1a3", "0x00000000_0x0000e4f2", "0x00000000_0x00010b7c", "0x00000000_0x00011c20"
+# nvidia-smi --query-gpu=index,name,utilization.gpu,memory.used,memory.total,utilization.memory,temperature.gpu,power.draw,
+#   power.limit,clocks.gr,clocks.max.gr,clocks.mem,fan.speed,utilization.encoder,utilization.decoder
+NV3090 = "0, NVIDIA GeForce RTX 3090, 3, 300, 24576, 1, 35, 25.50, 350.00, 210, 2100, 405, 30, 0, 0"
+NVA2000 = "1, NVIDIA RTX A2000, 10, 1500, 6138, 5, 45, 15.20, 70.00, 600, 2100, 6000, 0, 0, 0"
+
+
+def reading(gpus, adapters, nvidia=(), video=(), gproc=()):
+    procs = [[pid, 4, name, 0.1, 1 << 20, 3, 0, "C:\\" + name] for pid, name in ((10, "python.exe"), (11, "dwm.exe"), (12, "explorer.exe"))]
+    return {"t": 1000.0, "ncpu": 4, "lcpus": [{"n": n, "pct": 5.0, "mhz": 3000} for n in range(4)], "topo": [], "gpus": gpus,
+            "adapters": adapters, "nvidia": list(nvidia), "videoNames": list(video), "gproc": list(gproc), "procs": procs, "ifs": [],
+            "wsl": [], "containers": [], "dstats": [], "tasks": [], "mem": [16 << 30, 8 << 30], "diskBps": 0, "os": "Windows"}
+
+
+def counted(luid, used, util, eng):
+    return {"luid": luid, "util": util, "dedicated": used, "shared": 10 * MIB, "eng": eng}
+
+
+def derive(r, m=None):
+    return (m or fleet_live.Machine({"id": "w", "name": "w", "os": "windows"}, 3)).derive_windows(r)
+
+
+def two_nvidia(a2000_used, rtx3090_used, order):
+    """win-desktop's shape: an idle RTX 3090 (nvidia-smi index 0) beside an A2000 that drives the displays.
+    The counters list adapters in `order`; DXGI lists the A2000 first (it has the primary display)."""
+    c = {LA2000: counted(LA2000, a2000_used, 10.0, {"3D": 10.0}), L3090: counted(L3090, rtx3090_used, 3.0, {"Compute_0": 3.0})}
+    return reading([c[x] for x in order],
+                   [{"luid": "0x00000000_0x0000E4F2", "name": "NVIDIA RTX A2000", "vram": 6438256640.0},   # DXGI's LUID, upper case
+                    {"luid": L3090, "name": "NVIDIA GeForce RTX 3090", "vram": 25390219264.0}],
+                   nvidia=[NV3090, NVA2000], video=["NVIDIA RTX A2000", "NVIDIA GeForce RTX 3090"],
+                   gproc=[[10, L3090, 3.0], [11, LA2000, 10.0]])
+
+
+RTX3090 = {"name": "NVIDIA GeForce RTX 3090", "mem": "24 GB VRAM", "util": 3.0,
+           "m": {"util": 3.0, "compute": 3.0, "vram": 300.0 * MIB, "shared": 10.0 * MIB, "memctl": 1.0, "temp": 35.0, "power": 25.5,
+                 "clock": 210.0, "memclock": 405.0, "fan": 30.0, "encode": 0.0, "decode": 0.0, "3d": 0.0, "copy": 0.0},
+           "lim": {"vram": 24576.0 * MIB, "power": 350.0, "clock": 2100.0}}
+A2000 = {"name": "NVIDIA RTX A2000", "mem": "6 GB VRAM", "util": 10.0,
+         "m": {"util": 10.0, "3d": 10.0, "vram": 1500.0 * MIB, "shared": 10.0 * MIB, "memctl": 5.0, "temp": 45.0, "power": 15.2,
+               "clock": 600.0, "memclock": 6000.0, "fan": 0.0, "encode": 0.0, "decode": 0.0, "copy": 0.0},
+         "lim": {"vram": 6138.0 * MIB, "power": 70.0, "clock": 2100.0}}
+
+
+class NamedByLuid(unittest.TestCase):
+    def test_each_adapter_gets_its_own_name_vram_and_nvidia_numbers(self):
+        v = derive(two_nvidia(1500 * MIB, 300 * MIB, [LA2000, L3090]))   # the A2000 has more VRAM in use: the collector lists it first
+        self.assertEqual(v["gpus"], [RTX3090, A2000])
+        self.assertEqual({p[0]: p[13] for p in v["procs"]}, {10: [0], 11: [1], 12: []}, "each process on the GPU it runs on")
+        self.assertEqual(v["host"][2], 13.0)
+        self.assertEqual(v["cap"][2], 200.0)
+
+    def test_the_order_holds_when_vram_use_crosses_over(self):
+        m = fleet_live.Machine({"id": "w", "name": "w", "os": "windows"}, 3)
+        first = derive(two_nvidia(1500 * MIB, 300 * MIB, [LA2000, L3090]), m)
+        r = two_nvidia(1500 * MIB, 20000 * MIB, [L3090, LA2000])   # a job fills the 3090: now the collector lists it first
+        r["t"] = 1003.0
+        later = derive(r, m)
+        shown = lambda v: [(g["name"], g["m"]["vram"] / MIB, g["m"]["temp"]) for g in v["gpus"]]
+        self.assertEqual(shown(first), [("NVIDIA GeForce RTX 3090", 300.0, 35.0), ("NVIDIA RTX A2000", 1500.0, 45.0)])
+        self.assertEqual(shown(later), [("NVIDIA GeForce RTX 3090", 20000.0, 35.0), ("NVIDIA RTX A2000", 1500.0, 45.0)])
+        self.assertEqual({p[0]: p[13] for p in first["procs"]}, {10: [0], 11: [1], 12: []})
+        self.assertEqual({p[0]: p[13] for p in later["procs"]}, {10: [0], 11: [1], 12: []})
+
+    def test_amd_beside_an_intel_igpu_without_nvidia_smi(self):
+        # Win32_VideoController lists the iGPU first; it has no dedicated memory in use, so the counters list only the AMD card.
+        v = derive(reading([counted(LAMD, 2048 * MIB, 40.0, {"3D": 40.0, "Copy": 2.0})],
+                           [{"luid": LIGPU, "name": "Intel(R) UHD Graphics 770", "vram": 134217728.0},
+                            {"luid": LAMD, "name": "AMD Radeon RX 7900 XTX", "vram": 25753026560.0}],
+                           video=["Intel(R) UHD Graphics 770", "AMD Radeon RX 7900 XTX"], gproc=[[10, LAMD, 40.0], [11, LIGPU, 5.0]]))
+        self.assertEqual(v["gpus"], [{"name": "AMD Radeon RX 7900 XTX", "mem": "24 GB VRAM", "util": 40.0,
+                                      "m": {"util": 40.0, "3d": 40.0, "copy": 2.0, "vram": 2048.0 * MIB, "shared": 10.0 * MIB, "encode": 0.0, "decode": 0.0},
+                                      "lim": {"vram": 25753026560.0}}])
+        self.assertEqual({p[0]: p[13] for p in v["procs"]}, {10: [0], 11: [], 12: []}, "the iGPU isn't one of this host's GPUs")
+
+    def test_one_adapter_arrives_as_a_bare_object(self):
+        # ConvertTo-Json writes a one-item array as the item itself.
+        r = reading(counted(L3090, 300 * MIB, 3.0, {"Compute_0": 3.0}), {"luid": L3090, "name": "NVIDIA GeForce RTX 3090", "vram": 25390219264.0},
+                    gproc=[[10, L3090, 3.0]])
+        r["nvidia"], r["videoNames"] = NV3090, "NVIDIA GeForce RTX 3090"
+        self.assertEqual(derive(r)["gpus"], [RTX3090])
+
+
+class WithoutAdapterList(unittest.TestCase):
+    """DXGI couldn't be read: a name or nvidia-smi row is used only where it can't belong to another adapter."""
+
+    def test_two_adapters_are_not_named_by_position(self):
+        r = two_nvidia(1500 * MIB, 300 * MIB, [LA2000, L3090])
+        r["adapters"] = []
+        v = derive(r)
+        self.assertEqual([(g["name"], g["mem"], g["lim"]) for g in v["gpus"]], [("GPU 0", "", {}), ("GPU 1", "", {})])
+        self.assertEqual([g["m"]["vram"] for g in v["gpus"]], [300.0 * MIB, 1500.0 * MIB], "a stable order: by LUID")
+        self.assertNotIn("temp", v["gpus"][0]["m"])
+        self.assertNotIn("temp", v["gpus"][1]["m"])
+        self.assertEqual({p[0]: p[13] for p in v["procs"]}, {10: [0], 11: [1], 12: []})
+
+    def test_a_lone_adapter_takes_the_lone_nvidia_row(self):
+        r = reading([counted(L3090, 300 * MIB, 3.0, {"Compute_0": 3.0})], [], nvidia=[NV3090],
+                    video=["NVIDIA GeForce RTX 3090", "Microsoft Remote Display Adapter"], gproc=[[10, L3090, 3.0]])
+        self.assertEqual(derive(r)["gpus"], [RTX3090])
+
+    def test_a_lone_adapter_without_nvidia_smi_takes_a_lone_video_name(self):
+        r = reading([counted(LAMD, 2048 * MIB, 40.0, {"3D": 40.0})], [], video=["AMD Radeon RX 7900 XTX"], gproc=[[10, LAMD, 40.0]])
+        self.assertEqual([(g["name"], g["mem"]) for g in derive(r)["gpus"]], [("AMD Radeon RX 7900 XTX", "")])
+        r["videoNames"] = ["AMD Radeon RX 7900 XTX", "Parsec Virtual Display Adapter"]
+        self.assertEqual([(g["name"], g["mem"]) for g in derive(r)["gpus"]], [("GPU 0", "")], "two names: either could be it")
+
+    def test_no_gpu(self):
+        v = derive(reading([], [], video=["Microsoft Basic Display Adapter"]))
+        self.assertEqual((v["gpus"], v["gpu_procs"], v["cap"][2]), ([], False, 0.0))
+
+
+class Collector(unittest.TestCase):
+    """collect_windows.ps1 sends DXGI's adapter list, with each LUID written the way the GPU counters write it."""
+
+    def test_the_collector_reads_dxgi_and_sends_adapters(self):
+        src = open(os.path.join(os.path.dirname(fleet_live.__file__), "collect_windows.ps1"), encoding="utf-8").read()
+        has = {k: k in src for k in ("CreateDXGIFactory1", '"0x{0:x8}_0x{1:x8}|{2}|{3}"', "$o.adapters = $adapters", "Sort-Object { - $adMem[$_] }")}
+        self.assertEqual(has, {"CreateDXGIFactory1": True, '"0x{0:x8}_0x{1:x8}|{2}|{3}"': True, "$o.adapters = $adapters": True,
+                               "Sort-Object { - $adMem[$_] }": False}, "the server orders GPUs, by VRAM size")
+
+
+if __name__ == "__main__":
+    unittest.main()

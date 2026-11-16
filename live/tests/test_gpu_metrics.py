@@ -89,7 +89,10 @@ class WindowsGpus(unittest.TestCase):
                       {"luid": "0x0_0x107e7", "util": 0.0, "dedicated": 4096, "shared": 8192, "eng": {"3d": 0.0}}],
              # index,name,utilization.gpu,memory.used,memory.total,utilization.memory,temperature.gpu,power.draw,power.limit,clocks.gr,clocks.max.gr,clocks.mem,fan.speed,utilization.encoder,utilization.decoder
              "nvidia": ["0, NVIDIA GeForce RTX 3090, 13, 1654, 24576, 3, 27, 36.70, 350.00, 210, 2100, 405, 0, 0, 5"],
-             "videoNames": ["NVIDIA GeForce RTX 3090", "Microsoft Basic Render Driver"], "gproc": []}
+             "videoNames": ["NVIDIA GeForce RTX 3090", "Microsoft Basic Render Driver"], "gproc": [],
+             # DXGI's adapter list (#125): names go by LUID, whichever way its digits are padded
+             "adapters": [{"luid": "0x00000000_0x000107e7", "name": "Microsoft Basic Render Driver", "vram": 0.0},
+                          {"luid": "0x00000000_0x0000F563", "name": "NVIDIA GeForce RTX 3090", "vram": 25390219264.0}]}
         gpus, _ = machine().windows_gpus(r)
         self.assertEqual([g["name"] for g in gpus], ["NVIDIA GeForce RTX 3090", "Microsoft Basic Render Driver"])
         self.assertEqual(gpus[0]["m"], {"util": 12.5, "3d": 12.5, "copy": 1.0, "decode": 5.0, "encode": 0.0, "compute": 7.0, "vram": 1734344704,

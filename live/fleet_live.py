@@ -201,8 +201,8 @@ def stop_collectors(fleet):
 def ps_compact(script):
     """A PowerShell script without full-line comments, blank lines or indentation: -EncodedCommand doubles
     its size (UTF-16) and grows it by a third (base64), and a Windows command line holds 32,767 characters.
-    (The collector's one here-string is C#, where indentation doesn't matter and no line starts with #;
-    its closing '@ must start a line, which stripping keeps true.)"""
+    (The collector's here-strings are C#, where indentation doesn't matter and no line starts with #;
+    each closing '@ must start a line, which stripping keeps true.)"""
     return "\n".join(l.strip() for l in script.splitlines() if l.strip() and not l.strip().startswith("#"))
 
 
@@ -633,15 +633,36 @@ class Machine:
 
     # ------------------------------------------------------------ windows
     def windows_gpus(self, r):
-        """Adapters ordered by dedicated memory, each with its engines by type (the GPU Engine counters),
-        dedicated and shared memory, and NVIDIA's own numbers from nvidia-smi when present."""
+        """Adapters by VRAM size, largest first, each named by its LUID (DXGI's adapter list), with its engines by
+        type (the GPU Engine counters), dedicated and shared memory, and NVIDIA's own numbers from the nvidia-smi
+        row of the same name (two cards of one model pair in order: nvidia-smi's index, DXGI's)."""
         nv = [[x.strip() for x in line.split(",")] for line in r.get("nvidia", []) if line and line.count(",") >= 4]
-        names = [x[1] for x in nv] + [n for n in r.get("videoNames", []) if not any(n == x[1] for x in nv)]
         num = lambda x: float(x) if re.match(r"^-?\d+(\.\d+)?$", x or "") else None
+        key = lambda s: tuple(int(x, 16) for x in s.split("_")) if re.match(r"^0x[0-9a-fA-F]+_0x[0-9a-fA-F]+$", str(s)) else str(s).lower()
+        dx = {}   # LUID -> (DXGI's position, name, VRAM bytes)
+        for i, a in enumerate(r.get("adapters", [])):
+            dx.setdefault(key(a.get("luid")), (i, str(a.get("name") or ""), float(a.get("vram") or 0)))
+        info = lambda g: dx.get(key(g.get("luid")))
+        lone = len(r.get("gpus", [])) == 1 and not dx   # no adapter list: a lone adapter can only be the one nvidia-smi or Windows names
+        free = list(nv)
+        def nv_row(name):
+            for x in free:
+                if x[1].lower() == name.lower():
+                    free.remove(x)
+                    return x
+            return []
         gpus, luid_idx = [], {}
-        for i, g in enumerate(r.get("gpus", [])):
+        order = lambda g: (-info(g)[2], info(g)[0], "") if info(g) else (0.0, len(dx), str(g.get("luid")).lower())
+        for i, g in enumerate(sorted(r.get("gpus", []), key=order)):
             luid_idx[g["luid"]] = i
-            row = nv[i] if i < len(nv) else []
+            a, videos = info(g), r.get("videoNames", [])
+            if a:
+                name, size, row = a[1] or "GPU %d" % i, a[2], nv_row(a[1])
+            elif lone:
+                row = nv[0] if len(nv) == 1 else []
+                name, size = row[1] if row else videos[0] if len(videos) == 1 else "GPU 0", 0.0
+            else:
+                name, size, row = "GPU %d" % i, 0.0, []
             total = num(row[4]) if len(row) > 4 else None
             m = {"util": min(100.0, g.get("util", 0))}
             for e, v in (g.get("eng") or {}).items():
@@ -654,8 +675,8 @@ class Machine:
                 m["vram"] = g["dedicated"]
             if g.get("shared") is not None:
                 m["shared"] = g["shared"]
-            if total:
-                lim["vram"] = total * MIB
+            if total or size:
+                lim["vram"] = total * MIB if total else size
             if len(row) >= 15:   # index,name,util,mem used,total,mem util,temp,power,power limit,clock,max clock,mem clock,fan,enc,dec
                 for k, j in (("memctl", 5), ("temp", 6), ("power", 7), ("clock", 9), ("memclock", 11), ("fan", 12)):
                     if num(row[j]) is not None:
@@ -668,8 +689,8 @@ class Machine:
                         lim[k] = num(row[j])
             for k in ("3d", "copy", "encode", "decode"):   # Task Manager's four, there even when idle
                 m.setdefault(k, 0.0)
-            gpus.append({"name": names[i] if i < len(names) else "GPU %d" % i, "mem": "%d GB VRAM" % round(total / 1024) if total else "",
-                         "util": m["util"], "m": m, "lim": lim})
+            vram = lim.get("vram", 0)
+            gpus.append({"name": name, "mem": "%d GB VRAM" % round(vram / GB) if vram >= GB / 2 else "", "util": m["util"], "m": m, "lim": lim})
         gpu_by_pid = {}
         for pid, luid, pct in r.get("gproc", []):
             if luid in luid_idx:
@@ -677,7 +698,7 @@ class Machine:
         return gpus, gpu_by_pid
 
     def derive_windows(self, r):
-        for k in ("lcpus", "topo", "gpus", "nvidia", "videoNames", "gproc", "procs", "ifs", "wsl", "containers", "dstats", "tasks", "disks"):
+        for k in ("lcpus", "topo", "gpus", "adapters", "nvidia", "videoNames", "gproc", "procs", "ifs", "wsl", "containers", "dstats", "tasks", "disks"):
             r[k] = aslist(r.get(k))
         for a in r["ifs"]:
             a["addrs"] = [x for x in aslist(a.get("addrs")) if isinstance(x, str) and x]  # an empty list arrives as {}
