@@ -29,17 +29,17 @@ class RestartSelf(unittest.TestCase):
     --open becomes --open-if-unseen (the window is reopened only if it's gone), every other argument stays."""
 
     def restart(self, system, executable, script, argv):
-        calls = mock.Mock()
+        calls, fleet = mock.Mock(), types.SimpleNamespace(machines={})   # no machine turned off: FLEET_OFF is empty (#208)
         abspath = ntpath.abspath if system == "Windows" else os.path.abspath
         with mock.patch.object(fleet_live, "save_state", calls.save_state), mock.patch.object(fleet_live, "stop_collectors", calls.stop_collectors), \
                 mock.patch.object(fleet_live.os, "execv", calls.execv), mock.patch.object(fleet_live.platform, "system", return_value=system), \
                 mock.patch.object(fleet_live.os.path, "abspath", abspath), mock.patch.object(fleet_live, "__file__", script), \
                 mock.patch.object(fleet_live.sys, "executable", executable), mock.patch.object(fleet_live.sys, "argv", argv), \
-                contextlib.redirect_stdout(io.StringIO()) as out:
-            fleet_live.restart_self("the fleet", "Fleet changed")
+                mock.patch.dict(fleet_live.os.environ), contextlib.redirect_stdout(io.StringIO()) as out:
+            fleet_live.restart_self(fleet, "Fleet changed")
         self.assertEqual(out.getvalue(), "Fleet changed; restarting\n")
         self.assertEqual([c[0] for c in calls.mock_calls], ["save_state", "stop_collectors", "execv"])
-        self.assertEqual(calls.save_state.call_args.args, ("the fleet",))
+        self.assertEqual(calls.save_state.call_args.args, (fleet,))
         return calls.execv.call_args.args
 
     def test_on_windows_every_argument_with_a_space_is_quoted(self):

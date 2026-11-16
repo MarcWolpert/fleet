@@ -53,12 +53,17 @@ def fleet_of(*cfgs):
 def build(f, mid, r, record=False):
     """What the server does for one reading: derive the machine's view, then build the tree from it."""
     m = f.machines[mid]
-    m.view = m.derive_linux(r)
+    m.got(m.derive_linux(r))   # a reading arrives
     f.specs = {mid: f.machine_spec(m, record=record)}
     return f.specs[mid]
 
 
 ZEROS = [0.0] * fleet_live.H
+
+
+def cron(f, mid, i):
+    """The node of job i of the machine's job list: named by what the job is (#109), not by its place."""
+    return fleet_live.job_ids(mid, f.machines[mid].view["jobs"])[i]
 
 
 class ProcsNode(unittest.TestCase):
@@ -92,17 +97,18 @@ class ProcsNode(unittest.TestCase):
         return {p[0]: p[10] for p in self.f.api_procs("nas")["procs"]}
 
     def test_the_tree_has_one_job_per_cron_line_and_timer(self):
-        spec = build(self.f, "nas", self.r)
+        spec, c = build(self.f, "nas", self.r), lambda i: cron(self.f, "nas", i)
         self.assertEqual([(j["id"], j["name"], j["cmd"]) for j in spec["baseCron"]],
-                         [("nas/base/cron/0", "rsync-backup.sh", "/usr/local/bin/rsync-backup.sh"),
-                          ("nas/base/cron/1", "backup", "backup.service"), ("nas/base/cron/2", "certbot", "certbot.service")])
+                         [(c(0), "rsync-backup.sh", "/usr/local/bin/rsync-backup.sh"),
+                          (c(1), "backup", "backup.service"), (c(2), "certbot", "certbot.service")])
 
     def test_every_process_is_on_the_node_it_runs_in(self):
-        self.assertEqual(self.nodes(), {
+        n, c = self.nodes(), lambda i: cron(self.f, "nas", i)
+        self.assertEqual(n, {
             1: "nas/base", 200: "nas/base", 320: "nas/base",   # the OS and its daemons, cron itself included
-            201: "nas/base/cron/0",                              # a crontab line cron is running
-            300: "nas/base/cron/1", 301: "nas/base/cron/1",      # backup.timer's backup.service, child process too
-            310: "nas/base/cron/2",                              # certbot.timer's certbot.service
+            201: c(0),                                           # a crontab line cron is running
+            300: c(1), 301: c(1),                                # backup.timer's backup.service, child process too
+            310: c(2),                                           # certbot.timer's certbot.service
             400: "nas/compose/media/jellyfin", 401: "nas/containers/redis",
             402: "nas/base",                                     # its container isn't running any more
             500: "nas/vms/win11",                                # a VM Fleet only sees from the host
@@ -112,18 +118,18 @@ class ProcsNode(unittest.TestCase):
     def test_a_unit_no_timer_starts_stays_in_base_system(self):
         self.r["timers"] = [t for t in self.r["timers"] if t["unit"] != "backup.service"]
         n = self.nodes()
-        self.assertEqual({pid: n[pid] for pid in (300, 301, 310)}, {300: "nas/base", 301: "nas/base", 310: "nas/base/cron/1"})
+        self.assertEqual({pid: n[pid] for pid in (300, 301, 310)}, {300: "nas/base", 301: "nas/base", 310: cron(self.f, "nas", 1)})
 
     def test_a_cron_line_and_a_timer_with_the_same_text_stay_apart(self):
         # A crontab line whose command reads like a unit name doesn't claim that unit's processes.
         self.r["cron"].append({"sched": "@daily", "cmd": "backup.service", "src": "crontab"})
         build(self.f, "nas", self.r)
+        c = lambda i: cron(self.f, "nas", i)
         jobs = {j["id"]: (j["name"], j["src"]) for j in self.f.specs["nas"]["baseCron"]}
-        self.assertEqual(jobs, {"nas/base/cron/0": ("rsync-backup.sh", "crontab"), "nas/base/cron/1": ("backup.service", "crontab"),
-                                "nas/base/cron/2": ("backup", "systemd"), "nas/base/cron/3": ("certbot", "systemd")})
+        self.assertEqual(jobs, {c(0): ("rsync-backup.sh", "crontab"), c(1): ("backup.service", "crontab"),
+                                c(2): ("backup", "systemd"), c(3): ("certbot", "systemd")})
         n = self.nodes()
-        self.assertEqual({pid: n[pid] for pid in (201, 300, 301, 310)},
-                         {201: "nas/base/cron/0", 300: "nas/base/cron/2", 301: "nas/base/cron/2", 310: "nas/base/cron/3"})
+        self.assertEqual({pid: n[pid] for pid in (201, 300, 301, 310)}, {201: c(0), 300: c(2), 301: c(2), 310: c(3)})
 
 
 class NestedVms(unittest.TestCase):
@@ -142,7 +148,7 @@ class NestedVms(unittest.TestCase):
                        ("nas", reading([proc(1, 0, "systemd"), proc(501, 1, "qemu-system-x86", vm="lab", cmd="qemu-system-x86_64 -name guest=lab")],
                                        vms=[{"name": "lab", "ifs": []}]))):
             m = self.f.machines[mid]
-            m.view = m.derive_linux(r)
+            m.got(m.derive_linux(r))   # a reading arrives
         self.f.specs = {"nas": self.f.machine_spec(self.f.machines["nas"], record=False)}
 
     def test_every_machine_is_found_at_its_depth_and_nothing_else(self):
@@ -159,7 +165,8 @@ class NestedVms(unittest.TestCase):
 
     def test_a_machine_fleet_doesnt_know_or_has_no_reading_yet_has_no_processes(self):
         self.f.machines["inner"].view = None
-        self.assertEqual((self.f.api_procs("nope"), self.f.api_procs("inner")), ({"procs": []}, {"procs": []}))
+        # since #209 a machine Fleet knows answers ready: false until it has a reading (the page keeps what it shows)
+        self.assertEqual((self.f.api_procs("nope"), self.f.api_procs("inner")), ({"procs": []}, {"procs": [], "ready": False}))
 
 
 class ApiCpus(unittest.TestCase):
