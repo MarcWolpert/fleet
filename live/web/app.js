@@ -423,15 +423,24 @@ function groupsHierarchy(){
 function renderGroupsTree(){
   const {tops, kids} = groupsHierarchy(), q = TF.q.trim().toLowerCase(), rows = [];
   const hit = x => !q || x.g.name.toLowerCase().includes(q) || GKIND[x.n.gkind][1].includes(q) || kids(x).some(hit);
+  // a group with subgroups unfolds to them (open by default); one without unfolds to what's in it (folded by default)
   (function walk(list, d){ list.filter(hit).forEach(x => {
-    const ks = kids(x).filter(hit), folded = !q && !!(S.gfold && S.gfold[x.g.id]);
+    const ks = kids(x).filter(hit), f = S.gfold && S.gfold[x.g.id];
+    const folded = ks.length ? !q && !!f : f !== false;
     rows.push({x, d, ks, folded});
-    if (ks.length && !folded) walk(ks, d + 1);
+    if (folded) return;
+    if (ks.length) walk(ks, d + 1);
+    else x.n.children.slice().sort((a, b) => COLL.compare(a.name, b.name)).forEach(m => rows.push({m, d:d + 1}));
   }); })(tops, 0);
-  $('tree').innerHTML = rows.length ? rows.map(({x, d, ks, folded}) => {
+  const memberRow = (m, d) => `<div class="row ${m.kind} gonlymember${S.sel === m.id ? ' sel' : ''}" style="--d:${d}" role="treeitem" aria-level="${d + 1}" aria-selected="${S.sel === m.id}" data-select="${esc(m.id)}">`
+    + `<button type="button" class="chev leaf" tabindex="-1" aria-hidden="true">${icon('chev', 2.4)}</button><span class="ico" style="color:${colOf(m)}">${icon(m.kind === 'machine' ? m.tile || 'vm' : iconOf(m))}</span>`
+    + `<button type="button" class="nm" data-select="${esc(m.id)}">${esc(m.name)}</button><span class="tgk">${esc(kindLabel(m))}</span>`
+    + `<svg class="spark" data-spark="${esc(m.id)}" viewBox="0 0 60 16" preserveAspectRatio="none" aria-hidden="true"><polyline points="${sparkPts(m.series[S.metric], 60, 16)}" fill="none" stroke="${colOf(m)}" stroke-width="1.5" vector-effect="non-scaling-stroke"/></svg>`
+    + `<span class="val" data-val="${esc(m.id)}">${rowVal(m)}</span></div>`;
+  $('tree').innerHTML = rows.length ? rows.map(({x, m, d, ks, folded}) => {
+    if (m) return memberRow(m, d);
     const n = x.n, sel = S.sel === n.id;
-    const chev = ks.length ? `<button type="button" class="chev${folded ? '' : ' open'}" data-tgfold="${esc(x.g.id)}" aria-expanded="${!folded}" aria-label="${folded ? 'Unfold' : 'Fold'} ${esc(x.g.name)}">${icon('chev', 2.4)}</button>`
-      : `<button type="button" class="chev leaf" tabindex="-1" aria-hidden="true">${icon('chev', 2.4)}</button>`;
+    const chev = `<button type="button" class="chev${folded ? '' : ' open'}" data-tgfold="${esc(x.g.id)}" aria-expanded="${!folded}" aria-label="${folded ? 'Unfold' : 'Fold'} ${esc(x.g.name)}">${icon('chev', 2.4)}</button>`;
     const where = d === 0 && n.parent ? `<span class="tgw">on ${esc(hostOf(n).name)}</span>` : '';
     return `<div class="row division gonlyrow${sel ? ' sel' : ''}" style="--d:${d}" role="treeitem" aria-level="${d + 1}" ${ks.length ? `aria-expanded="${!folded}"` : ''} aria-selected="${sel}" data-select="${esc(n.id)}">`
       + chev + `<span class="ico" style="color:${n.color}">${icon(iconOf(n))}</span>`
@@ -1282,7 +1291,7 @@ function select(id){
 document.addEventListener('click', e => {
   if (e.target === $('tree')){ selectNone(); return; }
   // a group's chevron folds it to its header, or unfolds it as it was
-  const tf = e.target.closest('[data-tgfold]'); if (tf){ S.gfold = Object.assign({}, S.gfold, {[tf.dataset.tgfold]:!(S.gfold && S.gfold[tf.dataset.tgfold])}); save(); renderTree(); const b = document.querySelector(`[data-tgfold="${CSS.escape(tf.dataset.tgfold)}"]`); if (b) b.focus(); return; }
+  const tf = e.target.closest('[data-tgfold]'); if (tf){ S.gfold = Object.assign({}, S.gfold, {[tf.dataset.tgfold]:tf.getAttribute('aria-expanded') === 'true'}); save(); renderTree(); const b = document.querySelector(`[data-tgfold="${CSS.escape(tf.dataset.tgfold)}"]`); if (b) b.focus(); return; }
   // a group's header selects the group: its own all-up view (a fleet's is All machines for its members)
   const tgh = e.target.closest('#tree .tg-h');
   if (tgh && !e.target.closest('input, [data-pin], [data-unpin]') && S.tree !== 'network'){ const id = 'div:' + tgh.closest('.tgroup').dataset.tgroup; buildDivisions(); if (nodes[id]) select(id); return; }   // empty space in a tree: nothing selected, everything shown
@@ -2241,6 +2250,7 @@ function ctxFor(t){
       pinnable && {label:pinned ? 'Unpin' : 'Pin as a space', run:() => togglePin(n.id)},
       termOk(n) && {label:'Open a terminal', run:() => openTerminal(n.id)},
       ...groupMoveItems(n.id, tr.dataset.pk),
+      ...(n.kind === 'division' ? groupEditItems(n) : []),
       '—', {label:'Copy name', run:() => copyText(n.name, n.name)},
       n.kind === 'machine' && n.ssh && {label:'Copy SSH destination', run:() => copyText(n.ssh, 'the SSH destination')}]};
   }
@@ -2357,8 +2367,15 @@ function updGroup(key, id, f){
   all[key] = (all[key] || []).map(g => g.id === id ? (f ? f(g) : null) : g).filter(Boolean);
   PREFS = Object.assign({}, PREFS, {tgroups:all}); divisionsChanged(); savePrefs('the groups');
 }
+// a group's key in prefs.tgroups ('<scope>|<parent>'), from its id
+function groupKeyOf(id){ return Object.keys(PREFS.tgroups || {}).find(k => (PREFS.tgroups[k] || []).some(g => g.id === id)); }
+function groupEditItems(n){
+  const id = n.id.slice(4), key = groupKeyOf(id); if (!key) return [];
+  return ['—', {label:'Rename', run:() => renameGroup(key, id)}, {label:'Disband ' + GKIND[n.gkind || 'taskforce'][1], run:() => updGroup(key, id, null)}];
+}
 function renameGroup(key, id){
-  const n = document.querySelector(`#tree .tgroup[data-tgroup="${CSS.escape(id)}"] .tg-n`); if (!n) return;
+  // the group's header in the tree, or its row in Groups only
+  const n = document.querySelector(`#tree .tgroup[data-tgroup="${CSS.escape(id)}"] .tg-n`) || document.querySelector(`#tree .row[data-select="div:${CSS.escape(id)}"] .nm`); if (!n) return;
   const inp = document.createElement('input'); inp.className = 'tg-name'; inp.value = n.textContent; inp.setAttribute('aria-label', 'Group name');
   n.replaceWith(inp); inp.focus(); inp.select();
   let done = false;

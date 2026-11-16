@@ -72,7 +72,9 @@ test('it persists across a reload, and turning it off brings the normal tree bac
 test('a group\'s chevron folds away its subgroups (the same fold as its box in the normal tree)', async () => {
   const p = await open({groupsOnly: true});
   try {
-    assert.deepEqual(await p.eval(`[...document.querySelectorAll('#tree [data-tgfold]')].map(b => b.dataset.tgfold + ':' + b.getAttribute('aria-expanded'))`), ['gA:true'], 'only Lab has subgroups');
+    // every group has a chevron (#84): Lab's subgroups show by default; groups without subgroups start folded,
+    // and unfold to what's in them (see groupsonly-edit.test.mjs)
+    assert.deepEqual(await p.eval(`[...document.querySelectorAll('#tree [data-tgfold]')].map(b => b.dataset.tgfold + ':' + b.getAttribute('aria-expanded'))`), ['gB:false', 'gA:true', 'gC:false', 'gD:false']);
     await p.click('#tree [data-tgfold="gA"]');
     assert.deepEqual(await p.eval(ROWS), ['div:gB@0', 'div:gA@0', 'div:gD@0']);
     assert.deepEqual(await p.eval(`S.gfold`), {gA: true});
