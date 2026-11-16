@@ -2260,10 +2260,13 @@ const ibytes = b => b == null ? '—' : memText(b / 1073741824);
 const ibps = b => b == null ? '—' : rateText(b / 1e6);
 const perSec = v => v == null ? '—' : (v >= 100 ? Math.round(v).toLocaleString() : v >= 1 ? v.toFixed(1) : v > 0 ? '<1' : '0') + '/s';
 const kvRow = (k, v, title) => `<div class="kv"${title ? ` title="${esc(title)}"` : ''}><span>${esc(k)}</span><b>${v}</b></div>`;
-// "0-15,32" stays as it is; a Windows bitmask (16777215) becomes "CPUs 0–23"
-function affinityText(a){
-  if (!/^\d+$/.test(a)) return a;
-  let m = BigInt(a), i = 0, runs = [], start = -1;
+// Where a process may run (#289): Linux's CPU list (affinity, "0-15,32", or "3" for one CPU) as Linux sends it;
+// Windows' bitmask (affinity_mask, 16777215 becomes "CPUs 0–23"; -1, a full 64-bit mask, "CPUs 0–63")
+function affinityText(g){
+  const a = g.affinity_mask;
+  if (a == null || a === '') return g.affinity || '';
+  if (!/^-?\d+$/.test(a)) return a;
+  let m = BigInt.asUintN(64, BigInt(a)), i = 0, runs = [], start = -1;
   for (; m > 0n || start >= 0; i++, m >>= 1n){ const on = (m & 1n) === 1n; if (on && start < 0) start = i; if (!on && start >= 0){ runs.push(start === i - 1 ? String(start) : `${start}–${i - 1}`); start = -1; } }
   return runs.length ? 'CPUs ' + runs.join(', ') : a;
 }
@@ -2306,7 +2309,7 @@ function inspectPanel(p){
     c.ctx_invol != null ? kvRow('Switches: preempted', perSec(c.ctx_invol), 'involuntary: the scheduler took the core away') : '',
     c.runq_s != null ? kvRow('Queued for a core', Math.round(c.runq_s * 1000) + ' ms/s') : '',
     cg && cg.cpu_limit ? kvRow('CPU limit', num(cg.cpu_limit) + ' cores') : '', cg && cg.cpu_limit ? kvRow('Throttled', pct((cg.throttled || 0) * 100)) : '',
-    g.affinity ? kvRow('May run on', esc(affinityText(g.affinity))) : '', g.last_cpu >= 0 ? kvRow('Last ran on', 'cpu' + g.last_cpu) : '',
+    affinityText(g) ? kvRow('May run on', esc(affinityText(g))) : '', g.last_cpu >= 0 ? kvRow('Last ran on', 'cpu' + g.last_cpu) : '',
     kvRow('Priority', `nice ${g.nice || 0}` + (g.priority_class ? ' · ' + esc(g.priority_class) : ''))]]);
   cards.push(['Memory', [kvRow('Resident', ibytes(m.rss)), m.anon != null ? kvRow('Its own (anon)', ibytes(m.anon)) : '', m.file != null ? kvRow('Files mapped', ibytes(m.file)) : '',
     m.shmem ? kvRow('Shared', ibytes(m.shmem)) : '', m.private != null ? kvRow('Private', ibytes(m.private)) : '', m.swap != null ? kvRow('Swapped out', ibytes(m.swap)) : '',

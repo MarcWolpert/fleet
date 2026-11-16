@@ -430,7 +430,7 @@ class WindowsInspector(unittest.TestCase):
             stop.set()
             fleet_live.INSPECT_CACHE.clear()
         self.assertEqual(set(d), {"pid", "name", "state", "ppid", "nice", "priority", "priority_class", "threads_n", "started", "last_cpu", "user",
-                                  "cmdline", "exe", "cwd", "affinity", "cpu", "mem", "io", "waits", "samples", "dt", "threads", "fds", "fd_limit",
+                                  "cmdline", "exe", "cwd", "affinity_mask", "cpu", "mem", "io", "waits", "samples", "dt", "threads", "fds", "fd_limit",
                                   "handles", "files", "conns", "conns_n", "cgroup", "cache", "cache_error", "machine", "t"}, d)
         self.assertEqual((d["pid"], d["ppid"], d["cgroup"], d["cache"], d["files"]), (os.getpid(), os.getppid(), None, None, []))
         self.assertIn("python", d["cmdline"].lower())

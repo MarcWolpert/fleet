@@ -264,9 +264,33 @@ test('a refresh keeps where you scrolled the docked Details panel and the page b
   } finally { await p.close(); }
 });
 
+test('May run on: a Linux CPU list as Linux sends it, a Windows mask as its CPUs (#289)', async () => {
+  // Linux sends Cpus_allowed_list (affinity), so a process pinned to one CPU is a bare number; Windows sends
+  // ProcessorAffinity, a bitmask (affinity_mask), -1 when every one of 64 CPUs is allowed
+  const cases = [[{affinity: '3'}, '3'], [{affinity: '5'}, '5'], [{affinity: '1'}, '1'], [{affinity: '0-15,32'}, '0-15,32'], [{affinity: '7-7'}, '7-7'],
+    [{affinity: undefined, affinity_mask: '16777215'}, 'CPUs 0–23'], [{affinity: undefined, affinity_mask: '5'}, 'CPUs 0, 2'],
+    [{affinity: undefined, affinity_mask: '-1'}, 'CPUs 0–63'], [{affinity: undefined, affinity_mask: '1'}, 'CPUs 0'],
+    [{affinity: undefined, affinity_mask: '18446744069414584320'}, 'CPUs 32–63']];
+  const fx = fixture(); let ans = null; fx.proc = () => ans;
+  const p = await open(fx);
+  const runsOn = `(([...document.querySelectorAll('tr.pinsp .kv')].find(k => k.querySelector('span').textContent === 'May run on') || {}).textContent || '').replace('May run on', '')`;
+  try {
+    const got = [];
+    for (const [over] of cases){
+      ans = look(over);
+      if (await p.eval(`!!${PANEL}`)) await click(p, 'tr[data-pid="103"] td:nth-child(4)');
+      await click(p, 'tr[data-pid="103"] td:nth-child(4)');
+      await p.waitFor(`document.querySelector('tr.pinsp [data-wait]')`);
+      got.push(await p.eval(runsOn));
+    }
+    assert.deepEqual(got, cases.map(c => c[1]));
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
 test('a Windows process: affinity reads as CPUs and handles are called handles (regression)', async () => {
   const fx = fixture();
-  fx.proc = () => look({affinity: '16777215', fds: 620, fd_limit: -1, handles: 620, files: [], priority_class: 'Normal', cgroup: null, cache: null,
+  fx.proc = () => look({affinity: undefined, affinity_mask: '16777215', fds: 620, fd_limit: -1, handles: 620, files: [], priority_class: 'Normal', cgroup: null, cache: null,
     cache_error: 'Windows doesn\'t expose per-process CPU cache counters without a kernel driver'});
   const p = await open(fx);
   try {
