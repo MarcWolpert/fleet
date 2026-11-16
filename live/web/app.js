@@ -973,7 +973,7 @@ function termBtn(n){
   const ok = n.kind === 'machine' ? (n.agent === 'local' || !!n.ssh) : (n.kind === 'service' || n.kind === 'container');
   if (!ok) return '';
   const label = n.kind === 'machine' ? 'Open terminal' : 'Open shell';
-  return `<button type="button" class="termbtn" data-terminal="${esc(n.id)}" title="${n.kind === 'machine' ? (n.agent === 'local' ? 'A new shell on this computer' : 'ssh ' + esc(n.ssh)) : 'A shell inside this container'}">${icon('terminal')}${label}</button>`;
+  return `<span class="termsplit"><button type="button" class="termbtn" data-terminal="${esc(n.id)}" title="${n.kind === 'machine' ? (n.agent === 'local' ? 'A new shell on this computer' : 'ssh ' + esc(n.ssh)) : 'A shell inside this container'}">${icon('terminal')}${label}</button><button type="button" class="termchev" data-termchoose="${esc(n.id)}" aria-haspopup="menu" aria-label="Open in a specific terminal" title="Open in a specific terminal">${icon('chev', 2.4)}</button></span>`;
 }
 function offlineView(m){
   const d = diagnose(m), host = m.parent ? hostOf(m) : null;
@@ -1443,6 +1443,7 @@ document.addEventListener('click', e => {
   const ap = e.target.closest('[data-addpin]'); if (ap){ PICK.open ? closePicker(false) : openPicker(); return; }
   const st = e.target.closest('[data-settings]'); if (st){ openSettings(); return; }
   if (e.target.closest('[data-addmachinedlg]')){ openAddMachine(); return; }
+  const tc = e.target.closest('[data-termchoose]'); if (tc){ loadTerms().then(() => { const r = tc.getBoundingClientRect(); openCtx(termMenu(tc.dataset.termchoose), r.left, r.bottom + 4, tc); }); return; }
   const tm = e.target.closest('[data-terminal]'); if (tm){ const n = nodes[tm.dataset.terminal]; api('/api/terminal', {node:tm.dataset.terminal}).then(r => toast(r.ok ? `Opened ${r.title} in ${r.terminal}` : (r.error || 'Couldn’t open a terminal'))).catch(() => toast('Couldn’t reach Fleet')); return; }
   const rt = e.target.closest('[data-retry]'); if (rt){ rt.disabled = true; rt.innerHTML = icon('refresh') + 'Retrying…'; api('/api/retry', {machine:rt.dataset.retry}).catch(() => null); setTimeout(() => { lastMainHTML = ''; refreshNow(); }, 2500); return; }   // a fast failure reads the same as before: redraw anyway, so Retry comes back
   if (PICK.open && !$('picker').contains(e.target)) closePicker(false);
@@ -2417,7 +2418,7 @@ function copyText(text, what){
   legacy(); done();
 }
 const termOk = n => n.kind === 'machine' ? (n.agent === 'local' || !!n.ssh) : (n.kind === 'service' || n.kind === 'container');
-function openTerminal(id){ api('/api/terminal', {node:id}).then(r => toast(r.ok ? `Opened ${r.title} in ${r.terminal}` : (r.error || 'Couldn’t open a terminal'))).catch(() => toast('Couldn’t reach Fleet')); }
+function openTerminal(id, terminal){ api('/api/terminal', terminal ? {node:id, terminal} : {node:id}).then(r => toast(r.ok ? `Opened ${r.title} in ${r.terminal}` : (r.error || 'Couldn’t open a terminal'))).catch(() => toast('Couldn’t reach Fleet')); }
 function goNode(id, view){ S.view = view; select(id); if (view === 'details'){ S.detailsDocked = false; save(); lastMainHTML = ''; renderAll(); } }
 // a tile's own pin button, as a menu item
 function pinItem(scope, label){ const b = scope && scope.querySelector('[data-tpin]'); if (!b) return null; const on = b.getAttribute('aria-pressed') === 'true'; return {label:(on ? 'Unpin ' : 'Pin ') + label, run:() => b.click()}; }
@@ -2430,6 +2431,7 @@ function selItems(btn, what){
 }
 function ctxFor(t){
   if (!t || !t.closest || t.closest('.ptbl thead th, #ctxmenu, #colmenu, input, textarea, select')) return null;
+  const tmb = t.closest('[data-terminal], [data-termchoose]'); if (tmb) return termMenu(tmb.dataset.terminal || tmb.dataset.termchoose);
   const tgh = t.closest('#tree .tg-h');
   if (tgh){
     const box = tgh.closest('.tgroup'), key = box.dataset.tgkey, id = box.dataset.tgroup, g = ((PREFS.tgroups || {})[key] || []).find(x => x.id === id);
@@ -2937,4 +2939,22 @@ function vmInspectPanel(p){
     + `<div><button type="button" class="btn" data-vmlook="exec">${icon('terminal')}Run it inside ${node ? esc(node.name) : 'its container'}</button>`
     + `<span class="sub"><code>docker exec</code> runs the same inspector in the process’s own container. It needs python3 there.</span></div>`
     + (node && termOk(node) ? `<div>${termBtn(node)}</div>` : '') + `</div></div>`;
+}
+
+// Open terminal in a specific terminal (#223): the ones installed here, the default ticked (the list comes from /api/config)
+const TERMS = {list:null, def:'', busy:null};
+function loadTerms(){
+  if (TERMS.list) return Promise.resolve(TERMS);
+  return TERMS.busy || (TERMS.busy = fetch('/api/config', {cache:'no-store'}).then(r => r.json()).then(c => {
+    TERMS.list = c.terminals || [];
+    TERMS.def = c.terminal && c.terminal !== 'auto' ? c.terminal : ((TERMS.list.find(([, l]) => l === c.terminal_auto) || [])[0] || '');
+    return TERMS;
+  }).catch(() => { TERMS.busy = null; return TERMS; }));
+}
+function termMenu(id){
+  const n = nodes[id], list = TERMS.list || [];
+  if (!TERMS.list) loadTerms();
+  return {title:'Open in', items:[...list.map(([k, l]) => ({label:(k === TERMS.def ? '✓ ' : '') + l, run:() => openTerminal(id, k)})),
+    ...(list.length ? [] : [{label:n && n.kind !== 'machine' ? 'Open shell' : 'Open terminal', run:() => openTerminal(id)}]),
+    '—', {label:'Change the default…', run:() => openSettings()}]};
 }
