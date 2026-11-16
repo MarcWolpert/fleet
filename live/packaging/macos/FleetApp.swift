@@ -200,10 +200,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     @objc func zoomIn(_ s: Any?) { zoom("in") }
     @objc func zoomOut(_ s: Any?) { zoom("out") }
     @objc func zoomReset(_ s: Any?) { zoom("reset") }
-    // Menu commands the page carries out (the same ones as its keyboard shortcuts).
+    // Menu commands the page carries out (the same ones as its keyboard shortcuts), refused where the keys are:
+    // behind Settings, and ⌘T while typing. A key the page leaves alone comes back here as the menu item.
     @objc func pageCommand(_ s: NSMenuItem) {
         guard let c = s.representedObject as? String else { return }
-        web.evaluateJavaScript("window.fleetCommand && window.fleetCommand(\(c))", completionHandler: nil)
+        web.evaluateJavaScript("window.fleetMenu && window.fleetMenu(\(c))", completionHandler: nil)
     }
     func cmdItem(_ title: String, _ js: String, _ key: String, _ mods: NSEvent.ModifierFlags = [.command]) -> NSMenuItem {
         let i = NSMenuItem(title: title, action: #selector(pageCommand(_:)), keyEquivalent: key)

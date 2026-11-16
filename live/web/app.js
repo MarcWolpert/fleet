@@ -1811,6 +1811,14 @@ function fleetCommand(name, arg){
   return false;
 }
 window.fleetCommand = fleetCommand;
+// What a sheet or typing refuses: while Settings, this list or Go to is open only these get through, and ⌘T
+// never fires while typing. The keys ask here, and so do Fleet.app's menus: a key the page leaves alone goes
+// on to the menu item, which must refuse it too (#187).
+function commandAllowed(name, typing){
+  if ((SET.open || $('keys') || $('goto')) && !['keys', 'refresh', 'goto'].includes(name)) return false;
+  return !(name === 'terminal' && typing);
+}
+window.fleetMenu = (name, arg) => commandAllowed(name, typingIn(document.activeElement)) && fleetCommand(name, arg);
 function openKeys(){
   const el = document.createElement('div'); el.id = 'keys'; el.className = 'sheet-bg';
   el.innerHTML = `<div class="sheet keys" role="dialog" aria-modal="true" aria-labelledby="keys-title"><div class="sheet-h"><h2 id="keys-title">Keyboard shortcuts</h2><button type="button" class="iconbtn" data-closekeys="1" aria-label="Close">${icon('x', 2.2)}</button></div>`
@@ -1842,8 +1850,7 @@ function treeStep(key){
 document.addEventListener('keydown', e => {
   if (e.defaultPrevented || e.isComposing) return;
   const mod = IS_MAC ? e.metaKey : e.ctrlKey, typing = typingIn(e.target);
-  // while Settings or this list is open, only these get through
-  const run = (name, arg) => { if ((SET.open || $('keys') || $('goto')) && !['keys', 'refresh', 'goto'].includes(name)) return; if (fleetCommand(name, arg)) e.preventDefault(); };
+  const run = (name, arg) => { if (!commandAllowed(name, typing)) return; if (fleetCommand(name, arg)) e.preventDefault(); };
   if (e.key === 'Escape'){
     if ($('keys')){ e.preventDefault(); closeKeys(); return; }
     if (e.target.id === 'tfq'){ e.preventDefault(); closeTreeFind(); return; }
@@ -1866,7 +1873,7 @@ document.addEventListener('keydown', e => {
     if (k === ',') return run('settings');
     if (k === '/') return run('keys');
     if (k === 'r' && !e.shiftKey) return run('refresh');
-    if (k === 't' && !e.shiftKey && !typing) return run('terminal');
+    if (k === 't' && !e.shiftKey) return run('terminal');
     if (e.code === 'BracketLeft' || e.code === 'BracketRight' || e.key === '[' || e.key === ']'){
       const fwd = e.code === 'BracketRight' || e.key === ']';
       return e.shiftKey ? run('space-step', fwd ? 1 : -1) : run(fwd ? 'fwd' : 'back');

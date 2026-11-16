@@ -112,3 +112,34 @@ test('⌘K goes to anything: a machine, a command or a theme', async () => {
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
 });
+
+// Fleet.app's menu items fire when the page leaves a key alone, so they must refuse what the keys refuse (#187)
+test('Fleet.app menus refuse what the keys refuse: nothing behind Settings, no ⌘T while typing', async () => {
+  const fx = fixture(); fx.fleet.pins = ['lx'];
+  const p = await open({sel: 'lx'}, fx);
+  const state = `[S.view, S.space, S.metric, !!S.detailsDocked, document.activeElement && document.activeElement.id === 'pfilter']`;
+  const terminals = () => (fx.posts || []).filter(x => x.path === '/api/terminal').map(x => JSON.parse(x.body));
+  try {
+    assert.equal(await p.eval(`fleetMenu('settings')`), true);
+    await p.waitFor(`SET.open && !document.getElementById('sheet').hidden`);
+    assert.deepEqual(await p.eval(`['details', 'dock', 'find', 'findproc', 'back', 'terminal', 'pin', 'settings'].map(c => fleetMenu(c)).concat([fleetMenu('space', 1), fleetMenu('space-step', 1), fleetMenu('metric', 'mem')])`),
+      [false, false, false, false, false, false, false, false, false, false, false]);
+    assert.deepEqual(await p.eval(state), ['overview', 'fleet', 'cpu', false, false]);
+    assert.deepEqual(await p.eval(`PINS`), ['lx']);
+    assert.equal(await p.eval(`fleetMenu('refresh')`), true);    // what the keys let through a sheet, the menus do too
+    await p.eval(`closeSettings()`);
+    // typing in a field: the menu's ⌘T opens no terminal
+    assert.equal(await p.eval(`openTreeFind()`), true);
+    assert.equal(await p.eval(`document.activeElement.id`), 'tfq');
+    assert.equal(await p.eval(`fleetMenu('terminal')`), false);
+    assert.deepEqual(terminals(), []);
+    // not typing: it does
+    await p.eval(`(document.activeElement.blur(), true)`);
+    assert.equal(await p.eval(`fleetMenu('terminal')`), true);
+    for (let i = 0; i < 50 && !terminals().length; i++) await new Promise(r => setTimeout(r, 20));
+    assert.deepEqual(terminals(), [{node: 'lx'}]);
+    assert.equal(await p.eval(`fleetMenu('space', 1)`), true);
+    await p.waitFor(`document.querySelector('[data-space="lx"]').getAttribute('aria-pressed') === 'true'`);
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
