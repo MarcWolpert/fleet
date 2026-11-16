@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""The process inspector: inspect_linux.py's classifier and socket parsing, and the Mac inspector."""
-import importlib.util, os, sys, threading, types, unittest
+"""The process inspector: inspect_linux.py's classifier, socket parsing and whole run (main) over a made-up
+/proc, which inspector each machine gets, and the Mac inspector."""
+import builtins, contextlib, importlib.util, io, json, os, shutil, sys, tempfile, threading, types, unittest
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 LIVE = os.path.dirname(HERE)
@@ -11,6 +13,81 @@ def load(name, path):
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
+
+
+def stat_line(pid, comm, fields):
+    """A /proc/<pid>/stat line; fields by number as in proc(5) (3 state, 14 utime, 15 stime, ...), the rest 0."""
+    vals = {3: "S", 4: 1}
+    vals.update(fields)
+    return "%d (%s) %s\n" % (pid, comm, " ".join(str(vals.get(i, 0)) for i in range(3, 53)))
+
+
+class FakeProc:
+    """A made-up /proc (and /sys/fs/cgroup, /etc/passwd) under a temporary directory. run() runs
+    inspect_linux.main() against it: the module's open, os and time are replaced, so every absolute path it
+    reads lands under the directory, time moves only when it sleeps, and nothing of this machine is read.
+    at(secs, change) changes the tree once the look has run that long (a thread exits, another starts)."""
+
+    def __init__(self, m):
+        self.m, self.root, self.changes = m, tempfile.mkdtemp(prefix="fleet-proc-"), []
+
+    def close(self):
+        shutil.rmtree(self.root, ignore_errors=True)
+
+    def path(self, p):
+        return self.root + p if p.startswith("/") else p
+
+    def write(self, p, text):
+        os.makedirs(os.path.dirname(self.path(p)), exist_ok=True)
+        with builtins.open(self.path(p), "w") as f:
+            f.write(text)
+
+    def link(self, p, target):
+        os.makedirs(os.path.dirname(self.path(p)), exist_ok=True)
+        os.symlink(target, self.path(p))
+
+    def remove(self, p):
+        shutil.rmtree(self.path(p))
+
+    def thread(self, pid, tid, comm, state="S", wchan="0", utime=0, stime=0, run_ns=0, wait_ns=0):
+        base = "/proc/%d/task/%d/" % (pid, tid)
+        self.write(base + "stat", stat_line(tid, comm, {3: state, 14: utime, 15: stime}))
+        self.write(base + "schedstat", "%d %d 10\n" % (run_ns, wait_ns))
+        self.write(base + "wchan", wchan)
+        self.write(base + "comm", comm + "\n")
+
+    def at(self, secs, change):
+        self.changes.append((secs, change))
+
+    def run(self, pid, secs, counters=None):
+        fake, t0 = self, 1000.0
+        clock = types.SimpleNamespace(t=t0)
+        def sleep(s):
+            clock.t += s
+            while fake.changes and clock.t - t0 >= fake.changes[0][0]:
+                fake.changes.pop(0)[1]()
+        fos = types.SimpleNamespace(listdir=lambda p: os.listdir(fake.path(p)), readlink=lambda p: os.readlink(fake.path(p)),
+                                    path=types.SimpleNamespace(isdir=lambda p: os.path.isdir(fake.path(p))), read=os.read, close=os.close)
+        ftime = types.SimpleNamespace(time=lambda: clock.t, sleep=sleep)
+        out = io.StringIO()
+        with mock.patch.object(self.m, "open", lambda p, *a, **k: builtins.open(fake.path(p), *a, **k), create=True), \
+                mock.patch.object(self.m, "os", fos), mock.patch.object(self.m, "time", ftime), \
+                mock.patch.object(self.m, "Counters", counters or NoCounters), mock.patch.object(sys, "argv", ["-", str(pid), str(secs)]), \
+                contextlib.redirect_stdout(out):
+            self.m.main()
+        return json.loads(out.getvalue())
+
+
+class NoCounters:
+    """In place of perf_event_open: no counters (a test never makes a real syscall)."""
+    def __init__(self, tids):
+        self.groups, self.error = [], "no counters in this test"
+
+    def read(self):
+        return {}
+
+    def close(self):
+        pass
 
 
 class LinuxInspector(unittest.TestCase):
@@ -36,6 +113,43 @@ class LinuxInspector(unittest.TestCase):
         }
         got = dict((k, self.m.classify(*k)) for k in cases)
         self.assertEqual(got, cases)
+
+    def fake(self):
+        f = FakeProc(self.m)
+        self.addCleanup(f.close)
+        f.write("/proc/uptime", "5000.00 9000.00\n")
+        f.write("/proc/4242/status", "Name:\tworker\nUid:\t1000\t1000\t1000\t1000\nVmRSS:\t10240 kB\n")
+        return f
+
+    def test_running_and_queued_count_only_time_inside_the_look_when_a_thread_exits(self):
+        # schedstat is per thread and counts a thread's whole life. A pooled worker with 30 s of CPU behind it
+        # exits mid-look, and a new one starts: comparing totals over the threads of each moment gave about -20
+        # core-seconds per second of running and hid the queueing (#287). Only what each thread did inside the
+        # look counts: the main thread's change, and all of the new worker's (it began inside the look).
+        f = self.fake()
+        f.write("/proc/4242/stat", stat_line(4242, "worker", {3: "S", 14: 500, 15: 100, 20: 2}))
+        f.thread(4242, 4242, "worker", run_ns=2_000_000_000, wait_ns=100_000_000)
+        f.thread(4242, 4243, "pool-1", state="R", run_ns=30_000_000_000, wait_ns=1_000_000_000)
+        def worker_exits():
+            f.remove("/proc/4242/task/4243")
+            f.thread(4242, 4242, "worker", run_ns=2_600_000_000, wait_ns=250_000_000)
+            f.thread(4242, 4244, "pool-2", state="R", run_ns=300_000_000, wait_ns=150_000_000)
+        f.at(0.75, worker_exits)
+        d = f.run(4242, 1.5)
+        dt = d["dt"]
+        self.assertGreaterEqual(dt, 1.5)
+        self.assertEqual({k: round(d["cpu"][k] * dt, 6) for k in ("run_s", "runq_s")}, {"run_s": 0.9, "runq_s": 0.3})
+
+    def test_running_and_queued_with_the_same_threads_throughout(self):
+        # the control: nothing exits or starts, so it is each thread's change, summed
+        f = self.fake()
+        f.write("/proc/4242/stat", stat_line(4242, "worker", {3: "S", 14: 500, 15: 100, 20: 2}))
+        f.thread(4242, 4242, "worker", run_ns=2_000_000_000, wait_ns=100_000_000)
+        f.thread(4242, 4243, "pool-1", run_ns=5_000_000_000, wait_ns=0)
+        f.at(0.75, lambda: (f.thread(4242, 4242, "worker", run_ns=2_500_000_000, wait_ns=100_000_000),
+                            f.thread(4242, 4243, "pool-1", run_ns=6_000_000_000, wait_ns=300_000_000)))
+        d = f.run(4242, 1.5)
+        self.assertEqual({k: round(d["cpu"][k] * d["dt"], 6) for k in ("run_s", "runq_s")}, {"run_s": 1.5, "runq_s": 0.3})
 
     def test_socket_addresses_from_proc_net(self):
         self.assertEqual(self.m.hexaddr("0100007F:1538"), ("127.0.0.1", 5432))
@@ -118,7 +232,8 @@ class WhichInspector(unittest.TestCase):
         self.assertEqual(cmd, boot, "the same short starter the local collector uses (#269)")
         lines = stdin.decode("ascii").splitlines()
         self.assertEqual((lines[:2], lines[-1]), (["$FleetPid=4242", "$FleetSecs=%s" % self.fl.INSPECT_SECS], self.fl.PS_END))
-        self.assertEqual("\n".join(lines[2:-1]), self.fl.ps_compact(open(os.path.join(LIVE, "inspect_windows.ps1"), encoding="utf-8").read()))
+        with open(os.path.join(LIVE, "inspect_windows.ps1"), encoding="utf-8") as f:
+            self.assertEqual("\n".join(lines[2:-1]), self.fl.ps_compact(f.read()))
 
 
 @unittest.skipUnless(sys.platform == "darwin", "the Mac inspector reads this Mac")
