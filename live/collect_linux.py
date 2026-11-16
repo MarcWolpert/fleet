@@ -190,6 +190,7 @@ def gpu_clients(cards):
 PHYS = re.compile(r"^(sd[a-z]+|vd[a-z]+|xvd[a-z]+|hd[a-z]+|nvme\d+n\d+|mmcblk\d+)$")
 PREV_IO, RESOLVE = {}, {}
 UNRAID = {"t": 0.0, "map": {}, "role": {}}
+BTRFS, ZPOOLS = {}, {"t": 0.0, "pools": {}}
 
 
 def unraid_map():
@@ -235,13 +236,51 @@ def disks_of(majmin):
     return out
 
 
+def zfs_pools():
+    """Each ZFS pool's devices, from zpool status (read-only), at most once a minute."""
+    if time.time() - ZPOOLS["t"] >= 60:
+        ZPOOLS["t"], pools, pool, spare = time.time(), {}, "", False
+        for line in run(["zpool", "status", "-P"], timeout=5).splitlines():
+            f = line.split()
+            if f[:1] == ["pool:"] and len(f) > 1:
+                pool, spare = f[1], False
+            elif f[:1] == ["spares"]:
+                spare = True  # a hot spare holds nothing until it replaces a disk
+            elif f and f[0].startswith("/dev/") and pool and not spare:
+                pools.setdefault(pool, []).append(f[0])
+        ZPOOLS["pools"] = pools
+    return ZPOOLS["pools"]
+
+
+def mount_disks(majmin, fstype, source):
+    """The physical disks under one mount. btrfs and ZFS have anonymous device numbers (major 0): the mount's source
+    names its device (and /sys/fs/btrfs the others of a multi-device btrfs), and a ZFS dataset's pool its devices."""
+    if not majmin.startswith("0:"):
+        return disks_of(majmin)
+    if fstype == "zfs":
+        devs = zfs_pools().get(source.split("/")[0], [])
+    elif source.startswith("/dev/"):
+        devs = [source]
+    else:
+        return set()  # tmpfs, overlay, NFS, SMB, FUSE: no disk of this machine
+    out = set()
+    for d in devs:
+        name = os.path.basename(os.path.realpath(ROOT + d))  # /dev/mapper/x, /dev/disk/by-id/y -> dm-0, sdb1
+        for n in BTRFS.get(name, [name]):
+            mm = rd(ROOT + "/sys/class/block/%s/dev" % n).strip()
+            if mm:
+                out |= disks_of(mm)
+    return out
+
+
 def mounts_in(text):
     """mountinfo -> [(mount id, mount point, the physical disks under it)]"""
     out = []
     for line in text.splitlines():
         f = line.split()
         if len(f) > 4 and f[2]:
-            out.append((f[0], f[4], disks_of(f[2]) if not f[2].startswith("0:") else set()))
+            fs = f[f.index("-", 6) + 1:] if "-" in f[6:] else []
+            out.append((f[0], f[4], mount_disks(f[2], fs[0] if fs else "", fs[1] if len(fs) > 1 else "")))
     return out
 
 
@@ -259,6 +298,10 @@ def disk_info(procs, containers):
                       "model": (rd(b + "device/model").strip() or rd(b + "device/name").strip()), "size": int(size) * 512 if size.isdigit() else 0,
                       "rot": rd(b + "queue/rotational").strip() == "1", "mounts": [], "role": UNRAID["role"].get(n, "")})
     by = {d["name"]: d for d in disks}
+    BTRFS.clear()
+    for fs in glob.glob(ROOT + "/sys/fs/btrfs/*/devices"):  # every device of each btrfs, by name
+        devs = sorted(os.listdir(fs))
+        BTRFS.update((d, devs) for d in devs)
     mnt = {}  # mount id -> the disks under it, for the open files below
     for mid, point, under in mounts_in(rd(ROOT + "/proc/self/mountinfo")):
         mnt[mid] = under

@@ -216,6 +216,81 @@ class OpenFiles(unittest.TestCase):
         self.assertEqual([c.args[0] for c in st.call_args_list if fd_path.search(str(c.args[0]))], [])
 
 
+ZPOOL = """  pool: tank
+ state: ONLINE
+  scan: scrub repaired 0B in 05:12:44 with 0 errors on Sun Nov  8 05:36:45 2026
+config:
+
+\tNAME                                              STATE     READ WRITE CKSUM
+\ttank                                              ONLINE       0     0     0
+\t  mirror-0                                        ONLINE       0     0     0
+\t    /dev/disk/by-id/ata-WDC_WD120EFBX-68B_A1-part1  ONLINE       0     0     0
+\t    /dev/disk/by-id/ata-WDC_WD120EFBX-68B_A2-part1  ONLINE       0     0     0
+\tspares
+\t  /dev/disk/by-id/ata-WDC_WD120EFBX-68B_A3-part1    AVAIL
+
+errors: No known data errors
+"""
+ZPOOL_CMD = ("zpool", "status", "-P")
+
+
+class BtrfsAndZfs(unittest.TestCase):
+    """btrfs and ZFS give each filesystem an anonymous device number (major 0); its source and pool name the disks."""
+    def setUp(self):
+        t = self.tree = linux_host()
+        self.addCleanup(shutil.rmtree, t.root)
+        for i, (name, mm) in enumerate((("sdg", "8:96"), ("sdh", "8:112"), ("sdi", "8:128"), ("sdj", "8:144"), ("sdk", "8:160"), ("sdl", "8:176"))):
+            ma, mi = mm.split(":")
+            t.block(name, mm, SATA % (8 + i, 7 + i, 7 + i, 7 + i) + name, "Disk " + name, 7814037168, rot=True,
+                    partitions=[(name + "1", "%s:%d" % (ma, int(mi) + 1))])
+        t.block("dm-1", "253:1", "/sys/devices/virtual/block/dm-1", size=7814000000, slaves=["sdl1"])
+        t.link("/dev/mapper/luks-5d2c", "/sys/class/block/dm-1")          # real: ../dm-1; only the name counts
+        for i, n in enumerate(("sdi1", "sdj1", "sdk1")):
+            t.link("/dev/disk/by-id/ata-WDC_WD120EFBX-68B_A%d-part1" % (i + 1), "/sys/class/block/" + n)
+        for fs, devs in (("2f1e6a0c-6b7e-4f43-9d1a-2b8e0c5d7f11", ("sdg1", "sdh1")), ("9a7c1e55-0d2b-4c8e-a1f3-6e2d4b8c0a99", ("dm-1",))):
+            for d in devs:
+                t.link("/sys/fs/btrfs/%s/devices/%s" % (fs, d), "/sys/class/block/" + d)
+        t.file("/sys/fs/btrfs/features/free_space_tree", "0\n")
+        with open(t.root + "/proc/diskstats", "a") as f:
+            f.write("\n".join(ds(mm, n, 100, 200, 30) for n, mm in (("sdg", "8:96"), ("sdh", "8:112"), ("sdi", "8:128"), ("sdj", "8:144"),
+                                                                     ("sdk", "8:160"), ("sdl", "8:176"))) + "\n")
+        with open(t.root + "/proc/self/mountinfo", "a") as f:
+            f.write("\n".join([
+                "41 22 0:40 / /mnt/cache rw,noatime shared:60 - btrfs /dev/sdg1 rw,ssd,space_cache=v2,subvolid=5,subvol=/",
+                "42 22 0:61 / /mnt/tank rw,noatime shared:61 - zfs tank rw,xattr,noacl",
+                "43 42 0:62 / /mnt/tank/media rw,noatime shared:62 - zfs tank/media rw,xattr,noacl",
+                "44 22 0:40 /appdata /var/lib/appdata rw,noatime shared:63 - btrfs /dev/sdg1 rw,ssd,space_cache=v2,subvolid=257,subvol=/appdata",
+                "45 22 0:46 /@data /data rw,relatime shared:64 - btrfs /dev/mapper/luks-5d2c rw,subvolid=256,subvol=/@data"]) + "\n")
+        for pid, fds in ((340, [(3, "/mnt/cache/appdata/db.sqlite", 41), (4, "/mnt/tank/media/a.mkv", 43), (5, "/data/photos/b.jpg", 45)]),
+                         (350, [(3, "/var/lib/appdata/app/log.txt", 44)])):
+            for fd, target, mnt_id in fds:
+                t.raw_link("/proc/%d/fd/%d" % (pid, fd), target)
+                t.file("/proc/%d/fdinfo/%d" % (pid, fd), fdinfo(mnt_id, 2000 + fd))
+        self.m = load()
+        self.m.ROOT = t.root
+        self.m.run = commands({ZPOOL_CMD: ZPOOL})
+
+    def test_each_disk_shows_the_btrfs_and_zfs_filesystems_on_it(self):
+        disks, _, _ = self.m.disk_info([], [])
+        self.assertEqual({d["name"]: d["mounts"] for d in disks}, {
+            "sda": ["/"], "sdb": ["/srv", "/export/media"], "sdc": ["/srv", "/export/media"], "sdf": [], "nvme0n1": ["/boot/efi", "/home"],
+            "sdg": ["/mnt/cache", "/var/lib/appdata"], "sdh": ["/mnt/cache", "/var/lib/appdata"],   # a btrfs RAID 1, and a subvolume
+            "sdi": ["/mnt/tank", "/mnt/tank/media"], "sdj": ["/mnt/tank", "/mnt/tank/media"],         # a ZFS mirror and its dataset
+            "sdk": [],                                                                                # the pool's hot spare holds nothing
+            "sdl": ["/data"],                                                                         # btrfs on LUKS (/dev/mapper)
+        })
+
+    def test_processes_with_files_on_btrfs_and_zfs(self):
+        self.m.disk_info([proc(340, "app", 0), proc(350, "app", 0)], [])
+        _, pdisks, _ = self.m.disk_info([proc(340, "app", 8192), proc(350, "app", 512)], [])
+        self.assertEqual(pdisks, {340: ["sdg", "sdh", "sdi", "sdj", "sdl"], 350: ["sdg", "sdh"]})
+
+    def test_zpool_runs_at_most_once_a_minute(self):
+        for _ in range(3):
+            self.m.disk_info([], [])
+        self.assertEqual(self.m.run.ran, [list(ZPOOL_CMD)])
+
+
 MDCMD = """sbName=/boot/config/super.dat
 mdState=STARTED
 diskNumber.0=0
@@ -260,6 +335,31 @@ class UnraidDisks(unittest.TestCase):
                          {"sda": ("", ["/"]), "sdb": ("", ["/srv", "/export/media"]), "sdc": ("", ["/srv", "/export/media"]), "sdf": ("", []),
                           "nvme0n1": ("", ["/boot/efi", "/home"]), "sdd": ("array disk 1", ["/mnt/disk1"]), "sde": ("parity", [])})
         self.assertEqual(self.m.disks_of("9:1"), {"sdd"})
+
+    def test_an_array_disk_formatted_zfs(self):
+        self.format_disk1("40 22 0:70 / /mnt/disk1 rw,noatime shared:50 - zfs disk1 rw,xattr,noacl")
+        self.m.run = commands({("/usr/local/sbin/mdcmd", "status"): MDCMD, ZPOOL_CMD:
+                               "  pool: disk1\n state: ONLINE\nconfig:\n\n\tNAME          STATE     READ WRITE CKSUM\n"
+                               "\tdisk1         ONLINE       0     0     0\n\t  /dev/md1p1  ONLINE       0     0     0\n\nerrors: No known data errors\n"})
+        disks, _, _ = self.m.disk_info([], [])
+        self.assertEqual({d["name"]: d["mounts"] for d in disks if d["mounts"] or d["role"]}, {
+            "sda": ["/"], "sdb": ["/srv", "/export/media"], "sdc": ["/srv", "/export/media"], "nvme0n1": ["/boot/efi", "/home"],
+            "sdd": ["/mnt/disk1"], "sde": []})
+
+    def test_an_array_disk_formatted_btrfs(self):
+        self.format_disk1("40 22 0:71 / /mnt/disk1 rw,noatime shared:50 - btrfs /dev/md1p1 rw,space_cache=v2,subvolid=5,subvol=/")
+        self.tree.link("/sys/fs/btrfs/51c0a7e2-3f4d-4b6a-8e9c-0d1f2a3b4c5d/devices/md1p1", "/sys/class/block/md1p1")
+        disks, _, _ = self.m.disk_info([], [])
+        self.assertEqual({d["name"]: d["mounts"] for d in disks if d["mounts"] or d["role"]}, {
+            "sda": ["/"], "sdb": ["/srv", "/export/media"], "sdc": ["/srv", "/export/media"], "nvme0n1": ["/boot/efi", "/home"],
+            "sdd": ["/mnt/disk1"], "sde": []})
+
+    def format_disk1(self, line):
+        p = self.tree.root + "/proc/self/mountinfo"
+        with open(p) as f:
+            text = f.read()
+        with open(p, "w") as f:
+            f.write(text.replace("40 22 9:1 / /mnt/disk1 rw,noatime shared:50 - xfs /dev/md1p1 rw,attr2,inode64", line))
 
     def test_mdcmd_runs_at_most_once_a_minute(self):
         for _ in range(3):
