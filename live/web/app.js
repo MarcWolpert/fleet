@@ -1082,7 +1082,12 @@ function renderMain(){
     : `<div class="wrap">${html}</div>`;
   if (full === lastMainHTML) return;
   lastMainHTML = full;
+  // the panels inside are rebuilt: keep where each was scrolled (the docked Details, the page beside it, wide tables)
+  const SCROLLERS = '.split > .wrap, .dpanel, .pscroll, .scroll-x';
+  const scrolled = [...main.querySelectorAll(SCROLLERS)].map(e => [e.scrollTop, e.scrollLeft]);
   main.innerHTML = full;
+  const now = [...main.querySelectorAll(SCROLLERS)];
+  if (now.length === scrolled.length) now.forEach((e, i) => { if (scrolled[i][0]) e.scrollTop = scrolled[i][0]; if (scrolled[i][1]) e.scrollLeft = scrolled[i][1]; });
   markPanel(); if (FIND.q) applyFind(false);
   if (refocus){ const e = main.querySelector(refocus); if (e){ e.focus({preventScroll:true}); if (selStart != null && e.setSelectionRange) try { e.setSelectionRange(selStart, selStart); } catch (x) {} } }
 }

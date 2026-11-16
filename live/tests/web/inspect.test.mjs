@@ -127,3 +127,22 @@ test('Details rows stay table rows, lined up under their headers (regression: a 
     assert.equal(await p.eval(`(() => { const th = [...document.querySelectorAll('.ptbl thead th')].map(e => Math.round(e.getBoundingClientRect().left)); return [...document.querySelectorAll('.ptbl tbody tr[data-pid]')].every(r => [...r.children].every((td, i) => Math.round(td.getBoundingClientRect().left) === th[i])); })()`), true);
   } finally { await p.close(); }
 });
+
+test('a refresh keeps where you scrolled the docked Details panel and the page beside it (regression)', async () => {
+  const fx = fixture(); fx.proc = () => look();
+  const p = await browser.page(fx, {ui: ui({sel: 'lx', detailsDocked: true}), width: 1400, height: 800});
+  try {
+    await p.waitFor(`document.querySelectorAll('.dpanel .ptbl tbody tr[data-pid]').length === 12`);
+    await p.eval(`(() => { document.querySelector('.dpanel tr[data-pid="103"] td:nth-child(4)').click(); return true; })()`);
+    await p.waitFor(`document.querySelector('.dpanel tr.pinsp [data-wait]')`);
+    const top = await p.eval(`(() => { const d = document.querySelector('.dpanel'); d.scrollTop = 260; return d.scrollTop; })()`);
+    assert.ok(top > 100, `the panel scrolls (${top})`);
+    const wtop = await p.eval(`(() => { const w = document.querySelector('.split > .wrap'); w.scrollTop = 150; return w.scrollTop; })()`);
+    fx.procs.lx.procs[0][4] = 0.42;                        // a new reading changes the page
+    await p.eval(`(refreshNow(), true)`);
+    await p.waitFor(`document.querySelector('.dpanel tr[data-pid="101"]').textContent.includes('2.6%')`);
+    assert.equal(await p.eval(`document.querySelector('.dpanel').scrollTop`), top);
+    assert.equal(await p.eval(`document.querySelector('.split > .wrap').scrollTop`), wtop);
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
