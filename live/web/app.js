@@ -1967,7 +1967,7 @@ const SHORTCUTS = [
 ];
 function spaceKeys(){ return ['fleet'].concat(PINS.filter(k => nodes[k])); }
 function typingIn(t){ return !!(t && t.closest && t.closest('input, textarea, select, [contenteditable="true"]')); }
-function overlayOpen(){ return SET.open || PICK.open || COLMENU.open || !!$('keys') || !!$('goto'); }
+function overlayOpen(){ return SET.open || PICK.open || COLMENU.open || !!$('keys') || !!$('goto') || !!$('tutorial'); }
 function fleetCommand(name, arg){
   switch (name){
     case 'find': {
@@ -2010,7 +2010,7 @@ window.fleetCommand = fleetCommand;
 // never fires while typing. The keys ask here, and so do Fleet.app's menus: a key the page leaves alone goes
 // on to the menu item, which must refuse it too (#187).
 function commandAllowed(name, typing){
-  if ((SET.open || $('keys') || $('goto')) && !['keys', 'refresh', 'goto'].includes(name)) return false;
+  if ((SET.open || $('keys') || $('goto') || $('tutorial')) && !['keys', 'refresh', 'goto'].includes(name)) return false;
   return !(name === 'terminal' && typing);
 }
 window.fleetMenu = (name, arg) => commandAllowed(name, typingIn(document.activeElement)) && fleetCommand(name, arg);
@@ -2971,3 +2971,54 @@ document.addEventListener('click', e => {
   if (!e.target.closest('#zoomchip')) return;
   try { window.webkit.messageHandlers.fleet.postMessage({zoom:'reset'}); } catch (x) {}
 });
+
+// The Tutorial (#283): getting started, what Fleet's terms mean, and every keyboard shortcut (the same list as ?)
+const TUT_STEPS = [
+  ['Add your machines', 'Use <b>+ Add a machine</b> at the bottom of the tree. Fleet reads each one over SSH, read-only, and installs nothing there; the dialog says what each OS needs and tests the connection first.'],
+  ['Read the tree', 'Every machine opens into its <b>Base system</b>, <b>Docker Compose</b> projects, <b>Containers</b> and <b>VMs</b> (machines again, all the way down). The numbers are each one’s share of its host, for the metric you pick at the top (CPU, Memory, GPU, Disk I/O, Network).'],
+  ['Open anything', 'Click a row for its page: where its usage goes, and its history. <b>Details</b> lists its processes; click one to see what it waits on.'],
+  ['Pin what you watch', 'Pin a machine, container or group as a <b>space</b> in the top bar (the pin on a row, <b>P</b>, or <b>+</b>). <b>All machines</b> is always the first space.'],
+  ['Group and tidy', 'Drag a box over rows at the same level, or drag a row by its handle, to make a group. Right-click anything for what fits it.'],
+  ['Choose what connects', 'The dot on a machine’s row turns its connection off and on. <b>Auto</b> (bottom left) picks which machines Fleet connects to when it starts.'],
+];
+const TUT_TERMS = [
+  ['The tree', [['Space', 'A pinned view in the top bar: a machine, container, group or All machines.'], ['Pins only', 'The tree shows just what you pinned, with its own all-up view.'],
+    ['Base system', 'What runs on a machine outside its containers and VMs: the OS, daemons and apps.'], ['Docker Compose', 'Compose projects and their services, from Docker’s labels.'],
+    ['Containers', 'Containers not in a Compose project.'], ['VMs', 'Virtual machines on a host. A VM Fleet also reads over SSH is a machine of its own, counted on its host as what the host gives it.'],
+    ['Cron jobs', 'Scheduled jobs (crontab, systemd timers, launchd, Windows Scheduled Tasks) under what runs them; their usage is part of their owner’s.']]],
+  ['Groups', [['Fleet', 'A group of machines.'], ['Flotilla', 'A group of VMs.'], ['Division', 'A group of containers.'], ['Section', 'A group of cron jobs.'], ['Squadron', 'A group of Docker Compose projects.'], ['Task force', 'A group of mixed kinds.']]],
+  ['Looking closer', [['Details', 'The process list for whatever you selected; sort, filter, group, choose columns, or dock it beside the page.'], ['The drop-down', 'Click a process in Details: what it mostly waits on, its cache misses, limits, files and sockets.'],
+    ['Logical processors', 'One live graph per CPU, grouped by CCD (a chiplet of cores sharing a cache), or by P and E cores.'], ['Each GPU', 'Live tiles per GPU: its engines, memory, temperature, power, clocks and fan.'],
+    ['Network tree', 'The second tree: your tailnet, machines, interfaces and bridges, with the traffic on each.']]],
+  ['Settings', [['Auto', 'Which machines Fleet connects to when it starts: None (until you choose), All, or a set you tick.'], ['Colour vision', 'Colours that stay apart for protanopia, deuteranopia, tritanopia or monochromacy; Higher contrast for stronger text and lines.']]],
+];
+function tutorialPanel(i){
+  if (i === 0) return `<ol class="tut-steps">${TUT_STEPS.map(([h, t]) => `<li><b>${h}.</b> ${t}</li>`).join('')}</ol>`;
+  if (i === 1) return `<dl>${TUT_TERMS.map(([h, rows]) => `<h4>${h}</h4>` + rows.map(([t, d]) => `<dt>${t}</dt><dd>${d}</dd>`).join('')).join('')}</dl>`;
+  return `<table class="keytbl">${SHORTCUTS.map(([what, ks]) => `<tr><td>${esc(what)}</td><td>${ks.map(k => `<kbd>${esc(k)}</kbd>`).join(' ')}</td></tr>`).join('')}</table>`;
+}
+function openTutorial(tab, opts){
+  if ($('tutorial')) return;
+  opts = opts || {};
+  const tabs = ['Getting started', 'Fleet terms', 'Keyboard'];
+  const el = document.createElement('div'); el.id = 'tutorial-bg'; el.className = 'sheet-bg';
+  el.innerHTML = `<div class="sheet tut" id="tutorial" role="dialog" aria-modal="true" aria-labelledby="tut-t">
+    <div class="sheet-h"><h2 id="tut-t">${opts.welcome ? 'Welcome to Fleet' : 'How Fleet works'}</h2><button type="button" class="iconbtn" data-tutclose="1" aria-label="Close">${icon('x', 2.2)}</button></div>
+    <div class="sheet-b">${opts.welcome ? '<p class="sub">Every machine you manage, live, in one tree, and where each one’s usage goes. Here is how to use it; the <b>Tutorial</b> pill in the top bar brings this back.</p>' : ''}
+      <div class="tut-tabs" role="tablist">${tabs.map((t, i) => `<button type="button" role="tab" id="tut-tab-${i}" aria-controls="tut-p-${i}" aria-selected="${i === (tab || 0)}" tabindex="${i === (tab || 0) ? 0 : -1}">${t}</button>`).join('')}</div>
+      ${tabs.map((t, i) => `<div role="tabpanel" id="tut-p-${i}" aria-labelledby="tut-tab-${i}"${i === (tab || 0) ? '' : ' hidden'}>${tutorialPanel(i)}</div>`).join('')}</div>
+    <div class="sheet-f"><div class="tut-foot"><button type="button" class="btn primary" data-tutclose="1">${opts.welcome ? 'Get started' : 'Done'}</button></div></div></div>`;
+  document.body.appendChild(el);
+  const pick = i => { el.querySelectorAll('[role=tab]').forEach((b, j) => { b.setAttribute('aria-selected', String(i === j)); b.tabIndex = i === j ? 0 : -1; });
+    el.querySelectorAll('[role=tabpanel]').forEach((p, j) => { p.hidden = i !== j; }); el.querySelectorAll('[role=tab]')[i].focus(); };
+  const close = () => { el.remove(); if (opts.onClose) opts.onClose(); const b = document.querySelector('[data-tutorial]'); if (b) b.focus(); };
+  el.addEventListener('click', e => { if (e.target === el || e.target.closest('[data-tutclose]')){ close(); return; } const t = e.target.closest('[role=tab]'); if (t) pick([...el.querySelectorAll('[role=tab]')].indexOf(t)); });
+  el.addEventListener('keydown', e => {
+    if (e.key === 'Escape'){ e.preventDefault(); e.stopPropagation(); close(); return; }
+    const t = e.target.closest('[role=tab]'); if (!t) return;
+    const all = [...el.querySelectorAll('[role=tab]')], i = all.indexOf(t);
+    if (e.key === 'ArrowRight' || e.key === 'ArrowLeft'){ e.preventDefault(); pick((i + (e.key === 'ArrowRight' ? 1 : all.length - 1)) % all.length); }
+  });
+  el.querySelectorAll('[role=tab]')[tab || 0].focus();
+}
+document.addEventListener('click', e => { if (e.target.closest('[data-tutorial]')) openTutorial(0); });

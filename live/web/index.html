@@ -725,6 +725,20 @@ html.hc .sub,html.hc .facts{color:var(--ink-2)}
 .access label.chk{flex-direction:row;align-items:center;gap:8px;font-size:13px;color:var(--ink);padding-bottom:7px}
 .access select{background:var(--side);border:1px solid var(--line-2);border-radius:8px;padding:7px 9px;color:var(--ink);font:13px var(--sans)}
 .access .sub{flex:1 1 100%;margin:0}
+.tutbtn{display:inline-flex;align-items:center;gap:7px;font:500 13px/1 var(--sans);color:var(--ink-2);background:var(--chrome-2);border:1px solid var(--line-2);border-radius:999px;padding:6px 12px 6px 10px;margin-right:8px}
+.tutbtn:hover{color:var(--ink);border-color:color-mix(in srgb, var(--ink) 30%, transparent)}
+.tutbtn svg{width:15px;height:15px}
+.sheet.tut{width:min(720px,100%)}
+.tut-tabs{display:flex;gap:4px;margin:0 0 14px;border-bottom:1px solid var(--line)}
+.tut-tabs [role=tab]{padding:8px 12px;border-radius:8px 8px 0 0;color:var(--ink-3);font:500 13.5px var(--sans);border-bottom:2px solid transparent;margin-bottom:-1px}
+.tut-tabs [role=tab][aria-selected=true]{color:var(--ink);border-bottom-color:var(--accent)}
+.tut ol.tut-steps{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:10px;color:var(--ink-2);line-height:1.5}
+.tut ol.tut-steps b,.tut dl b{color:var(--ink)}
+.tut dl{display:grid;grid-template-columns:minmax(120px,170px) minmax(0,1fr);gap:9px 16px;margin:0;font-size:13.5px}
+.tut dt{font-weight:600;color:var(--ink)}.tut dd{margin:0;color:var(--ink-2);line-height:1.45}
+.tut h4{margin:14px 0 8px;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);grid-column:1 / -1}
+.tut .tut-foot{display:flex;align-items:center;gap:10px;margin-left:auto}
+@container (max-width: 600px){.tut dl{grid-template-columns:minmax(0,1fr)}}
 .zoomchip{font:600 12px/1 var(--mono);color:var(--ink-2);background:var(--chrome-2);border:1px solid var(--line-2);border-radius:7px;padding:5px 8px;margin-right:8px}
 .zoomchip:hover{color:var(--ink);border-color:color-mix(in srgb, var(--ink) 30%, transparent)}
 .vmlook{display:flex;flex-direction:column;gap:10px;margin-top:10px}.vmlook>div{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.vmlook .sub{font-size:12px;color:var(--ink-3);flex:1 1 260px;min-width:0}
@@ -753,6 +767,7 @@ html.hc .sub,html.hc .facts{color:var(--ink-2)}
   <header class="spacebar">
     <div class="lights" aria-hidden="true"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i></div>
     <nav class="spaces" id="spaces" aria-label="Pinned spaces"></nav>
+    <button type="button" class="tutbtn" data-tutorial="1" aria-haspopup="dialog" title="How Fleet works: getting started, terms, keyboard"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6.5C5.5 5 8.5 5 12 7c3.5-2 6.5-2 9-.5v12c-2.5-1.5-5.5-1.5-9 .5-3.5-2-6.5-2-9-.5z"/><path d="M12 7v12"/></svg><span>Tutorial</span></button>
     <button type="button" class="zoomchip" id="zoomchip" hidden title="Zoom: click for 100% (⌘0)"></button>
     <button type="button" class="setbtn" data-settings="1" aria-haspopup="dialog"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span>Settings</span></button>
   </header>
