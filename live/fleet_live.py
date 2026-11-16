@@ -275,15 +275,20 @@ def ps_compact(script):
     return "\n".join(l.strip() for l in script.splitlines() if l.strip() and not l.strip().startswith("#"))
 
 
-PS_BOOT = "iex ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String([Console]::In.ReadLine())))"
+# Reads the script as plain lines up to an end marker and runs it as a script block (#269): decoding a base64 payload
+# and running it with iex is what Windows' protection against obfuscated scripts refuses ("Access is denied").
+PS_END = "#FLEET-END"
+PS_BOOT = ("$b = New-Object System.Text.StringBuilder; "
+           "while (($l = [Console]::In.ReadLine()) -ne $null -and $l -ne '%s') { [void]$b.AppendLine($l) }; "
+           "& ([ScriptBlock]::Create($b.ToString()))" % PS_END)
 
 
 def ps_launch(script):
     """(argv, stdin) that run a long PowerShell script: the command is a short bootstrap that reads the script
-    as one base64 line from stdin, because OpenSSH's default shell, cmd.exe, takes at most 8,191 characters.
+    from stdin as plain lines, because OpenSSH's default shell, cmd.exe, takes at most 8,191 characters.
     The caller keeps stdin open afterwards: the collector's lifeline."""
     enc = base64.b64encode(PS_BOOT.encode("utf-16-le")).decode()
-    return ["powershell", "-NoProfile", "-NonInteractive", "-EncodedCommand", enc], base64.b64encode(script.encode("utf-8")) + b"\n"
+    return ["powershell", "-NoProfile", "-NonInteractive", "-EncodedCommand", enc], (script + "\n" + PS_END + "\n").encode("ascii")
 
 
 # ---------------------------------------------------------------- GPU metrics (issue #6)

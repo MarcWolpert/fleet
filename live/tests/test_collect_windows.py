@@ -17,7 +17,8 @@ try:
 finally:
     sys.argv = argv
 
-BOOT = "iex ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String([Console]::In.ReadLine())))"
+BOOT = fl.PS_BOOT
+END = "#FLEET-END"
 CMD_EXE_MAX = 8191   # cmd.exe's longest command line; Windows OpenSSH runs `cmd.exe /c <command>` by default
 
 
@@ -75,18 +76,23 @@ def run_with_fake_popen(fn, system=None):
 
 
 class LaunchFitsAnyShell(unittest.TestCase):
-    """#100: the command is a short bootstrap that any default shell runs; the script itself arrives on stdin."""
+    """#100: the command is a short bootstrap that any default shell runs; the script itself arrives on stdin.
+    #269: as plain lines up to an end marker, run as a script block: decoding a base64 payload and running it with
+    iex is what Windows' protection against obfuscated scripts refuses ("Access is denied" at start)."""
 
     def check_bootstrap(self, command):
         head, enc = command.rsplit(" ", 1)
         self.assertEqual(head, "powershell -NoProfile -NonInteractive -EncodedCommand")
-        self.assertEqual(base64.b64decode(enc).decode("utf-16-le"), BOOT)
+        boot = base64.b64decode(enc).decode("utf-16-le")
+        self.assertEqual(boot, BOOT)
+        for blocked in ("FromBase64String", "iex", "Invoke-Expression"):
+            self.assertNotIn(blocked.lower(), boot.lower())
+        self.assertIn("[ScriptBlock]::Create", boot)
         self.assertLess(len(command), CMD_EXE_MAX)
 
     def check_payload(self, payload):
-        self.assertTrue(payload.endswith(b"\n"))
-        self.assertEqual(payload.count(b"\n"), 1, "one line: the bootstrap reads exactly one")
-        self.assertEqual(base64.b64decode(payload).decode("utf-8"), collector_script())
+        self.assertTrue(payload.isascii(), "plain text: the console's code page reads it as sent")
+        self.assertEqual(payload.decode("ascii"), collector_script() + "\n" + END + "\n")
 
     def test_over_ssh(self):
         cmd, stdin = fl.Machine({"id": "w", "name": "w", "os": "windows", "ssh": "win-desktop"}, 3).ssh_cmd()
