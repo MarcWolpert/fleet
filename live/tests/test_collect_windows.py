@@ -4,7 +4,7 @@ how derive_windows reads what it sends. No machine is read: the readings are han
 
 Run: python3 -m unittest discover -s live/tests -p 'test_*.py'   (or live/tests/run.sh)
 """
-import base64, importlib.util, os, subprocess, sys, unittest
+import base64, importlib.util, os, re, subprocess, sys, unittest
 from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -176,6 +176,39 @@ class GpusKeepTheirPlace(unittest.TestCase):
     def test_one_adapter_and_no_nvidia_smi(self):
         got = self.gpus({"gpus": [adapter(LO, 7.0, 512)], "nvidia": [], "videoNames": ["AMD Radeon RX 6600"]})
         self.assertEqual(got, ([("AMD Radeon RX 6600", ma2000(7.0, 512), {})], {}))
+
+
+def collector_text():
+    """collect_windows.ps1 as it is sent (no comments), with its quoted strings emptied."""
+    return re.sub(r"'[^'\n]*'", "''", fl.ps_compact(open(os.path.join(LIVE, "collect_windows.ps1"), encoding="utf-8").read()))
+
+
+class EveryProgramHasADeadline(unittest.TestCase):
+    """#135: the external programs run through Start-Bounded/Invoke-Bounded, which wait 8 s at most (like
+    collect_linux.py's run(..., timeout=8)) and then kill the program, so a hung one can't stop the loop."""
+    SRC = fl.ps_compact(open(os.path.join(LIVE, "collect_windows.ps1"), encoding="utf-8").read())
+
+    def test_the_programs_it_runs_and_how(self):
+        calls = re.findall(r"(?:Start|Invoke)-Bounded '([^']+)' '([^']*)'", self.SRC)
+        self.assertEqual(sorted(calls), sorted([
+            ("nvidia-smi", "--query-gpu=index,name,utilization.gpu,memory.used,memory.total,utilization.memory,temperature.gpu,power.draw,"
+                           "power.limit,clocks.gr,clocks.max.gr,clocks.mem,fan.speed,utilization.encoder,utilization.decoder --format=csv,noheader,nounits"),
+            ("nvidia-smi", "--query-gpu=index,name,utilization.gpu,memory.used,memory.total --format=csv,noheader,nounits"),
+            ("wsl.exe", "-l -v"),
+            ("docker", 'ps --no-trunc --format "{{json .}}"'),
+            ("docker", 'stats --no-stream --format "{{json .}}"'),
+        ]))
+
+    def test_nothing_runs_them_without_a_deadline(self):
+        bare = re.findall(r"(?<![$.\w-])(nvidia-smi|wsl(?:\.exe)?|docker)(?![\w-])", collector_text())   # not $wsl or $o.wsl
+        self.assertEqual(bare, [])
+
+    def test_the_deadline_is_8_seconds_and_a_late_program_is_killed(self):
+        body = re.search(r"function Wait-Bounded\(\$job, \$secs = (\d+)\) \{(.*?)\n\}", self.SRC, re.S)
+        self.assertIsNotNone(body, "Wait-Bounded($job, $secs = N) is defined")
+        self.assertEqual(body.group(1), "8")
+        self.assertIn(".Wait([int]($secs * 1000))", body.group(2))
+        self.assertIn(".Kill()", body.group(2))
 
 
 if __name__ == "__main__":

@@ -8,6 +8,20 @@
 $ErrorActionPreference = 'SilentlyContinue'; $ProgressPreference = 'SilentlyContinue'
 if (-not $FleetInterval) { $FleetInterval = 3 }
 $loop = 0; $taskCache = @(); $addrCache = @{}; $cmdCache = @{}; $diskInfo = @{}; $pnetCache = @{}
+# External programs get 8 seconds (like collect_linux.py's run(..., timeout=8)) and are killed after that: a wedged
+# WSL service, Docker engine or GPU driver must not hold up the loop, or the checks that end it never run again.
+function Start-Bounded($exe, $argline) {
+  $si = New-Object Diagnostics.ProcessStartInfo $exe, $argline
+  $si.UseShellExecute = $false; $si.CreateNoWindow = $true; $si.RedirectStandardOutput = $true; $si.RedirectStandardError = $true
+  try { $p = [Diagnostics.Process]::Start($si); @{ p = $p; out = $p.StandardOutput.ReadToEndAsync(); err = $p.StandardError.ReadToEndAsync() } } catch { $null }
+}
+function Wait-Bounded($job, $secs = 8) {
+  if (-not $job) { return '' }
+  try { if ($job.out.Wait([int]($secs * 1000))) { [void]$job.p.WaitForExit(1000); return $job.out.Result } } catch {}
+  try { $job.p.Kill() } catch {}
+  ''
+}
+function Invoke-Bounded($exe, $argline) { @((Wait-Bounded (Start-Bounded $exe $argline)) -split "`r?`n" | Where-Object { $_ }) }
 # Stop when Fleet goes away. Fleet keeps our stdin open and writes nothing after this script, so the pending read
 # completes (EOF) the moment the SSH session ends for any reason; also stop if our parent shell is
 # gone, and after 6 hours in any case (Fleet reconnects).
@@ -78,8 +92,8 @@ $o.gpus = @($adMem.Keys | Where-Object { $adMem[$_] -gt 0 } | Sort-Object | ForE
   $l = $_; $e = @{}; foreach ($tk in $engT.Keys) { $p = $tk.Split('|', 2); if ($p[0] -eq $l) { $e[$p[1]] = $engT[$tk] } }
   @{ luid = $l; util = [double]$gpuUtil[$l]; dedicated = $adMem[$l]; shared = [double]$adShared[$l]; eng = $e } })
 # NVIDIA's own numbers; drivers without the newer fields fail the whole query, so fall back to the basic one
-$nv = @(nvidia-smi --query-gpu=index,name,utilization.gpu,memory.used,memory.total,utilization.memory,temperature.gpu,power.draw,power.limit,clocks.gr,clocks.max.gr,clocks.mem,fan.speed,utilization.encoder,utilization.decoder --format=csv,noheader,nounits 2>$null)
-if (-not ($nv | Where-Object { $_ -match ',' })) { $nv = @(nvidia-smi --query-gpu=index,name,utilization.gpu,memory.used,memory.total --format=csv,noheader,nounits 2>$null) }
+$nv = Invoke-Bounded 'nvidia-smi' '--query-gpu=index,name,utilization.gpu,memory.used,memory.total,utilization.memory,temperature.gpu,power.draw,power.limit,clocks.gr,clocks.max.gr,clocks.mem,fan.speed,utilization.encoder,utilization.decoder --format=csv,noheader,nounits'
+if (-not ($nv | Where-Object { $_ -match ',' })) { $nv = Invoke-Bounded 'nvidia-smi' '--query-gpu=index,name,utilization.gpu,memory.used,memory.total --format=csv,noheader,nounits' }
 $o.nvidia = $nv
 $o.videoNames = @(Get-CimInstance Win32_VideoController | ForEach-Object { $_.Name })
 $o.gproc = @($pidGpu.Keys | ForEach-Object { $gp = $_.Split('|'); ,@([int]$gp[0], $gp[1], $pidGpu[$_]) })
@@ -116,14 +130,14 @@ $o.ifs = @(Get-NetAdapter | ForEach-Object {
      addrs = $(if ($loop % 10 -eq 0 -or -not $addrCache.ContainsKey($_.Name)) { $addrCache[$_.Name] = @(Get-NetIPAddress -InterfaceIndex $_.ifIndex -AddressFamily IPv4 | ForEach-Object { "$($_.IPAddress)/$($_.PrefixLength)" }) }; $addrCache[$_.Name]) }
 })
 
-$wsl = @(); $raw = (wsl.exe -l -v | Out-String) -replace "`0", ''
+$wsl = @(); $raw = (Wait-Bounded (Start-Bounded 'wsl.exe' '-l -v')) -replace "`0", ''
 foreach ($line in $raw -split "`r?`n") { if ($line -match '^\s*(\*)?\s*(\S+)\s+(Running|Stopped|Installing|Converting)\s+(\d)') { $wsl += @{ name = $Matches[2]; state = $Matches[3]; default = [bool]$Matches[1] } } }
 $o.wsl = $wsl
 
 $o.containers = @(); $o.dstats = @()
 if (@($wsl | Where-Object { $_.name -eq 'docker-desktop' -and $_.state -eq 'Running' }).Count -gt 0) {
-  $o.containers = @(docker ps --no-trunc --format '{{json .}}' 2>$null)
-  $o.dstats = @(docker stats --no-stream --format '{{json .}}' 2>$null)
+  $o.containers = Invoke-Bounded 'docker' 'ps --no-trunc --format "{{json .}}"'
+  $o.dstats = Invoke-Bounded 'docker' 'stats --no-stream --format "{{json .}}"'
 }
 
 if ($loop % 10 -eq 0) { $taskCache = @(Get-ScheduledTask | Where-Object { $_.TaskPath -notlike '\Microsoft\*' } | ForEach-Object {
