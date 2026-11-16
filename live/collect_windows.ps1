@@ -190,7 +190,8 @@ public static class FleetTopo {
 '@
   $o.topo = [FleetTopo]::Read()
 }
-# If Fleet Live went away, the pipe is gone: stop instead of looping on silently.
+# If Fleet Live went away, the pipe is gone: stop instead of looping on silently. (Windows PowerShell 5.1 does not
+# throw on a broken pipe, so there the lifeline and sshd checks at the top of the loop are what end it.)
 try { [Console]::Out.WriteLine(($o | ConvertTo-Json -Depth 6 -Compress)); [Console]::Out.Flush() } catch { exit 0 }
 $loop++
 $left = $FleetInterval - ((Get-Date) - $started).TotalSeconds

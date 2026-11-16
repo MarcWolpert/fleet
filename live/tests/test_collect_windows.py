@@ -289,6 +289,20 @@ class ClockLikeTaskManager(unittest.TestCase):
             "\\GPU Adapter Memory(*)\\Shared Usage", "\\Memory\\Available Bytes"])
         self.assertIn("mhz = [int]$freq[$_]; perf = [double]$perf[$_]; maxf = [double]$maxf[$_]", src)
 
+class LocalCollectorStopsWithFleet(unittest.TestCase):
+    """#156: on a Windows Fleet host, a restart (Settings save, file watch) ends the local collector: it is the
+    machine's proc, which stop_collectors terminates, and its stdin is a pipe that closes when Fleet exits."""
+
+    def test_stop_collectors_ends_the_local_windows_collector(self):
+        m = fl.Machine({"id": "local", "name": "local", "kind": "local"}, 3)
+        ssh = fl.Machine({"id": "win-desktop", "name": "win-desktop", "os": "windows", "ssh": "win-desktop"}, 3)
+        [p] = run_with_fake_popen(m.local_loop, system="Windows")
+        [q] = run_with_fake_popen(ssh.ssh_loop)
+        self.assertEqual((m.proc, ssh.proc), (p, q))
+        self.assertEqual((p.kw.get("stdin"), p.stdin.closed), (subprocess.PIPE, False))
+        fl.stop_collectors(type("F", (), {"machines": {"local": m, "win-desktop": ssh}})())
+        self.assertEqual((p.terminated, q.terminated), (True, True))
+
 
 if __name__ == "__main__":
     unittest.main()

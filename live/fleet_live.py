@@ -360,8 +360,9 @@ class Machine:
         elif platform.system() == "Windows":
             argv, script = ps_launch("$FleetInterval=%s\n" % self.interval + ps_compact(open(os.path.join(HERE, "collect_windows.ps1"), encoding="utf-8").read()))
             p = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+            self.proc = p     # stop_collectors ends it before a restart: there's no sshd to outlive
             p.stdin.write(script)
-            p.stdin.flush()   # stdin stays open: the collector's lifeline
+            p.stdin.flush()   # stdin stays open: the collector's lifeline, closed when Fleet exits
             for line in p.stdout:
                 s = line.decode("utf-8", "replace").strip()
                 if s.startswith("{"):
