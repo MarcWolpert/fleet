@@ -38,7 +38,7 @@ class Packages(unittest.TestCase):
             self.assertEqual([f for f in app if not os.path.exists(os.path.join(appdir, f))], [])
             with open(os.path.join(prefix, "bin", "fleet")) as f:
                 self.assertIn(os.path.join(appdir, "fleet_live.py"), f.read())
-            for f in ("SymbolsNerdFontMono-Regular.ttf", "SymbolsNerdFont-LICENSE.txt"):   # the terminals' symbols font and its licence (#387)
+            for f in ("SymbolsNerdFontMono-Regular.ttf", "SymbolsNerdFont-LICENSE.txt", "FiraCode-Regular.woff2", "FiraCode-OFL.txt", "Hack-LICENSE.txt"):   # the terminals' fonts and their licences (#387, #408)
                 self.assertTrue(os.path.exists(os.path.join(appdir, "web", "fonts", f)), f)
 
     def test_a_self_contained_linux_package_installs_its_own_python_ttyd_and_tmux(self):
@@ -72,7 +72,8 @@ class Packages(unittest.TestCase):
             appdir = os.path.join(prefix, "share", "fleet")
             with open(os.path.join(pkg, "THIRD_PARTY_NOTICES.txt")) as f:   # what it carries, and their licences (#388)
                 notices = f.read()
-            for want in ("ttyd 1.7.7", "tmux 3.8", "mbed TLS", "musl libc", "libevent", "Python 3.12", "Symbols Nerd Font Mono", "Permission is hereby granted"):
+            for want in ("ttyd 1.7.7", "tmux 3.8", "mbed TLS", "musl libc", "libevent", "Python 3.12", "Symbols Nerd Font Mono", "Permission is hereby granted", "Fira Code", "JetBrains Mono", "Source Code Pro", "Hack",
+                         "SIL Open Font License", "Bitstream Vera License"):
                 self.assertIn(want, notices)
             for f in ("FLEET_BUNDLE", "bin/ttyd", "bin/tmux", "terminfo/x/xterm-256color", "python/bin/python3", "live/fleet_live.py", "THIRD_PARTY_NOTICES.txt"):
                 self.assertTrue(os.path.exists(os.path.join(appdir, f)), f)

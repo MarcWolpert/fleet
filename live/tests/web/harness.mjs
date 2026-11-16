@@ -19,8 +19,8 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const WEB = path.resolve(process.env.FLEET_TEST_WEB || path.join(HERE, '..', '..', 'web'));  // FLEET_TEST_WEB: test another copy (e.g. a red run)
 
 /* ---------- fixture server ---------- */
-const TYPES = {'.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml'};
-const WRITES = ['/api/config', '/api/test', '/api/terminal', '/api/prefs', '/api/tilepins', '/api/connect', '/api/retry', '/api/pins', '/api/inline-terminal', '/api/inline-terminal/close', '/api/inline-terminal/attach', '/api/inline-terminal/update'];
+const TYPES = {'.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml', '.txt': 'text/plain; charset=utf-8', '.woff2': 'font/woff2'};
+const WRITES = ['/api/config', '/api/test', '/api/terminal', '/api/prefs', '/api/tilepins', '/api/connect', '/api/retry', '/api/pins', '/api/inline-terminal', '/api/inline-terminal/close', '/api/inline-terminal/attach', '/api/inline-terminal/update', '/api/fonts/install', '/api/fonts/remove'];
 // A write, judged the way fleet_live.py's do_POST judges it: [status] or [200, its answer]. 403 unless it comes
 // from this page (Host, Origin, X-Fleet: 1), 404 for a route the server doesn't have, 400 for a body it won't keep
 // (the server drops the connection on a body that isn't JSON; the page sees a failed write either way).
@@ -50,7 +50,7 @@ export function startServer(fx){
       const mid = u.searchParams.get('machine') || '';
       // fx.posts: the writes the server took, {path, body, headers}; fx.refused: the ones it turned away, with the status
       if (req.method === 'POST'){ const parts = []; req.on('data', c => parts.push(c)); req.on('end', () => {
-        const raw = Buffer.concat(parts), body = raw.toString(), w = {path: u.pathname, body, headers: req.headers};
+        const raw = Buffer.concat(parts), body = raw.toString(), w = {path: u.pathname, url: req.url, body, headers: req.headers};
         const [status, answer] = judgeWrite(req, srv.address().port, u.pathname, raw);
         if (status !== 200){ fx.refused = (fx.refused || []).concat([Object.assign(w, {status})]); res.writeHead(status); return res.end(); }
         fx.posts = (fx.posts || []).concat([w]);
@@ -76,6 +76,10 @@ export function startServer(fx){
         return Promise.resolve(typeof fx.proc === 'function' ? fx.proc(mid, pid, fx.procCalls.length) : null).then(a => json(a || {pid, error: 'no fixture'}));
       }
       if (u.pathname === '/api/inline-terminals'){ if (fx.terms) return json(fx.terms); res.writeHead(404); return res.end(); }   // the kept inline terminals (#337)
+      // the terminals' fonts (#408): fx.fonts is /api/fonts' answer, fx.fontData the files of yours, by name
+      if (u.pathname === '/api/fonts'){ if (fx.fonts) return json(fx.fonts); res.writeHead(404); return res.end(); }
+      if (u.pathname === '/api/font'){ const b = (fx.fontData || {})[u.searchParams.get('f')]; if (!b){ res.writeHead(404); return res.end(); }
+        res.writeHead(200, {'Content-Type': 'font/woff2', 'Content-Length': b.length}); return res.end(b); }
       if (u.pathname === '/api/config') return json(fx.config || {path: '/dev/null', interval: 3, machines: [], status: {}, terminals: []});
       res.writeHead(404); return res.end();
     }
