@@ -1216,16 +1216,19 @@ class Fleet:
                 spec["status"] = "hostonly" if status != "ok" else status
                 spec["error"] = (error or "not reachable") + " · showing what its host sees"
             else:
-                spec["base"] = {"id": mid + "/base", "h": self.leaf(mid + "/base", [0] * 5, record)}
+                spec["base"] = {"id": mid + "/base", "h": self.leaf(mid + "/base", [0] * 5, False)}   # nothing was read
             if vm_parent is not None and vm_hostside is None:
                 spec["status"] = "off" if status != "ok" else status
             # Without a reading of its own it still has its VMs: each shows what it knows of itself, not "off".
             spec["vms"] = [self.machine_spec(mm, record) for mm in self.machines.values() if mm.cfg.get("vm_on") == mid]
             return spec
+        # Only a live reading is recorded: a machine that isn't live shows its last one, and its history waits.
+        live = status == "ok"
+        own = record and live
         spec.update({"os": view["os"] + (" · " + view["arch"] if view.get("arch") else ""), "cpu_model": view.get("cpu_model", ""),
                      "uptime": fmt_uptime(view.get("uptime", 0)), "cap": view["cap"], "cronLabel": view.get("cronLabel", "Cron jobs"),
                      "gpus": [{"name": g["name"], "mem": g.get("mem", ""),
-                               "m": [[k, lim, self.leaf("%s/gpu%d/%s" % (mid, gi, k), [(g.get("m") or {}).get(k, 0.0)], record)["cpu"]] for k, lim in gpu_metric_order(g)]}
+                               "m": [[k, lim, self.leaf("%s/gpu%d/%s" % (mid, gi, k), [(g.get("m") or {}).get(k, 0.0)], own)["cpu"]] for k, lim in gpu_metric_order(g)]}
                               for gi, g in enumerate(view["gpus"])], "ncpu": view["ncpu"],
                      "groups": view.get("groups", [])})
         if view.get("note"):
@@ -1250,12 +1253,12 @@ class Fleet:
                 cont_ids[c["id"]] = nid
                 proj.setdefault(c["project"], {"id": pid, "name": c["project"], "file": c["file"].split(",")[0], "services": []})["services"].append(
                     {"id": nid, "name": c["service"] or c["name"], "cname": c["name"], "image": c["image"], "status": c["status"], "g": c.get("gkeys") or (dflt_g if c["u"][2] else []),
-                     "h": self.leaf(nid, c["u"], record)})
+                     "h": self.leaf(nid, c["u"], own)})
             else:
                 nid = "%s/containers/%s" % (mid, slug(c["name"]))
                 cont_ids[c["id"]] = nid
                 loose.append({"id": nid, "name": c["name"], "cname": c["name"], "image": c["image"], "status": c["status"], "g": c.get("gkeys") or (dflt_g if c["u"][2] else []),
-                              "h": self.leaf(nid, c["u"], record)})
+                              "h": self.leaf(nid, c["u"], own)})
         spec["compose"] = list(proj.values())
         spec["containers"] = loose
         # VMs: nested machines from config when they match by name; host-side usage otherwise.
@@ -1269,21 +1272,22 @@ class Fleet:
             mm = nested.get(v["name"])
             if mm:
                 listed.add(v["name"])
-                sub = self.machine_spec(mm, record, vm_hostside={"u": v["u"], "cap": vm_cap(view, v)}, vm_parent=m)
-                sub["hostside"] = v["u"]
+                sub = self.machine_spec(mm, record, vm_hostside={"u": v["u"], "cap": vm_cap(view, v)} if live else None, vm_parent=m if live else None)
+                if live:
+                    sub["hostside"] = v["u"]
                 vm_ids[v["name"]] = sub["id"]
                 spec["vms"].append(sub)
             else:
                 vid = "%s/vms/%s" % (mid, slug(v["name"]))
                 vm_ids[v["name"]] = vid
                 facts = ", ".join("%s (%s)" % (d["name"], d["state"]) for d in v.get("distros", []))
-                spec["vms"].append({"id": vid, "name": v["name"], "tile": "vm", "status": "ok" if v.get("running") else "off",
+                spec["vms"].append({"id": vid, "name": v["name"], "tile": "vm", "status": ("ok" if v.get("running") else "off") if live else status,
                                     "os": facts or "VM", "agent": "seen from the host", "cap": vm_cap(view, v),
-                                    "gpus": [], "cronLabel": "Cron jobs", "base": {"id": vid + "/base", "h": self.leaf(vid + "/base", v["u"], record)},
+                                    "gpus": [], "cronLabel": "Cron jobs", "base": {"id": vid + "/base", "h": self.leaf(vid + "/base", v["u"], own)},
                                     "baseCron": [], "compose": [], "containers": [], "vms": [], "procs": []})
         for name, mm in nested.items():
             if name not in listed:
-                spec["vms"].append(self.machine_spec(mm, record, vm_parent=m))
+                spec["vms"].append(self.machine_spec(mm, record, vm_parent=m if live else None))
         # Which GPUs each owner's processes run on (p[13]), and how much of each GPU goes to anything but Base itself
         # (a process on several GPUs counts evenly on each, as the web model splits it).
         on_gpu = collections.defaultdict(set)
@@ -1303,7 +1307,7 @@ class Fleet:
             on = ["gpu%d" % i for i in sorted(on_gpu["job:%d" % n] | on_gpu["unit:" + j.get("cmd", "")])] or dflt_g  # dflt_g: the host doesn't name them
             jobs.append({"id": jid, "name": j["name"], "sched": j["sched"], "human": j.get("human", ""), "cmd": j.get("cmd", ""),
                          "last": j.get("last", "") or ("next " + j["next"] if j.get("next") else ""), "running": j["running"],
-                         "state": j.get("state", ""), "src": j.get("src", ""), "g": on if j["u"][2] else [], "h": self.leaf(jid, j["u"], record)})
+                         "state": j.get("state", ""), "src": j.get("src", ""), "g": on if j["u"][2] else [], "h": self.leaf(jid, j["u"], own)})
         spec["baseCron"] = jobs
         base_u = [max(0.0, host[i] - csum[i] - vsum[i] - jsum[i]) for i in range(5)]
         if view["gpus"]:
@@ -1311,10 +1315,10 @@ class Fleet:
         # Base on each GPU: what's left there, scaled to Base's own GPU total.
         left = [max(0.0, g.get("util", 0.0) - not_base[i]) for i, g in enumerate(view["gpus"])]
         base_g = [base_u[2] * x / sum(left) if sum(left) else 0.0 for x in left]
-        spec["base"] = {"id": mid + "/base", "h": self.leaf(mid + "/base", base_u, record), "g": ["gpu%d" % i for i, x in enumerate(base_g) if x > 0],
-                        "gh": {"gpu%d" % i: self.leaf("%s/base/gpu%d" % (mid, i), [x], record)["cpu"] for i, x in enumerate(base_g)}}
+        spec["base"] = {"id": mid + "/base", "h": self.leaf(mid + "/base", base_u, own), "g": ["gpu%d" % i for i, x in enumerate(base_g) if x > 0],
+                        "gh": {"gpu%d" % i: self.leaf("%s/base/gpu%d" % (mid, i), [x], own)["cpu"] for i, x in enumerate(base_g)}}
         spec["procs_owner"] = {"cont": cont_ids, "vm": vm_ids}
-        if record:
+        if own:
             HIST.push(mid + "/__host", host)
             for c in view.get("lcpus", []):
                 HIST.push("%s/__cpu/%d" % (mid, c["n"]), [c["pct"]])

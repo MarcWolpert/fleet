@@ -311,5 +311,79 @@ class VmsOfAHostWithoutAReading(TreeTest):
                                         ("lx", "connecting", False, [("lx-vm", "connecting", False, [])])])
 
 
+def busy_view(cpu, **over):
+    """A host reading with a bit of everything that has a history: Base, a container, a job, a GPU, CPUs, an interface, a disk."""
+    v = view(host=[cpu, 6.0, 20.0, 1.0, 0.5], cap=[4, 16.0, 100.0, 500.0, 125.0], gpus=[gpu("RTX A4000", 20.0)], gpu_procs=True,
+             procs=[prow(10, "python3", "base", 20.0, [0], cpu=cpu)], containers=[container("abc123", "web", [0.5, 1.0, 0, 0, 0])],
+             jobs=[job("rotate.sh", u=[0.1, 0.05, 0, 0, 0])], lcpus=[{"n": n, "pct": 10.0 * cpu} for n in range(4)],
+             ifs=[{"name": "eth0", "kind": "physical", "rx": 0.25, "tx": 0.25}], disks=[{"name": "sda", "read": 0.5, "write": 0.5}])
+    v.update(over)
+    return v
+
+
+def snapshot():
+    with fleet_live.HIST.lock:
+        return {k: [list(q) for q in v] for k, v in fleet_live.HIST.d.items()}
+
+
+class OnlyLiveReadingsAreRecorded(TreeTest):
+    """#163: a machine that isn't live shows its last reading, but its history waits instead of repeating it."""
+
+    def tree(self, spec):
+        def one(s):
+            return (s["id"], s["status"], [one(v) for v in s["vms"]])
+        return one(spec)
+
+    def test_a_host_gone_offline_adds_nothing_to_any_history(self):
+        f = make_fleet(HOST_CFG)
+        m = give(f, "nas", busy_view(1.0))
+        for cpu in (1.0, 2.0, 3.0):
+            m.view = busy_view(cpu)
+            self.record(f, "nas")
+        before = snapshot()
+        self.assertEqual(sorted(before), ["nas/__cpu/0", "nas/__cpu/1", "nas/__cpu/2", "nas/__cpu/3", "nas/__disk/sda", "nas/__host", "nas/__if/eth0",
+                                          "nas/base", jid("nas", "rotate.sh", "crontab", "*/5 * * * *", "/usr/local/bin/rotate.sh"),
+                                          "nas/base/gpu0", "nas/containers/web", "nas/gpu0/util"])
+        m.status, m.error = "offline", "connection closed (exit 255)"
+        for _ in range(3):
+            spec = self.record(f, "nas")
+        self.assertEqual(snapshot(), before)
+        self.assertEqual((spec["status"], spec["has_data"], spec["base"]["h"]["cpu"][-4:]), ("offline", True, [0.0, 0.4, 1.4, 2.4]))   # less the container and the job
+        m.view, m.status = busy_view(4.0), "ok"   # back: the next reading follows the last one taken
+        self.assertEqual(self.record(f, "nas")["base"]["h"]["cpu"][-5:], [0.0, 0.4, 1.4, 2.4, 3.4])
+
+    def test_a_restored_reading_waits_for_the_first_live_one(self):
+        f = make_fleet(HOST_CFG)
+        m = give(f, "nas", busy_view(2.0), status="connecting")   # as load_state leaves it
+        self.record(f, "nas")
+        self.assertEqual(snapshot(), {})
+
+    def test_vms_under_a_host_that_is_not_live_show_their_own_state(self):
+        f = make_fleet(HOST_CFG, VM_CFG, VM2_CFG)
+        give(f, "nas", host_view([vm("win-vm", [3.5, 16.0, 0, 2.0, 1.0]), vm("lab", [1.0, 4.0, 0, 0, 0])]), status="offline")
+        f.machines["win-vm"].status = "offline"
+        spec = self.record(f, "nas")
+        self.assertEqual(self.tree(spec), ("nas", "offline", [("win-vm", "offline", []), ("nas/vms/lab", "offline", []), ("lab-vm", "connecting", [])]))
+        self.assertNotIn("hostside", spec["vms"][0])
+        self.assertEqual(snapshot(), {})
+
+    def test_a_live_vm_under_a_host_that_is_not_live_still_records_its_own_readings(self):
+        f = make_fleet(HOST_CFG, VM_CFG)
+        give(f, "nas", host_view([vm("win-vm", [3.5, 16.0, 0, 2.0, 1.0])]), status="offline")
+        give(f, "win-vm", view(host=[1.5, 9.0, 0.0, 2.0, 1.0], os="Windows"))
+        spec = self.record(f, "nas")
+        self.assertEqual(self.tree(spec), ("nas", "offline", [("win-vm", "ok", [])]))
+        self.assertEqual(sorted(snapshot()), ["win-vm/__host", "win-vm/base"])
+        self.assertEqual(spec["vms"][0]["base"]["h"]["cpu"][-1], 1.5)
+
+    def test_a_vm_seen_only_from_a_live_host_records_what_the_host_sees(self):
+        f = make_fleet(HOST_CFG, VM_CFG)
+        give(f, "nas", host_view([vm("win-vm", [3.5, 16.0, 0, 2.0, 1.0])]))
+        f.machines["win-vm"].status = "offline"
+        spec = self.record(f, "nas")
+        self.assertEqual(self.tree(spec), ("nas", "ok", [("win-vm", "hostonly", [])]))
+        self.assertEqual(snapshot()["win-vm/base"][0][-1], 3.5)
+
+
 if __name__ == "__main__":
     unittest.main()
