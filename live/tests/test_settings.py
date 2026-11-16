@@ -206,5 +206,59 @@ class SaveKeepsWhatFleetReads(SettingsWithTempConfig):
             self.assertEqual(tomllib.load(f), {"interval": 5, "terminal": "auto", "machine": [NAS, WIN, THIS]})
 
 
+# ---------- #88: Runs on can't go round in a circle ----------
+def lx(mid, vm_on=""):
+    m = {"id": mid, "name": mid, "ssh": mid, "os": "linux"}
+    if vm_on:
+        m["vm_on"] = vm_on
+    return m
+
+
+def circle(*names):
+    return "%s: “runs on” goes round in a circle (%s). One of them has to run on its own hardware." % (names[0], " → ".join(names + names[:1]))
+
+
+class RunsOnLoops(SettingsWithTempConfig):
+    def check(self, machines, errors):
+        cfg, got = fleet_live.validate_config({"interval": 3, "machines": machines})
+        self.assertEqual(got, errors)
+        if not errors:
+            self.assertEqual(cfg["machine"], machines)
+
+    def test_two_machines_on_each_other(self):
+        self.check([lx("nas"), lx("vm-a", "vm-b"), lx("vm-b", "vm-a")], [circle("vm-a", "vm-b")])
+
+    def test_three_in_a_circle_listed_out_of_order(self):
+        """Named from the first of them in the list, in the order they run on each other."""
+        self.check([lx("vm-c", "vm-a"), lx("nas"), lx("vm-a", "vm-b"), lx("vm-b", "vm-c")], [circle("vm-c", "vm-a", "vm-b")])
+
+    def test_a_machine_on_a_circle_is_not_a_second_error(self):
+        self.check([lx("vm-a", "vm-b"), lx("vm-b", "vm-a"), lx("vm-d", "vm-a")], [circle("vm-a", "vm-b")])
+
+    def test_two_circles_are_two_errors(self):
+        self.check([lx("vm-a", "vm-b"), lx("vm-b", "vm-a"), lx("vm-c", "vm-d"), lx("vm-d", "vm-c")],
+                   [circle("vm-a", "vm-b"), circle("vm-c", "vm-d")])
+
+    def test_runs_on_itself_is_still_the_one_error_it_was(self):
+        self.check([lx("vm-a", "vm-a")], ["vm-a: “runs on” must be another machine in the list."])
+
+    def test_runs_on_a_machine_not_in_the_list_is_still_the_one_error_it_was(self):
+        self.check([lx("vm-a", "gone")], ["vm-a: “runs on” must be another machine in the list."])
+
+    def test_a_vm_in_a_vm_is_fine(self):
+        """Control: a chain that ends at a machine on its own hardware nests, however deep."""
+        self.check([lx("nas"), lx("vm-a", "nas"), lx("vm-b", "vm-a"), lx("vm-c", "vm-b"), lx("vm-d", "nas")], [])
+
+    def test_save_refuses_a_circle_and_leaves_the_file_alone(self):
+        self.write(HAND_WRITTEN)
+        st, r = self.save(self.serve(), {"interval": 3, "machines": [lx("vm-a", "vm-b"), lx("vm-b", "vm-a")]})
+        self.assertEqual((st, r), (200, {"ok": False, "errors": [circle("vm-a", "vm-b")]}))
+        with open(self.path, encoding="utf-8") as f:
+            self.assertEqual(f.read(), HAND_WRITTEN)
+        self.assertEqual(sorted(os.listdir(self.tmp.name)), ["machines.toml"])
+        self.assertFalse(RESTARTED.wait(0.8))
+        self.assertEqual(RESTARTS, [])
+
+
 if __name__ == "__main__":
     unittest.main()

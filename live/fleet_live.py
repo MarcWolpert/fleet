@@ -1518,9 +1518,19 @@ def validate_config(data):
             if k in mm and not re.match(r"^[A-Za-z0-9_.@:-]{1,120}$", mm[k]):
                 errors.append("%s: %s has characters Fleet can't use." % (mm.get("name") or label, k))
         machines.append(mm)
+    runs_on = {mm["id"]: mm["vm_on"] for mm in machines if mm.get("id") and mm.get("vm_on")}
+    names = {mm["id"]: mm.get("name") or mm["id"] for mm in machines if mm.get("id")}
+    circled = set()
     for mm in machines:
         if mm.get("vm_on") and (mm["vm_on"] not in ids or mm["vm_on"] == mm.get("id")):
             errors.append("%s: “runs on” must be another machine in the list." % mm.get("name", "?"))
+        loop = [mm.get("id")]   # what it runs on, and what that runs on, ...: a circle never reaches a root
+        while loop[-1] in runs_on and runs_on[loop[-1]] not in loop:
+            loop.append(runs_on[loop[-1]])
+        if len(loop) > 1 and runs_on.get(loop[-1]) == loop[0] and loop[0] not in circled:
+            circled.update(loop)
+            errors.append("%s: “runs on” goes round in a circle (%s). One of them has to run on its own hardware."
+                          % (names[loop[0]], " → ".join(names[x] for x in loop + loop[:1])))
     if sum(1 for mm in machines if mm.get("kind") == "local") > 1:
         errors.append("Only one machine can be this computer.")
     term = str(data.get("terminal", "auto"))
