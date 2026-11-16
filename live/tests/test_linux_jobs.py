@@ -212,5 +212,29 @@ class Timers(unittest.TestCase):
         self.assertEqual(base(self.m()), [0.75, 0.0, 0.0, 0.0, 0.0], "sshd and nginx")
 
 
+class TimerLastRun(unittest.TestCase):
+    """When a timer last ran, from its list-timers line (NEXT LEFT LAST PASSED, LEFT and PASSED in any number
+    of words), shown like a Windows task's (2026-11-15 14:47); nothing for a timer that never ran."""
+
+    LINES = {
+        "hours": ("Mon 2026-11-16 00:00:00 PST  9h left          Sun 2026-11-15 00:00:00 PST  14h ago", "2026-11-15 00:00"),
+        "hmin": ("Sun 2026-11-15 15:00:00 PST  47min left       Sun 2026-11-15 12:47:00 PST  2h 13min ago", "2026-11-15 12:47"),
+        "days": ("Mon 2026-11-16 00:00:00 PST  9h left          Thu 2026-11-12 00:00:00 PST  3 days ago", "2026-11-12 00:00"),
+        "dayh": ("Mon 2026-11-16 00:00:00 PST  9h left          Fri 2026-11-13 22:00:00 PST  1 day 16h ago", "2026-11-13 22:00"),
+        "weekly": ("Mon 2026-11-16 00:00:00 PST  1 day 9h left    Mon 2026-11-02 00:00:00 PST  1 week 6 days ago", "2026-11-02 00:00"),
+        "offset": ("Mon 2026-11-16 00:00:00 +03  9h left          Sun 2026-11-15 00:00:00 +03  14h ago", "2026-11-15 00:00"),
+        "nonext": ("-                            -                Sat 2026-11-14 06:00:00 UTC  1 day 8h ago", "2026-11-14 06:00"),
+        "never": ("Sun 2026-11-15 18:30:00 PST  3h left          -                            -", ""),
+        "never-old": ("Sun 2026-11-15 18:30:00 PST  3h left          n/a                          n/a", ""),
+        "idle": ("-                            -                -                            -", ""),
+        "idle-old": ("n/a                          n/a              n/a                          n/a", ""),
+    }
+
+    def test_each_line(self):
+        timers = [{"timer": k + ".timer", "unit": k + ".service", "line": line} for k, (line, _) in self.LINES.items()]
+        m = derive(HOST, timers=timers)
+        self.assertEqual({j["name"]: j["last"] for j in m.view["jobs"]}, {k: last for k, (_, last) in self.LINES.items()})
+
+
 if __name__ == "__main__":
     unittest.main()

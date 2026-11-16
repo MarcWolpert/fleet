@@ -484,9 +484,8 @@ class Machine:
                 row[11] = "job:%d" % ji
         for tm in r.get("timers", []):
             u = unit_u.get(tm["unit"], [0.0] * 5)
-            line = tm["line"].split()
             jobs.append({"name": tm["timer"].replace(".timer", ""), "sched": "systemd timer", "human": "timer",
-                         "cmd": tm["unit"], "src": "systemd", "last": " ".join(line[-6:-4]) if len(line) > 6 else "",
+                         "cmd": tm["unit"], "src": "systemd", "last": timer_last(tm["line"]),
                          "running": tm["unit"] in unit_u, "u": u})
         gpu_total = sum(g["util"] for g in gpus)
         for c in containers:
@@ -805,6 +804,17 @@ def job_name(cmd):
         if b and b not in ("run-parts", "nice", "ionice", "env", "flock", "timeout", "sudo", "php", "python3", "python"):
             return b[:48]
     return (toks[0] if toks else cmd)[:48]
+
+
+TIMER_LINE = re.compile(r"(?:\w{3} \S+ \S+ \S+|-|n/a) (?:-|n/a|.+? (?:left|ago)) (?:\w{3} (\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}):\d{2} \S+|-|n/a)(?: |$)")
+
+
+def timer_last(line):
+    """When a timer last ran, from its `systemctl list-timers` line (NEXT LEFT LAST PASSED; LEFT and PASSED
+    take any number of words, a time never reached is "-" or "n/a"), as Windows tasks show it
+    (2026-11-15 14:47), or "" if it never ran."""
+    m = TIMER_LINE.match(" ".join(line.split()))
+    return "%s %s" % m.groups() if m and m.group(1) else ""
 
 
 SHELLS = ("sh", "bash", "dash", "ash", "zsh", "ksh", "mksh", "busybox")
