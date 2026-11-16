@@ -155,3 +155,83 @@ test('ttyd’s page adds the font it’s sent, then measures and draws with it',
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
 });
+
+// #408 review: what reaches the terminals when fonts fail, change, or have many faces
+const OPEN = async (fx) => {
+  fx.onPost = p => p === '/api/inline-terminal' ? {ok: true, id: 's1', url: '/fonts/FiraCode-OFL.txt', title: 'lab-linux'} : p.startsWith('/api/inline-terminal/') ? {ok: true} : null;
+  const p = await browser.page(fx, {ui: ui({sel: 'lx'})});
+  await p.waitFor(`document.querySelector('.hero [data-terminal="lx"]')`, SLOW);
+  await p.eval(`(openInline('lx'), true)`);
+  await p.waitFor(`document.querySelector('#tdrawer iframe') && document.querySelector('#tdrawer iframe').contentDocument && document.querySelector('#tdrawer iframe').contentDocument.readyState === 'complete'`, SLOW);
+  await p.eval(`(() => { const w = document.querySelector('#tdrawer iframe').contentWindow; w.got = []; w.addEventListener('message', e => w.got.push(e.data)); return true; })()`);
+  return p;
+};
+const SENT = `document.querySelector('#tdrawer iframe').contentWindow.got.filter(d => d.fleet === 'termFont').flatMap(d => (d.faces || []).map(f => f.family + ' ' + f.weight + ' ' + f.style))`;
+
+test('a font with many faces sends the four a terminal draws with; your own by any case; with its version in its address', async () => {
+  const many = {family: 'Iosevka', own: true, faces: [['300', 'normal'], ['400', 'italic'], ['900', 'normal'], ['700', 'italic'], ['400', 'normal'], ['700', 'normal'], ['500', 'normal']]
+    .map(([weight, style]) => ({url: `/api/font?f=Iosevka-${weight}${style}.woff2&v=1700000000`, weight, style}))};
+  const fx = fx1(CARRIED.concat([many]));
+  fx.fleet.prefs = {termFontFamily: '"iosevka", monospace'};
+  fx.fontData = Object.fromEntries(many.faces.map(f => [new URL(f.url, 'http://x').searchParams.get('f'), FIRA]));
+  const p = await OPEN(fx);
+  try {
+    await p.eval(`(sendTermFont(), true)`);
+    await p.waitFor(`${SENT}.length`, SLOW);
+    assert.deepEqual((await p.eval(SENT)).sort(), ['Iosevka 400 italic', 'Iosevka 400 normal', 'Iosevka 700 italic', 'Iosevka 700 normal']);
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
+test('a font whose data didn’t come is sent once it does', async () => {
+  const fx = fx1(CARRIED.concat([MINE]));
+  fx.fleet.prefs = {termFontFamily: '"Iosevka", monospace'};
+  fx.fontData = {};   // the server is restarting: no font yet
+  const p = await OPEN(fx);
+  try {
+    await p.eval(`(sendTermFont(), true)`);
+    await new Promise(r => setTimeout(r, 800));
+    assert.deepEqual(await p.eval(SENT), []);
+    fx.fontData = {'Iosevka-Regular.woff2': FIRA};
+    await p.eval(`(sendTermFont(), true)`);
+    await p.waitFor(`${SENT}.length`, SLOW);
+    assert.deepEqual(await p.eval(SENT), ['Iosevka 400 normal']);
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
+test('removing a font the server didn’t remove keeps your choice and says so', async () => {
+  const fx = fx1();
+  fx.fleet.prefs = {termFontFamily: '"Iosevka", monospace'};
+  fx.onPost = p => p === '/api/fonts/remove' ? {ok: true, removed: 0} : null;
+  const p = await browser.page(fx, {ui: ui({sel: 'lx'})});
+  try {
+    await p.eval(`(openSettings(), true)`);
+    await p.waitFor(`document.querySelector('#sheet [data-termfont]') && document.querySelector('#sheet [data-termfont]').value === 'Iosevka'`, SLOW);
+    await p.eval(`(document.querySelector('#sheet [data-fontremove]').click(), true)`);
+    await p.waitFor(`document.querySelector('#sheet [data-fontmsg]').textContent`, SLOW);
+    assert.match(await p.eval(`document.querySelector('#sheet [data-fontmsg]').textContent`), /^Fleet didn’t remove Iosevka/);
+    assert.equal(await p.eval(`PREFS.termFontFamily`), '"Iosevka", monospace');
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
+test('ttyd’s page uses the font it was sent last, whichever face loads last', async () => {
+  const src = fs.readFileSync(path.join(LIVE, 'fleet_live.py'), 'utf8');
+  const js = src.match(/TTYD_BRIDGE_JS = r"""([\s\S]*?)"""/)[1];
+  const page = `<html><body><script>window.term={options:{fontSize:13,fontFamily:'x'},rows:24,refresh(){},fit(){}}</script><script>${js}</script></body></html>`;
+  const p = await browser.page(fx1(), {ui: ui({sel: 'lx'})});
+  try {
+    await p.eval(`(window.__f = Object.assign(document.createElement('iframe'), {srcdoc: ${JSON.stringify(page)}}), document.body.appendChild(__f), true)`);
+    await p.waitFor(`__f.contentWindow && __f.contentWindow.term`, SLOW);
+    // Fira Code, with its data; then, before that loads, Hack, which this page has already
+    await p.eval(`fetch('/fonts/FiraCode-Bold.woff2').then(r => r.arrayBuffer()).then(b => {
+      __f.contentWindow.postMessage({fleet: 'termFont', size: 13, family: '"Fira Code", monospace', faces: [{family: 'Fira Code', weight: '700', style: 'normal', data: b}]}, '*');
+      __f.contentWindow.postMessage({fleet: 'termFont', size: 13, family: '"Hack", monospace', faces: []}, '*');
+      return true; })`);
+    await p.waitFor(`[...__f.contentDocument.fonts].some(f => f.family.replace(/"/g, '') === 'Fira Code' && f.status === 'loaded')`, SLOW);
+    await new Promise(r => setTimeout(r, 300));
+    assert.equal(await p.eval(`__f.contentWindow.term.options.fontFamily`), '"Hack", monospace');
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});

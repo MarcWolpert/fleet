@@ -12,7 +12,9 @@ import struct
 import sys
 import tempfile
 import threading
+import tracemalloc
 import unittest
+import zlib
 from unittest import mock
 
 LIVE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
@@ -40,6 +42,23 @@ def sfnt(family, weight=400, italic=False, sub=None):
         dirs += struct.pack(">4sIII", tag, 0, off + len(body), len(data))
         body += data + b"\0" * (-len(data) % 4)
     return head + dirs + body
+
+
+def woff(font, tables=None):
+    """A WOFF (1) of a TrueType file made by sfnt(): its tables zlib-compressed, as WOFF has them; or, given `tables`,
+    [(tag, compressed data, original length)] as they are, to make a bad one."""
+    if tables is None:
+        n = struct.unpack_from(">H", font, 4)[0]
+        tables = []
+        for i in range(n):
+            tag, _, off, ln = struct.unpack_from(">4sIII", font, 12 + 16 * i)
+            tables.append((tag, zlib.compress(font[off:off + ln]), ln))
+    off, dirs, body = 44 + 20 * len(tables), b"", b""
+    for tag, data, olen in tables:
+        dirs += struct.pack(">4sIIII", tag, off + len(body), len(data), olen, 0)
+        body += data + b"\0" * (-len(data) % 4)
+    total = off + len(body)
+    return struct.pack(">4sIIHHI", b"wOFF", 0x00010000, total, len(tables), 0, total) + b"\0" * 24 + dirs + body
 
 
 class Carried(unittest.TestCase):
@@ -74,7 +93,7 @@ class Yours(unittest.TestCase):
         self.assertEqual(fleet_live.install_font("MonoLisa.otf", b"OTTO" + sfnt("MonoLisa")[4:], folder=self.dir), "MonoLisa")
         got = {f["family"]: f["faces"] for f in self.own()}
         self.assertEqual(sorted(got), ["Iosevka", "MonoLisa"])
-        self.assertEqual(sorted((x["weight"], x["style"], x["url"]) for x in got["Iosevka"]),
+        self.assertEqual(sorted((x["weight"], x["style"], x["url"].split("&v=")[0]) for x in got["Iosevka"]),
                          [("400", "italic", "/api/font?f=Iosevka-Italic.ttf"), ("700", "normal", "/api/font?f=Iosevka-Bold.ttf")])
         self.assertEqual(os.stat(self.dir).st_mode & 0o777, 0o700)
 
@@ -96,6 +115,55 @@ class Yours(unittest.TestCase):
                 fleet_live.install_font(name, data, folder=self.dir)
         self.assertEqual(self.own(), [])
         self.assertFalse(os.path.exists(os.path.join(os.path.dirname(self.dir), "x.ttf")))
+
+    def test_a_woff_is_read_from_its_compressed_tables(self):
+        self.assertEqual(fleet_live.font_info("x.woff", woff(sfnt("Iosevka Bold", 700, sub="Iosevka"))), ("Iosevka", "700", "normal"))
+
+    def test_a_font_built_to_take_memory_is_read_within_bounds(self):
+        # #408 review: a WOFF whose tables inflate to gigabytes, several pointing at the same data; a TrueType file whose
+        # many table records each span the whole file. Fleet reads only the name and OS/2 tables, each bounded.
+        bomb = zlib.compress(b"\0" * (64 << 20), 9)
+        w = woff(None, [(t, bomb, 64 << 20) for t in (b"name", b"OS/2", b"glyf", b"loca")])
+        n = 1000
+        ttf = struct.pack(">I4H", 0x00010000, n, 0, 0, 0) + b"".join(struct.pack(">4sIII", b"T%03d" % i, 0, 1, 1 << 20) for i in range(n)) + b"\0" * (1 << 20)
+        for name, data, want in [("Foo-Bold.woff", w, ("Foo", "700", "normal")), ("Bar-Light.ttf", ttf, ("Bar", "300", "normal"))]:
+            tracemalloc.start()
+            got = fleet_live.font_info(name, data)
+            peak = tracemalloc.get_traced_memory()[1]
+            tracemalloc.stop()
+            self.assertEqual(got, want, name)
+            self.assertLess(peak, 8 << 20, name)
+
+    def test_a_file_name_ends_where_it_seems_to(self):
+        with self.assertRaises(ValueError):
+            fleet_live.install_font("a.ttf\n", sfnt("A"), folder=self.dir)
+        self.assertFalse(os.path.exists(self.dir) and os.listdir(self.dir))
+
+    def test_a_font_that_cant_be_read_is_named_from_its_file_and_can_be_removed(self):
+        fleet_live.install_font("Odd-Bold.ttf", sfnt("Odd", 700), folder=self.dir)
+        fleet_live.FONT_INFO.clear()
+        with mock.patch.object(fleet_live, "font_tables", side_effect=MemoryError):
+            got = fleet_live.font_catalog(folder=self.dir)
+            self.assertEqual([(f["family"], [x["weight"] for x in f["faces"]]) for f in got[-1:]], [("Odd", ["700"])])
+            self.assertEqual(len(got), 5, "Fleet's own are still there")
+            self.assertEqual(fleet_live.remove_font("Odd", folder=self.dir), 1)
+
+    def test_a_font_that_cant_be_read_isnt_installed(self):
+        with mock.patch.object(fleet_live, "font_tables", side_effect=MemoryError):
+            with self.assertRaises(ValueError):
+                fleet_live.install_font("Odd.ttf", sfnt("Odd"), folder=self.dir)
+        self.assertEqual(os.listdir(self.dir) if os.path.exists(self.dir) else [], [], "nothing left behind, not even a part")
+
+    def test_installed_again_it_reads_anew_and_its_address_changes(self):
+        fleet_live.install_font("Mono.ttf", sfnt("Mono", 400), folder=self.dir)
+        before = self.own()[0]["faces"][0]
+        os.utime(os.path.join(self.dir, "Mono.ttf"), (1, 1))
+        fleet_live.install_font("Mono.ttf", sfnt("Mono", 700), folder=self.dir)
+        after = self.own()[0]["faces"][0]
+        self.assertEqual((before["weight"], after["weight"]), ("400", "700"))
+        self.assertNotEqual(before["url"], after["url"], "so a page that has the old one fetches the new")
+        self.assertTrue(after["url"].startswith("/api/font?f=Mono.ttf&v="), after["url"])
+        self.assertEqual(os.stat(os.path.join(self.dir, "Mono.ttf")).st_mode & 0o777, 0o600)
 
     def test_a_font_is_removed_with_all_its_faces_and_only_those(self):
         fleet_live.install_font("Iosevka-Regular.ttf", sfnt("Iosevka"), folder=self.dir)
@@ -152,6 +220,11 @@ class Http(unittest.TestCase):
         self.assertEqual(self.req("GET", "/api/font?f=Iosevka-Regular.ttf"), (200, "font/ttf", font))
         self.assertEqual(self.req("GET", "/api/font?f=../machines.toml")[0], 404)
         self.assertEqual(self.req("GET", "/api/font?f=nothere.ttf")[0], 404)
+        self.assertEqual(self.req("GET", "/api/font?f=Iosevka-Regular.ttf%0A")[0], 404)
+        self.assertEqual(self.req("GET", "/api/fonts", headers={"Host": "evil.example:%d" % self.port})[0], 403)
+        self.assertEqual(self.req("GET", "/api/font?f=Iosevka-Regular.ttf", headers={"Host": "evil.example:%d" % self.port})[0], 403)
+        self.assertEqual(self.req("POST", "/api/fonts/install?name=x.ttf", font, dict(w, Origin="http://evil.example"))[0], 403)
+        self.assertEqual(self.req("POST", "/api/fonts/remove", b"{}", dict(w, Origin="http://evil.example"))[0], 403)
         self.assertEqual(self.req("GET", "/fonts/FiraCode-Regular.woff2")[0], 200)
         self.assertEqual(self.req("POST", "/api/fonts/install?name=x.ttf", font, {"Content-Type": "application/octet-stream"})[0], 403, "a write needs X-Fleet")
         st, _, b = self.req("POST", "/api/fonts/remove", json.dumps({"family": "Iosevka"}).encode(), dict(w, **{"Content-Type": "application/json"}))
@@ -161,3 +234,31 @@ class Http(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Body(unittest.TestCase):
+    """What install takes as its body: a length that isn't one is a 400; one over the limit is said to be, unread."""
+
+    def handler(self, length, body=b""):
+        h = fleet_live.Handler.__new__(fleet_live.Handler)
+        h.headers = {"Content-Length": length}
+        h.rfile = __import__("io").BytesIO(body)
+        h.path = "/api/fonts/install?name=x.ttf"
+        h.allowed = lambda write=False: True
+        sent = []
+        h.send_json = sent.append
+        h.send_error = lambda code, *a: sent.append(code)
+        h.close_connection = False
+        return h, sent
+
+    def test_lengths(self):
+        for length, want in [("-1", 400), ("abc", 400)]:
+            h, sent = self.handler(length, b"x" * 100)
+            h.do_POST()
+            self.assertEqual(sent, [want], length)
+        h, sent = self.handler(str(fleet_live.MAX_FONT + 1), b"")
+        h.do_POST()
+        self.assertEqual(len(sent), 1)
+        self.assertFalse(sent[0]["ok"])
+        self.assertIn("16 MB", sent[0]["error"])
+        self.assertTrue(h.close_connection)
