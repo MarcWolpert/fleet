@@ -28,6 +28,12 @@ class Command(unittest.TestCase):
                          ["/x/ttyd", "--port", "0", "--interface", lo, "--writable", "--check-origin", "--base-path", "/fleet-TOKEN",
                           "--index", "/tmp/i.html", "sh"])
 
+    def test_the_font_ends_with_fleets_symbols(self):
+        # #387: whatever font you name, Powerline and Nerd Font symbols it lacks come from the one Fleet carries
+        self.assertEqual(fl.inline_opts({"fontFamily": '"MesloLGS NF", Menlo, monospace'}, "nas")["fontFamily"], '"MesloLGS NF", Menlo, monospace, "Fleet Symbols"')
+        self.assertTrue(fl.inline_opts({}, "nas")["fontFamily"].endswith(', "Fleet Symbols"'))
+        self.assertEqual(fl.inline_opts({"fontFamily": 'x;}</style><script>'}, "nas")["fontFamily"], fl.inline_opts({}, "nas")["fontFamily"], "nothing but a font list")
+
     def test_text_size_and_title_options(self):
         # #335: its own text size, which may be small (more tmux panes) or fractional (Fleet's zoom divided out)
         self.assertEqual(fl.inline_opts({"fontSize": 10.5}, "nas")["fontSize"], "10.5")
@@ -80,6 +86,11 @@ class OwnPage(unittest.TestCase):
     def tearDown(self):
         fl.TTYD_INDEX.clear()
         self.dir.cleanup()
+
+    def test_fleets_symbols_font_goes_into_ttyds_page(self):
+        out = fl.inject_index("<html><head></head><body><script>window.term=t</script></body></html>")
+        self.assertIn('@font-face{font-family:"Fleet Symbols";src:url(data:font/ttf;base64,', out)
+        self.assertLess(out.index("@font-face"), out.index("</head>"))
 
     def test_the_script_goes_into_ttyds_page(self):
         page = "<html><body><script>window.term=t</script></body></html>"

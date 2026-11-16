@@ -66,6 +66,7 @@ class Packages(unittest.TestCase):
                 shutil.copy(os.path.join(LIVE, f), live)
             for f in ("index.html", "app.js", "themes.js", "icon.svg"):
                 shutil.copy(os.path.join(LIVE, "web", f), os.path.join(live, "web"))
+            shutil.copytree(os.path.join(LIVE, "web", "fonts"), os.path.join(live, "web", "fonts"))   # the terminals' symbols font (#387)
             build = os.path.join(live, "packaging", "macos", "build_macos.sh")
             env = dict(os.environ, TMPDIR=work)
             r = subprocess.run(["sh", build, "--arch", "arm64", "--check"], capture_output=True, text=True, timeout=300, env=env)

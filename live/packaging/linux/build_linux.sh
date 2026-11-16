@@ -16,6 +16,7 @@ OUT="$LIVE/dist/$NAME"
 rm -rf "$OUT" && mkdir -p "$OUT/app/live/web" "$OUT/icons"
 cp "$LIVE/fleet_live.py" "$LIVE/collect_linux.py" "$LIVE/collect_windows.ps1" "$LIVE/inspect_linux.py" "$LIVE/inspect_windows.ps1" "$LIVE/machines.example.toml" "$OUT/app/live/"
 cp "$LIVE/web/index.html" "$LIVE/web/app.js" "$LIVE/web/themes.js" "$LIVE/web/icon.svg" "$OUT/app/live/web/"
+mkdir -p "$OUT/app/live/web/fonts" && cp "$LIVE/web/fonts/"* "$OUT/app/live/web/fonts/"   # the terminals' symbols font (#387)
 if [ -n "$ARCH" ]; then   # what it runs, inside it: a Python, ttyd and tmux (#360)
   [ -n "$DEPS" ] || DEPS=$("$HERE/fetch_linux_deps.sh" "$ARCH" | tail -1)
   tar -xzf "$DEPS/python.tar.gz" -C "$OUT/app"   # -> app/python

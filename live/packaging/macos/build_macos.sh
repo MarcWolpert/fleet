@@ -40,6 +40,7 @@ lipo -create -output "$APP/Contents/MacOS/Fleet" "$@"
 
 cp "$LIVE/fleet_live.py" "$LIVE/collect_linux.py" "$LIVE/collect_windows.ps1" "$LIVE/inspect_linux.py" "$LIVE/inspect_windows.ps1" "$LIVE/machines.example.toml" "$APP/Contents/Resources/live/"
 cp "$LIVE/web/index.html" "$LIVE/web/app.js" "$LIVE/web/themes.js" "$LIVE/web/icon.svg" "$APP/Contents/Resources/live/web/"
+mkdir -p "$APP/Contents/Resources/live/web/fonts" && cp "$LIVE/web/fonts/"* "$APP/Contents/Resources/live/web/fonts/"   # the terminals' symbols font (#387)
 cp "$LIVE/packaging/icon/Fleet.icns" "$APP/Contents/Resources/Fleet.icns"
 cp "$LIVE/../COPYING" "$APP/Contents/Resources/COPYING"
 sed "s/@VERSION@/$VERSION/g" "$HERE/Info.plist" > "$APP/Contents/Info.plist"

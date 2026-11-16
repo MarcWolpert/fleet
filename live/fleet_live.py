@@ -2991,6 +2991,21 @@ def ttyd_argv(ttyd, token, argv, opts, index=None):
     return a + list(argv)
 
 
+# The inline terminals' font (#387): yours, or a list that tries the common Nerd Fonts first, and always, last, the
+# symbols font Fleet carries (Symbols Nerd Font Mono, in ttyd's page as "Fleet Symbols"), so Powerline and Nerd Font
+# symbols draw even where none is installed.
+TERM_FONT_DEFAULT = '"MesloLGS NF", "JetBrainsMono Nerd Font", "Hack Nerd Font", "FiraCode Nerd Font", Menlo, "DejaVu Sans Mono", Consolas, "Liberation Mono", monospace'
+FONT_LIST = re.compile(r"""^[\w ,"'.\-]{1,240}$""")
+SYMBOLS_FONT = os.path.join(HERE, "web", "fonts", "SymbolsNerdFontMono-Regular.ttf")
+
+
+def term_font_family(asked):
+    fam = str(asked or "").strip()
+    if not FONT_LIST.match(fam):
+        fam = TERM_FONT_DEFAULT
+    return fam if "Fleet Symbols" in fam else fam + ', "Fleet Symbols"'
+
+
 def inline_opts(d, title):
     """ttyd's client options for a session: its text size (its own, apart from Fleet's zoom, #335), title, theme."""
     try:
@@ -2999,7 +3014,7 @@ def inline_opts(d, title):
         size = 13.0
     th = d.get("theme") if isinstance(d.get("theme"), dict) else {}
     keep = {k: str(v)[:32] for k, v in th.items() if k in ("background", "foreground", "cursor", "selectionBackground") and re.match(r"^#[0-9a-fA-F]{3,8}$", str(v))}
-    opts = {"fontSize": "%g" % round(max(6.0, min(32.0, size)), 2), "titleFixed": title}
+    opts = {"fontSize": "%g" % round(max(6.0, min(32.0, size)), 2), "titleFixed": title, "fontFamily": term_font_family(d.get("fontFamily"))}
     if keep:
         opts["theme"] = json.dumps(keep, separators=(",", ":"))
     return opts
@@ -3034,8 +3049,14 @@ TTYD_BRIDGE_JS = r"""
   window.addEventListener('message', function(e){
     if (e.source !== P) return;
     var d = e.data; if (!d || d.fleet !== 'termFont') return;
+    if (typeof d.family === 'string' && /^[\w ,"'.\-]{1,260}$/.test(d.family)) family(d.family, 0);
     var n = Number(d.size); if (n >= 6 && n <= 32) apply(n, 0);
   });
+  function family(f, tries){
+    var t = window.term;
+    if (!t || !t.options){ if (tries < 100) setTimeout(function(){ family(f, tries + 1); }, 100); return; }
+    if (t.options.fontFamily !== f){ t.options.fontFamily = f; if (typeof t.fit === 'function') t.fit(); }
+  }
   P.postMessage({fleet: 'termReady'}, '*');
 })();
 """
@@ -3046,6 +3067,11 @@ def inject_index(page):
     """ttyd's page with TTYD_BRIDGE_JS added, or None when it isn't a ttyd page that keeps window.term."""
     if "window.term" not in page:
         return None
+    if os.path.exists(SYMBOLS_FONT):   # the symbols font Fleet carries, for every terminal's font list (#387)
+        with open(SYMBOLS_FONT, "rb") as f:
+            face = '<style>@font-face{font-family:"Fleet Symbols";src:url(data:font/ttf;base64,%s) format("truetype");}</style>' % base64.b64encode(f.read()).decode()
+        h = page.find("</head>")
+        page = page[:h] + face + page[h:] if h >= 0 else face + page
     tag = "<script>" + TTYD_BRIDGE_JS + "</script>"
     i = page.rfind("</body>")
     return page[:i] + tag + page[i:] if i >= 0 else page + tag

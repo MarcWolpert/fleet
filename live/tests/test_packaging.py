@@ -38,6 +38,8 @@ class Packages(unittest.TestCase):
             self.assertEqual([f for f in app if not os.path.exists(os.path.join(appdir, f))], [])
             with open(os.path.join(prefix, "bin", "fleet")) as f:
                 self.assertIn(os.path.join(appdir, "fleet_live.py"), f.read())
+            for f in ("SymbolsNerdFontMono-Regular.ttf", "SymbolsNerdFont-LICENSE.txt"):   # the terminals' symbols font and its licence (#387)
+                self.assertTrue(os.path.exists(os.path.join(appdir, "web", "fonts", f)), f)
 
     def test_a_self_contained_linux_package_installs_its_own_python_ttyd_and_tmux(self):
         # #360: --arch with --deps (stand-ins here for the pinned downloads fetch_linux_deps.sh makes)
@@ -78,6 +80,7 @@ class Packages(unittest.TestCase):
     def test_the_macos_bundle_copies_every_file(self):
         web, app = needed()
         script = open(os.path.join(LIVE, "packaging", "macos", "build_macos.sh"), encoding="utf-8").read()
+        self.assertIn('cp "$LIVE/web/fonts/"*', script)
         self.assertEqual([f for f in web if '/web/%s"' % f not in script], [])
         self.assertEqual([f for f in app if '/%s"' % f not in script], [])
 

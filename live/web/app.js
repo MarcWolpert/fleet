@@ -3554,6 +3554,8 @@ function inlineCmdField(){
   const cur = PREFS.inlineCmd || '', custom = !INLINE_CMDS.some(([v]) => v === cur);
   return `<label class="inline">Inline terminal starts <select data-inlinecmd aria-describedby="inline-help">${INLINE_CMDS.map(([v, l]) => `<option value="${esc(v)}"${!custom && cur === v ? ' selected' : ''}>${esc(l)}</option>`).join('')}<option value="custom"${custom ? ' selected' : ''}>A command of your own…</option></select></label>`
     + `<input type="text" class="inlinecmd" data-inlinecmdtext maxlength="300" placeholder="e.g. htop" aria-label="Inline terminal command" value="${custom ? esc(cur) : ''}"${custom ? '' : ' hidden'} spellcheck="false" autocomplete="off">`
+    + `<label class="inline tfam">Inline terminal font <input type="text" class="inlinecmd" data-termfontfamily maxlength="240" spellcheck="false" autocomplete="off" placeholder="${esc(TERM_FONT_DEFAULT)}" value="${esc(PREFS.termFontFamily || '')}" aria-describedby="tfam-help"></label>`
+    + `<p class="sub" id="tfam-help">A CSS font list; empty tries the common Nerd Fonts, then Menlo. Symbols your font lacks (a Powerline prompt’s, Nerd Font icons) come from the one Fleet carries.</p>`
     + `<p class="sub" id="inline-help"><b>Open inline</b> (the arrow by Open terminal) splits the pane: the page above, the terminal below, on the machine or in the container. It uses <code>ttyd</code> on this computer.</p>`;
 }
 document.addEventListener('change', e => {
@@ -3565,6 +3567,8 @@ document.addEventListener('change', e => {
     PREFS = Object.assign({}, PREFS, {inlineCmd:sel.value}); savePrefs('the inline terminal command');
     return;
   }
+  const ff = e.target.closest('#sheet [data-termfontfamily]');
+  if (ff){ PREFS = Object.assign({}, PREFS, {termFontFamily:ff.value.trim().slice(0, 240)}); savePrefs('the terminal font'); sendTermFont(); return; }
   const txt = e.target.closest('#sheet [data-inlinecmdtext]');
   if (txt){ PREFS = Object.assign({}, PREFS, {inlineCmd:txt.value.replace(/[\r\n]+/g, ' ').trim().slice(0, 300)}); savePrefs('the inline terminal command'); }
 });
@@ -3580,9 +3584,16 @@ let ZOOM = 1;
 const TERM_FONT = {min:7, max:24, def:13};
 function termFont(){ const n = Number(PREFS.termFont); return n >= TERM_FONT.min && n <= TERM_FONT.max ? n : TERM_FONT.def; }
 function termFontPx(){ return Math.round(termFont() / ZOOM * 100) / 100; }
+// the terminals' font (#387): yours, or a list that tries the common Nerd Fonts first; Fleet's symbols font is always
+// last (the server adds it to ttyd's page), so Powerline and Nerd Font symbols draw where no Nerd Font is installed
+const TERM_FONT_DEFAULT = '"MesloLGS NF", "JetBrainsMono Nerd Font", "Hack Nerd Font", "FiraCode Nerd Font", Menlo, "DejaVu Sans Mono", Consolas, "Liberation Mono", monospace';
+function termFontFamily(){
+  const f = String(PREFS.termFontFamily || '').trim(), fam = /^[\w ,"'.\-]{1,240}$/.test(f) ? f : TERM_FONT_DEFAULT;
+  return fam.includes('Fleet Symbols') ? fam : fam + ', "Fleet Symbols"';
+}
 function frameOrigin(f){ try { const u = new URL(f.src); return /^https?:$/.test(u.protocol) ? u.origin : '*'; } catch (e) { return '*'; } }
 function sendTermFont(f){
-  (f ? [f] : [...document.querySelectorAll('#tdrawer iframe')]).forEach(x => { try { x.contentWindow.postMessage({fleet:'termFont', size:termFontPx()}, frameOrigin(x)); } catch (e) {} });
+  (f ? [f] : [...document.querySelectorAll('#tdrawer iframe')]).forEach(x => { try { x.contentWindow.postMessage({fleet:'termFont', size:termFontPx(), family:termFontFamily()}, frameOrigin(x)); } catch (e) {} });
 }
 // what the terminal says (TTYD_BRIDGE_JS): ready for its size, it has focus (#336), or one of Fleet's keys typed in it
 window.addEventListener('message', e => {
@@ -3650,7 +3661,7 @@ function startInline(s){
   s.pending = true; renderDrawer();
   const id = s.node;
   if (s.then == null) s.then = PREFS.inlineCmd || '';   // a template's terminal keeps its own command
-  return api('/api/inline-terminal', Object.assign({node:id, then:s.then, theme:termTheme(), fontSize:termFontPx()}, s.group ? {group:s.group} : {})).then(r => {
+  return api('/api/inline-terminal', Object.assign({node:id, then:s.then, theme:termTheme(), fontSize:termFontPx(), fontFamily:termFontFamily()}, s.group ? {group:s.group} : {})).then(r => {
     if (!TD.list.includes(s)){ if (r.ok) api('/api/inline-terminal/close', {id:r.id}).catch(() => {}); return; }  // closed while it opened
     if (r.ok){ Object.assign(s, {id:r.id, url:r.url, title:r.title || s.title, group:r.group || s.group || r.id, pending:false, live:true}); if (TD.active === s.key) keepActive(s); }
     else Object.assign(s, {pending:false, error:r.error || 'Couldn’t open an inline terminal'});
@@ -3679,7 +3690,7 @@ async function syncTerms(){
 }
 function attachInline(s){
   if (s.attaching) return; s.attaching = true;
-  api('/api/inline-terminal/attach', {id:s.id, theme:termTheme(), fontSize:termFontPx()}).then(r => {
+  api('/api/inline-terminal/attach', {id:s.id, theme:termTheme(), fontSize:termFontPx(), fontFamily:termFontFamily()}).then(r => {
     s.attaching = false;
     if (!TD.list.includes(s)) return;
     if (r.ok){ s.url = r.url; s.title = r.title || s.title; s.error = ''; }

@@ -241,3 +241,29 @@ test('a terminal that loads late takes focus only if nothing else has it', async
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
 });
+
+// #387: the terminals' font: yours (Settings › Terminal), or a list that tries the common Nerd Fonts first; always
+// Fleet's symbols font last, so Powerline and Nerd Font symbols draw. A change reaches open terminals live.
+test('the terminals’ font: from Settings, live, with Fleet’s symbols last', async () => {
+  const src = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'fleet_live.py'), 'utf8');
+  const js = src.match(/TTYD_BRIDGE_JS = r"""([\s\S]*?)"""/)[1];
+  const page = `<html><body><script>window.term={options:{fontSize:13,fontFamily:'x'},fit(){parent.postMessage({fleet:'ack',family:this.options.fontFamily},'*')}}</script><script>${js}</script></body></html>`;
+  const fx = fx1();
+  fx.onPost = p => p === '/api/inline-terminal' ? {ok: true, id: 's1', url: 'data:text/html,' + encodeURIComponent(page), title: 'lab-linux'} : p === '/api/inline-terminal/close' ? {ok: true} : null;
+  const p = await browser.page(fx, {ui: ui({sel: 'lx'})});
+  try {
+    await p.waitFor(`document.querySelector('.hero [data-terminal="lx"]')`);
+    await p.eval(`(window.__acks = [], addEventListener('message', e => { if (e.data && e.data.fleet === 'ack') __acks.push(e.data.family); }), openInline('lx'), true)`);
+    await p.waitFor(`document.querySelector('#tdrawer iframe')`);
+    const first = posts(fx, '/api/inline-terminal')[0].fontFamily;
+    assert.match(first, /^"MesloLGS NF".*, "Fleet Symbols"$/);
+    await p.waitFor(`__acks.includes(${JSON.stringify(first)})`, 20000);
+    await p.eval(`(openSettings(), true)`);
+    await p.waitFor(`document.querySelector('#sheet [data-termfontfamily]')`);
+    assert.match(await p.eval(`document.querySelector('#sheet [data-termfontfamily]').placeholder`), /MesloLGS NF/);
+    await p.eval(`(() => { const i = document.querySelector('#sheet [data-termfontfamily]'); i.value = '"Source Code Pro for Powerline", monospace'; i.dispatchEvent(new Event('change', {bubbles: true})); return true; })()`);
+    await p.waitFor(`PREFS.termFontFamily === '"Source Code Pro for Powerline", monospace'`);
+    await p.waitFor(`__acks.includes('"Source Code Pro for Powerline", monospace, "Fleet Symbols"')`, 20000);
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
