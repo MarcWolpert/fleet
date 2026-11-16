@@ -986,7 +986,7 @@ function detailsView(n, docked){
   let body = '', shown = 0, more = '';
   const isInsp = p => INSP.pid === p[0] && INSP.mid === mid;
   let inspShown = false;
-  const rowHTML = p => `<tr data-pid="${p[0]}" aria-expanded="${isInsp(p)}" class="prow${isInsp(p) ? ' open' : ''}">${COLS.map(c => `<td class="${c.l ? 'l' : ''} ${c.cls || ''}">${c.show(p)}</td>`).join('')}</tr>`  // data-pid: columns can move or hide
+  const rowHTML = p => `<tr data-pid="${p[0]}" aria-expanded="${isInsp(p)}" class="drow${isInsp(p) ? ' open' : ''}">${COLS.map(c => `<td class="${c.l ? 'l' : ''} ${c.cls || ''}">${c.show(p)}</td>`).join('')}</tr>`  // data-pid: columns can move or hide
     + (isInsp(p) ? (inspShown = true, `<tr class="pinsp"><td colspan="${COLS.length}">${inspectPanel(p)}</td></tr>`) : '');
   if (groupBy){
     // Groups start collapsed, each header a summary; open ones are remembered per Group-by mode (S.groupOpen)

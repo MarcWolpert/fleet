@@ -117,3 +117,13 @@ test('Esc closes it; a process that exits or a machine that fails says so', asyn
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
 });
+
+test('Details rows stay table rows, lined up under their headers (regression: a class shared with the pin picker made them flex boxes)', async () => {
+  const fx = fixture(); fx.proc = () => look();
+  const p = await open(fx);
+  try {
+    assert.deepEqual(await p.eval(`[...new Set([...document.querySelectorAll('.ptbl tbody tr')].map(r => getComputedStyle(r).display))]`), ['table-row']);
+    // every cell sits under its own column header
+    assert.equal(await p.eval(`(() => { const th = [...document.querySelectorAll('.ptbl thead th')].map(e => Math.round(e.getBoundingClientRect().left)); return [...document.querySelectorAll('.ptbl tbody tr[data-pid]')].every(r => [...r.children].every((td, i) => Math.round(td.getBoundingClientRect().left) === th[i])); })()`), true);
+  } finally { await p.close(); }
+});
