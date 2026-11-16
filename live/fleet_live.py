@@ -6,7 +6,7 @@ Runs on macOS, Linux and Windows (Python 3.11+, standard library only).
 Each machine in ~/.config/fleet/machines.toml is watched by one thread:
   - kind = "local":   this computer, read directly
   - os = "linux":     collect_linux.py piped to `python3 -` over SSH
-  - os = "windows":   collect_windows.ps1 sent as `powershell -EncodedCommand`
+  - os = "windows":   collect_windows.ps1 piped to a short `powershell -EncodedCommand` bootstrap
 The remote collectors loop and stream one reading per interval until the SSH
 connection closes. Nothing is installed on any machine and nothing is changed.
 
@@ -241,6 +241,17 @@ def ps_compact(script):
     return "\n".join(l.strip() for l in script.splitlines() if l.strip() and not l.strip().startswith("#"))
 
 
+PS_BOOT = "iex ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String([Console]::In.ReadLine())))"
+
+
+def ps_launch(script):
+    """(argv, stdin) that run a long PowerShell script: the command is a short bootstrap that reads the script
+    as one base64 line from stdin, because OpenSSH's default shell, cmd.exe, takes at most 8,191 characters.
+    The caller keeps stdin open afterwards: the collector's lifeline."""
+    enc = base64.b64encode(PS_BOOT.encode("utf-16-le")).decode()
+    return ["powershell", "-NoProfile", "-NonInteractive", "-EncodedCommand", enc], base64.b64encode(script.encode("utf-8")) + b"\n"
+
+
 # ---------------------------------------------------------------- GPU metrics (issue #6)
 # Every GPU reports what it can as g["m"] = {metric: value} and g["lim"] = {metric: its maximum}.
 MIB = 1024 * 1024
@@ -348,9 +359,8 @@ class Machine:
     def ssh_cmd(self):
         base = ["ssh"] + SSH_MARK + [self.cfg["ssh"]]
         if self.cfg.get("os") == "windows":
-            script = "$FleetInterval=%s\n" % self.interval + ps_compact(open(os.path.join(HERE, "collect_windows.ps1"), encoding="utf-8").read())
-            enc = base64.b64encode(script.encode("utf-16-le")).decode()
-            return base + ["powershell -NoProfile -NonInteractive -EncodedCommand " + enc], None
+            argv, stdin = ps_launch("$FleetInterval=%s\n" % self.interval + ps_compact(open(os.path.join(HERE, "collect_windows.ps1"), encoding="utf-8").read()))
+            return base + [" ".join(argv)], stdin
         if self.cfg.get("os") == "macos":   # the same Mac reader as this Mac's, built from this file's source
             return base + ["python3 -"], mac_collector_script(self.interval).encode()
         script = "INTERVAL=%s\n" % self.interval + open(os.path.join(HERE, "collect_linux.py"), encoding="utf-8").read()
@@ -365,8 +375,10 @@ class Machine:
             p.terminate()
         if stdin:
             p.stdin.write(stdin)
-            p.stdin.close()  # Linux: the script itself; python3 - runs it at EOF
-        # Windows: stdin stays open and unused; the collector exits when it closes (its lifeline)
+            if self.cfg.get("os") == "windows":
+                p.stdin.flush()  # Windows: the script as one line; stdin then stays open, the collector exits when it closes (its lifeline)
+            else:
+                p.stdin.close()  # Linux: the script itself; python3 - runs it at EOF
         err_tail = collections.deque(maxlen=5)
         threading.Thread(target=lambda: [err_tail.append(l.decode("utf-8", "replace").strip()) for l in p.stderr], daemon=True).start()
         for line in p.stdout:
@@ -410,9 +422,11 @@ class Machine:
                 if view:
                     self.got(view)
         elif platform.system() == "Windows":
-            script = "$FleetInterval=%s\n" % self.interval + ps_compact(open(os.path.join(HERE, "collect_windows.ps1"), encoding="utf-8").read())
-            enc = base64.b64encode(script.encode("utf-16-le")).decode()
-            p = subprocess.Popen(["powershell", "-NoProfile", "-NonInteractive", "-EncodedCommand", enc], stdout=subprocess.PIPE)
+            argv, script = ps_launch("$FleetInterval=%s\n" % self.interval + ps_compact(open(os.path.join(HERE, "collect_windows.ps1"), encoding="utf-8").read()))
+            p = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+            self.proc = p     # stop_collectors ends it before a restart: there's no sshd to outlive
+            p.stdin.write(script)
+            p.stdin.flush()   # stdin stays open: the collector's lifeline, closed when Fleet exits
             for line in p.stdout:
                 s = line.decode("utf-8", "replace").strip()
                 if s.startswith("{"):
@@ -684,15 +698,28 @@ class Machine:
 
     # ------------------------------------------------------------ windows
     def windows_gpus(self, r):
-        """Adapters ordered by dedicated memory, each with its engines by type (the GPU Engine counters),
-        dedicated and shared memory, and NVIDIA's own numbers from nvidia-smi when present."""
+        """Adapters in LUID order (it stays put while VRAM use moves), each with its engines by type (the GPU
+        Engine counters), dedicated and shared memory, and NVIDIA's own numbers from the nvidia-smi row whose
+        memory.used is that adapter's dedicated usage (WDDM reports one number to both)."""
         nv = [[x.strip() for x in line.split(",")] for line in r.get("nvidia", []) if line and line.count(",") >= 4]
-        names = [x[1] for x in nv] + [n for n in r.get("videoNames", []) if not any(n == x[1] for x in nv)]
+        others = [n for n in r.get("videoNames", []) if not any(n == x[1] for x in nv)]
         num = lambda x: float(x) if re.match(r"^-?\d+(\.\d+)?$", x or "") else None
+
+        def luid_key(g):
+            try:
+                return tuple(int(x, 16) for x in g["luid"].split("_"))
+            except (KeyError, AttributeError, ValueError):
+                return (float("inf"),)
+        adapters = sorted(r.get("gpus", []), key=luid_key)
+        rows, pairs = {}, sorted((abs((num(x[3]) or 0) * MIB - float(g.get("dedicated") or 0)), j, i)
+                                 for j, x in enumerate(nv) for i, g in enumerate(adapters))
+        for _, j, i in pairs:
+            if i not in rows and j not in rows.values():
+                rows[i] = j
         gpus, luid_idx = [], {}
-        for i, g in enumerate(r.get("gpus", [])):
+        for i, g in enumerate(adapters):
             luid_idx[g["luid"]] = i
-            row = nv[i] if i < len(nv) else []
+            row = nv[rows[i]] if i in rows else []
             total = num(row[4]) if len(row) > 4 else None
             m = {"util": min(100.0, g.get("util", 0))}
             for e, v in (g.get("eng") or {}).items():
@@ -719,7 +746,8 @@ class Machine:
                         lim[k] = num(row[j])
             for k in ("3d", "copy", "encode", "decode"):   # Task Manager's four, there even when idle
                 m.setdefault(k, 0.0)
-            gpus.append({"name": names[i] if i < len(names) else "GPU %d" % i, "mem": "%d GB VRAM" % round(total / 1024) if total else "",
+            name = row[1] if row else others.pop(0) if others else "GPU %d" % i
+            gpus.append({"name": name, "mem": "%d GB VRAM" % round(total / 1024) if total else "",
                          "util": m["util"], "m": m, "lim": lim})
         gpu_by_pid = {}
         for pid, luid, pct in r.get("gproc", []):
@@ -735,6 +763,7 @@ class Machine:
         for tk in r["tasks"]:
             tk["triggers"] = aslist(tk.get("triggers"))
         t = r["t"]
+        tp, tn, td = r.get("tp", t), r.get("tn", t), r.get("td", t)   # when process CPU, adapter bytes and docker stats were read
         ncpu = r["ncpu"]
         lc = sorted(r.get("lcpus", []), key=lambda x: x["n"])
         topo = r.get("topo") or []
@@ -745,7 +774,9 @@ class Machine:
         for s in topo:
             n, core, eff, l3 = (int(x) for x in s.split(":"))
             tmap[n] = (core, eff, l3)
-        lcpus = [{"n": c["n"], "pct": c["pct"], "mhz": c.get("mhz", 0), "core": str(tmap.get(c["n"], ("",))[0]),
+        def mhz(c):   # Task Manager's Speed: frequency x % Processor Performance / % of Maximum Frequency
+            return round(c.get("mhz", 0) * c["perf"] / (c.get("maxf") or 100.0)) if c.get("perf", 0) > 0 else c.get("mhz", 0)
+        lcpus = [{"n": c["n"], "pct": c["pct"], "mhz": mhz(c), "core": str(tmap.get(c["n"], ("",))[0]),
                   "eff": tmap.get(c["n"], (0, 0, -1))[1], "l3": str(tmap.get(c["n"], (0, 0, -1))[2])} for c in lc]
         groups = group_lcpus_windows(lcpus)
         host_cpu = sum(c["pct"] for c in lc) / 100.0
@@ -754,7 +785,7 @@ class Machine:
         self.disk_peak = max(self.disk_peak, disk * MB * 1.25)
         ifs, net, speed = [], 0.0, 0.0
         for a in r.get("ifs", []):
-            rx, tx = self.rate("ifrx." + a["name"], a["rx"], t) / MB, self.rate("iftx." + a["name"], a["tx"], t) / MB
+            rx, tx = self.rate("ifrx." + a["name"], a["rx"], tn) / MB, self.rate("iftx." + a["name"], a["tx"], tn) / MB
             kind = "virtual" if a.get("virtual") else "physical"
             ifs.append({"name": a["name"], "kind": kind, "rx": rx, "tx": tx, "addrs": a.get("addrs") or [], "master": "",
                         "state": a.get("status", ""), "speed": a.get("speed", ""), "desc": a.get("desc", "")})
@@ -767,7 +798,7 @@ class Machine:
         procs, vm_u = [], [0.0] * 5
         for p in r.get("procs", []):
             pid, ppid, name, c_secs, ws, threads, io, cmd = p
-            c = self.rate("wp.%d" % pid, c_secs, t)  # cumulative CPU seconds -> cores
+            c = self.rate("wp.%d" % pid, c_secs, tp)  # cumulative CPU seconds -> cores
             io = max(0.0, io)
             g = sum(gpu_by_pid.get(pid, {}).values())
             row = [pid, ppid, name, "", "", c, ws / GB, io / MB, g, threads, cmd, "base", -1, sorted(gpu_by_pid.get(pid, {})), [],
@@ -797,7 +828,7 @@ class Machine:
             labels = dict(kv.split("=", 1) for kv in c.get("Labels", "").split(",") if "=" in kv)
             cid = c.get("ID", "")[:12]
             st = stats.get(cid, (0, 0, 0, 0))
-            u = [st[0], st[1], 0.0, self.rate("cb." + cid, st[2], t) / MB, self.rate("cn." + cid, st[3], t) / MB]
+            u = [st[0], st[1], 0.0, self.rate("cb." + cid, st[2], td) / MB, self.rate("cn." + cid, st[3], td) / MB]
             containers.append({"id": cid, "name": c.get("Names", ""), "image": c.get("Image", ""), "status": c.get("Status", ""),
                                "project": labels.get("com.docker.compose.project", ""), "service": labels.get("com.docker.compose.service", ""),
                                "file": labels.get("com.docker.compose.project.config_files", ""), "networks": c.get("Networks", ""), "u": u})

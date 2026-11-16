@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Fleet Live: one read-only snapshot of a Windows machine, printed as JSON.
-# Sent over SSH as `powershell -EncodedCommand`; installs and changes nothing.
+# Sent over SSH as one base64 line on stdin to a short `powershell -EncodedCommand` bootstrap; installs and changes nothing.
 # Runs as a loop: one compact JSON line every $FleetInterval seconds (prepended
 # by the collector) until the SSH connection closes. The first line also carries
 # the logical-processor topology (P/E efficiency class, L3 groups); scheduled
@@ -8,7 +8,23 @@
 $ErrorActionPreference = 'SilentlyContinue'; $ProgressPreference = 'SilentlyContinue'
 if (-not $FleetInterval) { $FleetInterval = 3 }
 $loop = 0; $taskCache = @(); $addrCache = @{}; $cmdCache = @{}; $diskInfo = @{}; $pnetCache = @{}
-# Stop when Fleet goes away. Fleet keeps our stdin open and never writes to it, so the pending read
+# External programs get 8 seconds (like collect_linux.py's run(..., timeout=8)) and are killed after that: a wedged
+# WSL service, Docker engine or GPU driver must not hold up the loop, or the checks that end it never run again.
+function Start-Bounded($exe, $argline) {
+  $si = New-Object Diagnostics.ProcessStartInfo $exe, $argline
+  $si.UseShellExecute = $false; $si.CreateNoWindow = $true; $si.RedirectStandardOutput = $true; $si.RedirectStandardError = $true
+  try { $p = [Diagnostics.Process]::Start($si); @{ p = $p; out = $p.StandardOutput.ReadToEndAsync(); err = $p.StandardError.ReadToEndAsync() } } catch { $null }
+}
+function Wait-Bounded($job, $secs = 8) {
+  if (-not $job) { return '' }
+  try { if ($job.out.Wait([int]($secs * 1000))) { [void]$job.p.WaitForExit(1000); return $job.out.Result } } catch {}
+  try { $job.p.Kill() } catch {}
+  ''
+}
+function UnixNow { [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() / 1000.0 }
+# (a function's output unrolls: callers wrap Invoke-Bounded in @() to keep one line a list)
+function Invoke-Bounded($exe, $argline) { @((Wait-Bounded (Start-Bounded $exe $argline)) -split "`r?`n" | Where-Object { $_ }) }
+# Stop when Fleet goes away. Fleet keeps our stdin open and writes nothing after this script, so the pending read
 # completes (EOF) the moment the SSH session ends for any reason; also stop if our parent shell is
 # gone, and after 6 hours in any case (Fleet reconnects).
 $lifeline = $null
@@ -29,7 +45,9 @@ if ($sshd -and -not (Get-Process -Id $sshd -ErrorAction SilentlyContinue)) { exi
 if (((Get-Date) - $born).TotalHours -ge 6) { exit 0 }
 $started = Get-Date
 $o = [ordered]@{}
-$o.t = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() / 1000.0
+# t stamps the reading; tp, tn and td stamp the cumulative counters (process CPU time, adapter bytes, docker stats) when
+# they are read, after work that runs only on some readings, so each rate divides by its own counter's time.
+$o.t = UnixNow
 $os = Get-CimInstance Win32_OperatingSystem
 $cs = Get-CimInstance Win32_ComputerSystem
 $o.os = $os.Caption; $o.build = $os.BuildNumber; $o.host = $env:COMPUTERNAME; $o.arch = $env:PROCESSOR_ARCHITECTURE
@@ -38,15 +56,26 @@ $o.ncpu = [int]$cs.NumberOfLogicalProcessors
 $o.cpu_model = (@(Get-CimInstance Win32_Processor)[0].Name).Trim()
 $o.mem = @([double]$cs.TotalPhysicalMemory, [double]$os.FreePhysicalMemory * 1024)
 
+$wsl = @(); $raw = (Wait-Bounded (Start-Bounded 'wsl.exe' '-l -v')) -replace "`0", ''
+foreach ($line in $raw -split "`r?`n") { if ($line -match '^\s*(\*)?\s*(\S+)\s+(Running|Stopped|Installing|Converting)\s+(\d)') { $wsl += @{ name = $Matches[2]; state = $Matches[3]; default = [bool]$Matches[1] } } }
+$o.wsl = $wsl
+# docker stats takes 1-2 s (the daemon waits for a second sample of every container): it runs alongside the counters'
+# 1 s sample and the process list, and is collected after them, so a reading still fits its interval
+$dockerUp = @($wsl | Where-Object { $_.name -eq 'docker-desktop' -and $_.state -eq 'Running' }).Count -gt 0
+$ds = $null; if ($dockerUp) { $ds = Start-Bounded 'docker' 'stats --no-stream --format "{{json .}}"' }
+
+# Task Manager's Speed: the frequency scaled by % Processor Performance (over 100 in turbo); fleet_live.py does the sum
 $paths = @('\Processor(*)\% Processor Time', '\Processor Information(*)\Processor Frequency',
+  '\Processor Information(*)\% Processor Performance', '\Processor Information(*)\% of Maximum Frequency',
   '\PhysicalDisk(*)\Disk Bytes/sec', '\PhysicalDisk(*)\Disk Read Bytes/sec', '\PhysicalDisk(*)\Disk Write Bytes/sec', '\PhysicalDisk(*)\% Idle Time',
   '\GPU Engine(*)\Utilization Percentage', '\GPU Adapter Memory(*)\Dedicated Usage', '\GPU Adapter Memory(*)\Shared Usage', '\Memory\Available Bytes')
 $samples = (Get-Counter -Counter $paths -SampleInterval 1 -MaxSamples 1).CounterSamples
-$lcpu = @{}; $freq = @{}; $procs = @{}; $eng = @{}; $pidGpu = @{}; $adMem = @{}; $adShared = @{}; $pd = @{}
+$lcpu = @{}; $freq = @{}; $perf = @{}; $maxf = @{}; $procs = @{}; $eng = @{}; $pidGpu = @{}; $adMem = @{}; $adShared = @{}; $pd = @{}
 foreach ($s in $samples) {
   $parts = $s.Path.Split('\'); $counter = $parts[-1]; $set = $parts[-2]; $inst = $s.InstanceName; $v = $s.CookedValue
   if ($set -like 'processor(*') { if ($inst -ne '_total') { $lcpu[[int]$inst] = $v } }
-  elseif ($set -like 'processor information(*') { if ($inst -match '^(\d+),(\d+)$') { $freq[[int]$Matches[2] + 64 * [int]$Matches[1]] = $v } }
+  elseif ($set -like 'processor information(*') { if ($inst -match '^(\d+),(\d+)$') { $lp = [int]$Matches[2] + 64 * [int]$Matches[1]
+    if ($counter -eq 'processor frequency') { $freq[$lp] = $v } elseif ($counter -eq '% processor performance') { $perf[$lp] = $v } else { $maxf[$lp] = $v } } }
   elseif ($set -like 'physicaldisk(*') {
     if ($inst -eq '_total') { if ($counter -eq 'disk bytes/sec') { $o.diskBps = $v } }
     else { if (-not $pd.ContainsKey($inst)) { $pd[$inst] = @{} }; $pd[$inst][$counter] = $v }
@@ -66,28 +95,42 @@ foreach ($s in $samples) {
   }
   elseif ($set -like 'gpu adapter memory(*') { if ($inst -match 'luid_(0x[0-9a-f]+_0x[0-9a-f]+)_phys') { if ($counter -like 'shared*') { $adShared[$Matches[1]] = $v } else { $adMem[$Matches[1]] = $v } } }
 }
-$o.lcpus = @($lcpu.Keys | Sort-Object | ForEach-Object { @{ n = $_; pct = $lcpu[$_]; mhz = [int]$freq[$_] } })
+$o.lcpus = @($lcpu.Keys | Sort-Object | ForEach-Object { @{ n = $_; pct = $lcpu[$_]; mhz = [int]$freq[$_]; perf = [double]$perf[$_]; maxf = [double]$maxf[$_] } })
 
-# GPUs: real adapters are the ones with dedicated memory; NVIDIA names and totals from nvidia-smi.
+# GPUs: real adapters are the ones with dedicated memory, in LUID order; NVIDIA names and totals from nvidia-smi.
 $gpuUtil = @{}
 foreach ($k in $eng.Keys) { $l = $k.Split('|')[0]; if ($eng[$k] -gt [double]$gpuUtil[$l]) { $gpuUtil[$l] = $eng[$k] } }
 # each engine type (3d, copy, videodecode, ...) at its busiest engine, per adapter, like Task Manager
 $engT = @{}
 foreach ($k in $eng.Keys) { $p = $k.Split('|'); $tk = $p[0] + '|' + $p[2]; if ($eng[$k] -gt [double]$engT[$tk]) { $engT[$tk] = $eng[$k] } }
-$o.gpus = @($adMem.Keys | Where-Object { $adMem[$_] -gt 0 } | Sort-Object { - $adMem[$_] } | ForEach-Object {
+$o.gpus = @($adMem.Keys | Where-Object { $adMem[$_] -gt 0 } | Sort-Object | ForEach-Object {
   $l = $_; $e = @{}; foreach ($tk in $engT.Keys) { $p = $tk.Split('|', 2); if ($p[0] -eq $l) { $e[$p[1]] = $engT[$tk] } }
   @{ luid = $l; util = [double]$gpuUtil[$l]; dedicated = $adMem[$l]; shared = [double]$adShared[$l]; eng = $e } })
 # NVIDIA's own numbers; drivers without the newer fields fail the whole query, so fall back to the basic one
-$nv = @(nvidia-smi --query-gpu=index,name,utilization.gpu,memory.used,memory.total,utilization.memory,temperature.gpu,power.draw,power.limit,clocks.gr,clocks.max.gr,clocks.mem,fan.speed,utilization.encoder,utilization.decoder --format=csv,noheader,nounits 2>$null)
-if (-not ($nv | Where-Object { $_ -match ',' })) { $nv = @(nvidia-smi --query-gpu=index,name,utilization.gpu,memory.used,memory.total --format=csv,noheader,nounits 2>$null) }
+$nv = @(Invoke-Bounded 'nvidia-smi' '--query-gpu=index,name,utilization.gpu,memory.used,memory.total,utilization.memory,temperature.gpu,power.draw,power.limit,clocks.gr,clocks.max.gr,clocks.mem,fan.speed,utilization.encoder,utilization.decoder --format=csv,noheader,nounits')
+if (-not ($nv | Where-Object { $_ -match ',' })) { $nv = @(Invoke-Bounded 'nvidia-smi' '--query-gpu=index,name,utilization.gpu,memory.used,memory.total --format=csv,noheader,nounits') }
 $o.nvidia = $nv
 $o.videoNames = @(Get-CimInstance Win32_VideoController | ForEach-Object { $_.Name })
 $o.gproc = @($pidGpu.Keys | ForEach-Object { $gp = $_.Split('|'); ,@([int]$gp[0], $gp[1], $pidGpu[$_]) })
 
-if ($loop % 3 -eq 0) { $cmdCache = @{}; foreach ($wp in Get-CimInstance Win32_Process) { $cmdCache[[int]$wp.ProcessId] = @([int]$wp.ParentProcessId, [string]$wp.CommandLine) } }
+# A running process's parent and command line never change: ask WMI for just those, about PIDs not seen before (or
+# now under another name: a reused PID), and forget PIDs that are gone. Re-reading every process took seconds.
+$gps = @(Get-Process | Where-Object { $_.Id -ne 0 })
+$live = @{}; foreach ($gp in $gps) { $live[[int]$gp.Id] = $gp.ProcessName }
+foreach ($k in @($cmdCache.Keys)) { if (-not $live.ContainsKey($k)) { $cmdCache.Remove($k) } }
+$miss = @($gps | Where-Object { $wc = $cmdCache[[int]$_.Id]; -not $wc -or $wc[2] -ne $_.ProcessName })
+if ($miss.Count) {
+  $q = @{ ClassName = 'Win32_Process'; Property = @('ProcessId', 'ParentProcessId', 'CommandLine') }
+  if ($miss.Count -le 100) { $q.Filter = ($miss | ForEach-Object { "Handle='$($_.Id)'" }) -join ' OR ' }
+  $res = @(Get-CimInstance @q)
+  if ($res.Count) {
+    foreach ($gp in $miss) { $cmdCache[[int]$gp.Id] = @(0, '', $gp.ProcessName) }   # gone before WMI saw it: don't ask again
+    foreach ($wp in $res) { $id = [int]$wp.ProcessId; if ($live.ContainsKey($id)) { $cmdCache[$id] = @([int]$wp.ParentProcessId, [string]$wp.CommandLine, $live[$id]) } }
+  }
+}
 $plist = New-Object System.Collections.ArrayList
-foreach ($gp in Get-Process) {
-  if ($gp.Id -eq 0) { continue }
+$o.tp = UnixNow
+foreach ($gp in $gps) {
   $wc = $cmdCache[[int]$gp.Id]; $cmd = ''; $ppid = 0
   if ($wc) { $ppid = $wc[0]; if ($wc[1]) { $cmd = [string]$wc[1] } }
   if ($cmd.Length -gt 300) { $cmd = $cmd.Substring(0, 300) }
@@ -109,21 +152,19 @@ if ($loop % 3 -eq 0) { $ipIf = @{}; foreach ($ia in Get-NetIPAddress) { $ipIf[[s
   $pn = @{}; foreach ($tc in Get-NetTCPConnection -State Established) { $ifn = $ipIf[[string]$tc.LocalAddress]; if ($ifn) { $k = [string]$tc.OwningProcess; if (-not $pn.ContainsKey($k)) { $pn[$k] = @{} }; $pn[$k][$ifn] = 1 } }
   $pnetCache = @{}; foreach ($k in $pn.Keys) { $pnetCache[$k] = @($pn[$k].Keys) } }
 $o.pnet = $pnetCache
+$ast = @{}; $o.tn = UnixNow; foreach ($st in Get-NetAdapterStatistics) { $ast[[string]$st.Name] = $st }
 $o.ifs = @(Get-NetAdapter | ForEach-Object {
-  $st = Get-NetAdapterStatistics -Name $_.Name
+  $st = $ast[[string]$_.Name]
   @{ name = $_.Name; desc = $_.InterfaceDescription; status = [string]$_.Status; speed = [string]$_.LinkSpeed; virtual = [bool]$_.Virtual
      rx = [double]$st.ReceivedBytes; tx = [double]$st.SentBytes
      addrs = $(if ($loop % 10 -eq 0 -or -not $addrCache.ContainsKey($_.Name)) { $addrCache[$_.Name] = @(Get-NetIPAddress -InterfaceIndex $_.ifIndex -AddressFamily IPv4 | ForEach-Object { "$($_.IPAddress)/$($_.PrefixLength)" }) }; $addrCache[$_.Name]) }
 })
 
-$wsl = @(); $raw = (wsl.exe -l -v | Out-String) -replace "`0", ''
-foreach ($line in $raw -split "`r?`n") { if ($line -match '^\s*(\*)?\s*(\S+)\s+(Running|Stopped|Installing|Converting)\s+(\d)') { $wsl += @{ name = $Matches[2]; state = $Matches[3]; default = [bool]$Matches[1] } } }
-$o.wsl = $wsl
-
 $o.containers = @(); $o.dstats = @()
-if (@($wsl | Where-Object { $_.name -eq 'docker-desktop' -and $_.state -eq 'Running' }).Count -gt 0) {
-  $o.containers = @(docker ps --no-trunc --format '{{json .}}' 2>$null)
-  $o.dstats = @(docker stats --no-stream --format '{{json .}}' 2>$null)
+if ($dockerUp) {
+  $o.containers = @(Invoke-Bounded 'docker' 'ps --no-trunc --format "{{json .}}"')
+  $o.dstats = @((Wait-Bounded $ds) -split "`r?`n" | Where-Object { $_ })
+  $o.td = UnixNow; try { $o.td = ([DateTimeOffset]$ds.p.ExitTime.ToUniversalTime()).ToUnixTimeMilliseconds() / 1000.0 } catch {}
 }
 
 if ($loop % 10 -eq 0) { $taskCache = @(Get-ScheduledTask | Where-Object { $_.TaskPath -notlike '\Microsoft\*' } | ForEach-Object {
@@ -168,7 +209,8 @@ public static class FleetTopo {
 '@
   $o.topo = [FleetTopo]::Read()
 }
-# If Fleet Live went away, the pipe is gone: stop instead of looping on silently.
+# If Fleet Live went away, the pipe is gone: stop instead of looping on silently. (Windows PowerShell 5.1 does not
+# throw on a broken pipe, so there the lifeline and sshd checks at the top of the loop are what end it.)
 try { [Console]::Out.WriteLine(($o | ConvertTo-Json -Depth 6 -Compress)); [Console]::Out.Flush() } catch { exit 0 }
 $loop++
 $left = $FleetInterval - ((Get-Date) - $started).TotalSeconds

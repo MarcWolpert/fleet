@@ -194,8 +194,9 @@ Any token in `live/web/themes.js` (`THEME_KEYS`) can be set; the rest are derive
 ## How it works
 
 - Each machine gets one SSH session that runs a small collector streamed over
-  stdin (`collect_linux.py` with `python3 -`, `collect_windows.ps1` with
-  `powershell -EncodedCommand`). It loops, sending one reading every few
+  stdin (`collect_linux.py` with `python3 -`, `collect_windows.ps1` with a
+  short `powershell -EncodedCommand` that reads it, so it also works when the
+  Windows OpenSSH server keeps cmd.exe as its shell). It loops, sending one reading every few
   seconds, and ends when the connection closes. It only reads `/proc`, `/sys`,
   performance counters and listing commands (`docker ps`, `virsh list`,
   `crontab -l`, `systemctl list-timers`, `nvidia-smi`, …).
