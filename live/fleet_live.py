@@ -499,13 +499,14 @@ class Machine:
             if row[0] in r_vm:
                 row[15] = sorted(set(row[15]) | set(vm_ifs.get(r_vm[row[0]], [])))
         owner = {}
+        timer_job = {j["cmd"]: i for i, j in enumerate(jobs) if j["src"] == "systemd"}  # unit -> its timer's job
         for p in r["procs"]:
             if p[9]:
                 owner[p[0]] = "c:" + p[9]
             elif p[10]:
                 owner[p[0]] = "vm:" + p[10]
-            elif p[11] and any(j["cmd"] == p[11] for j in jobs):
-                owner[p[0]] = "unit:" + p[11]
+            elif p[11] in timer_job:
+                owner[p[0]] = "job:%d" % timer_job[p[11]]
         for row in procs:
             if not row[11]:
                 row[11] = owner.get(row[0], "base")
