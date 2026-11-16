@@ -274,7 +274,7 @@ function renderPickerList(){
   const box = $('picklist'); if (!box) return;
   const a = document.activeElement, refocus = a && box.contains(a) && a.dataset ? a.dataset.pin : null;
   const q = PICK.q.trim().toLowerCase();
-  const divs = Object.values(nodes).filter(n => n.kind === 'division').map(n => ({n, d:0, path:n.parent ? [hostOf(n).name] : [], div:true}));
+  const divs = Object.values(nodes).filter(n => n.kind === 'division' && n.id.startsWith('div:')).map(n => ({n, d:0, path:n.parent ? [hostOf(n).name] : [], div:true}));
   let list = divs.concat(pickCandidates());
   if (q) list = list.filter(x => [x.n.name, kindLabel(x.n), x.n.os || '', (x.n.meta && x.n.meta.image) || '', x.path.join(' ')].join(' ').toLowerCase().includes(q));
   const shown = list.slice(0, 400);
@@ -328,7 +328,7 @@ function updateSpaces(){
 function renderToolbar(){
   let crumbs;
   if (S.tree === 'network') crumbs = `<button type="button" data-space="fleet">All machines</button><span class="sep" aria-hidden="true">/</span><span class="cur">Network</span>`;
-  else if (S.sel === 'fleet' || !nodes[S.sel]) crumbs = `<span class="cur">All machines</span>`;
+  else if (S.sel === 'fleet' || !nodes[S.sel]) crumbs = `<span class="cur">${S.pinsOnly && S.space === 'fleet' ? 'Pins only' : 'All machines'}</span>`;
   else {
     const path = []; for (let n = nodes[S.sel]; n; n = n.parent) path.unshift(n);
     crumbs = `<button type="button" data-space="fleet">All machines</button>` + path.map((n, i) => `<span class="sep" aria-hidden="true">/</span>` + (i === path.length - 1 ? `<span class="cur">${esc(n.name)}</span>` : `<button type="button" data-select="${esc(n.id)}">${esc(n.name)}</button>`)).join('');
@@ -786,8 +786,8 @@ function fleetView(dv){
     const bar = off ? `<div class="sbar empty">${esc(diagnose(r).title)}</div>` : cap ? `<div class="sbar">${TYPES.filter(t => bt[t.id] > 0).map(t => `<span class="s" style="width:${Math.min(100, bt[t.id]/den*100).toFixed(3)}%;background:${TCOL[t.id]}" data-tip="seg|${esc(r.id)}|${S.metric}|${t.id}"></span>`).join('')}</div>` : `<div class="sbar empty">no ${mlabel(S.metric)}</div>`;
     return `<div class="mrow"><button type="button" class="mbtn" data-select="${esc(r.id)}"><span class="tile ${r.tile}">${icon(r.tile)}</span><span>${esc(r.name)}</span><i class="sdot ${statusClass(r)}" title="${statusText(r)}"></i></button>${bar}<div class="tot">${!off && cap ? pct(used/cap*100) + ' used' : '—'}<small>${off ? '' : pct(used/(fleetUsed||1)*100) + ' of fleet ' + mlabel(S.metric)}</small></div></div>`;
   }).join('');
-  const tile = dv ? `<span class="tile" style="background:color-mix(in srgb, ${dv.color} 22%, transparent);color:${dv.color}">${icon(iconOf(dv))}</span>` : `<span class="tile fleet">${icon('fleet')}</span>`;
-  return `<div class="hero">${tile}<div><h1>${dv ? esc(dv.name) : 'All machines'}</h1><div class="facts">${dv ? '<span>division</span>' : ''}<span>${live} of ${list.length} machines live</span><span>${nVm} VMs</span><span>${cronCount({children:list})} scheduled jobs</span><span>${c.cap('cpu')} cores</span><span>${Math.round(c.cap('mem'))} GB RAM</span></div></div>${heroStats([stat('cpu'), stat('mem'), stat('gpu')])}</div>`
+  const tile = dv ? `<span class="tile" style="background:color-mix(in srgb, ${dv.color} 22%, transparent);color:${dv.color}">${icon(dv.id === 'pins' ? 'pin' : iconOf(dv))}</span>` : `<span class="tile fleet">${icon('fleet')}</span>`;
+  return `<div class="hero">${tile}<div><h1>${dv ? esc(dv.name) : 'All machines'}</h1><div class="facts">${dv ? `<span>${dv.id === 'pins' ? 'your pins' : esc(kindLabel(dv))}</span>` : ''}<span>${live} of ${list.length} machines live</span><span>${nVm} VMs</span><span>${cronCount({children:list})} scheduled jobs</span><span>${c.cap('cpu')} cores</span><span>${Math.round(c.cap('mem'))} GB RAM</span></div></div>${heroStats([stat('cpu'), stat('mem'), stat('gpu')])}</div>`
     + `<div class="grid2">${whereCard(key, dv ? `Where ${esc(dv.name)}’s usage goes` : 'Where your fleet’s usage goes')}${graphCard(`${dv ? esc(dv.name) : 'Fleet'} ${mlabel(S.metric)}`, 'live machines, by type', series, graphMax(c.cap(S.metric), series, S.metric), S.metric)}</div>`
     + `<section class="card"><div class="card-h"><h2>By machine · ${mlabel(S.metric)}</h2><span class="sub">each bar is that machine’s own ${S.mode === 'cap' ? 'capacity' : 'usage'}</span><span class="grow"></span>${modeSeg()}</div>${legendHTML(S.mode === 'cap')}${mrows}</section>`;
 }
@@ -1122,7 +1122,7 @@ function renderMain(){
   else {
     const n = S.sel === 'fleet' ? null : nodes[S.sel];
     if (S.view === 'details') html = detailsView(n || (roots[0] || {id:'', name:'—'}));
-    else html = !n ? fleetView() : n.kind === 'division' && !n.parent ? fleetView(n) : n.kind === 'machine' ? machineView(n) : n.kind === 'cronfolder' ? cronFolderView(n) : n.kind === 'cron' ? cronView(n) : n.hist ? leafView(n) : groupView(n);
+    else html = !n ? (S.pinsOnly && S.space === 'fleet' ? pinsView() : fleetView()) : n.kind === 'division' && !n.parent ? fleetView(n) : n.kind === 'machine' ? machineView(n) : n.kind === 'cronfolder' ? cronFolderView(n) : n.kind === 'cron' ? cronView(n) : n.hist ? leafView(n) : groupView(n);
     if (S.detailsDocked && S.view !== 'details')
       panel = n ? detailsView(n, true) : `<div class="dhead"><div class="dtitle"><b>Details</b><span>Select a machine or anything in it to see its processes.</span></div><button type="button" class="iconbtn" data-closedock="1" aria-label="Close the Details panel">${icon('x', 2.2)}</button></div>`;
   }
@@ -1855,7 +1855,7 @@ function gotoCommands(){
 }
 function gotoNodes(){
   buildDivisions();
-  const out = Object.values(nodes).filter(n => n.kind === 'division').map(n => ({n, path:n.parent ? [hostOf(n).name] : []}));
+  const out = Object.values(nodes).filter(n => n.kind === 'division' && n.id.startsWith('div:')).map(n => ({n, path:n.parent ? [hostOf(n).name] : []}));
   (function w(list, path){ list.forEach(n => { out.push({n, path}); w(orderedKids(n), path.concat(n.name)); }); })(sortedRoots(), []);
   return out;
 }
@@ -2439,4 +2439,23 @@ function newGroupName(list, ids){
   const word = GKIND[groupKind(ids.map(id => nodes[id] || netNodes[id]).filter(Boolean))][0], names = new Set(list.map(g => g.name));
   let k = 1; while (names.has(word + ' ' + k)) k++;
   return word + ' ' + k;
+}
+
+// Pins only, with nothing selected: an all-up view of the pins (#57). Pinned machines alone get the All machines
+// view of just them; a mix gets each pin with its share, to open it.
+function pinsView(){
+  const items = PINS.map(id => nodes[id]).filter(Boolean);
+  if (items.length && items.every(n => n.kind === 'machine' && !n.parent)){
+    const pv = nodes.pins = {id:'pins', name:'Pins only', kind:'division', gkind:'fleet', children:items, parent:null, color:'var(--accent)', type:'base'};
+    pv.series = sumSeries(items); pv.gseries = items.reduce((t, c) => addG(t, c.gseries), {});
+    return fleetView(pv);
+  }
+  const rows = items.map(n => {
+    const v = rowVal(n), w = parseFloat(v) || 0, where = n.kind === 'machine' && !n.parent ? '' : n.kind === 'division' && !n.parent ? kindLabel(n) : (n.kind === 'division' ? kindLabel(n) + ' on ' : '') + hostOf(n).name;
+    return `<div class="prow2"><button type="button" class="namebtn" data-select="${esc(n.id)}"><span class="ico" style="color:${colOf(n)}">${icon(iconOf(n))}</span>${esc(n.name)}</button>`
+      + `<span class="pw">${esc(where)}</span><div class="track"><i style="width:${Math.min(100, w).toFixed(1)}%;background:${colOf(n)}"></i></div><span class="pv">${esc(v)}</span></div>`;
+  }).join('');
+  return `<div class="hero"><span class="tile" style="background:color-mix(in srgb, var(--accent) 22%, transparent);color:var(--accent)">${icon('pin')}</span><div><h1>Pins only</h1><div class="facts"><span>${items.length} pinned</span><span>${mlabel(S.metric)}: each pin's share of its host (or of itself, for a machine)</span></div></div></div>`
+    + (items.length ? `<section class="card"><div class="card-h"><h2>Your pins · ${mlabel(S.metric)}</h2></div><div class="pinlist">${rows}</div></section>`
+      : noteHTML('Nothing pinned yet: pin a machine, container or group with the pin on its row, or with <b>+</b> in the top bar.'));
 }

@@ -45,7 +45,7 @@ plus an app window.
 | ✅ | Details: a sortable, filterable process list for any node, groupable by CPU group (CCD, P-cores, E-cores), owner, user or status |
 | ✅ | Logical processors: one live graph per CPU, grouped by CCD, P/E cores or Apple core clusters |
 | ✅ | Network tree: tailnet → machines → interfaces and bridges → VMs and containers, with traffic on each |
-| ✅ | Pinned spaces: pin any machine, VM, project or container from the tree; **All machines** is always there |
+| ✅ | Pinned spaces: pin any machine, VM, project, container or group from the tree; **All machines** is always there; **Pins only** shows just your pins, with their own all-up view |
 | ✅ | Groups in the trees: drag a box over items at the same level (or drag a row by its handle). A group is named and coloured by what's in it: a **fleet** of machines, a **flotilla** of VMs, a **division** of containers, a **section** of cron jobs, a **squadron** of Docker Compose, a **task force** when mixed; each kind has its own colour from the theme. Click a group's name to see its own all-up view (a fleet gets All machines for just its machines), or its chevron to fold it to one line and back, as it was; right-click to rename, pin or disband; pin any group as a space from **+**; Pins only keeps its own; click empty space for the all-up view |
 | ✅ | Offline machines explain why in plain language, with the steps to fix it and Retry; reconnecting machines keep their last reading |
 | ✅ | Settings: add and edit machines, test a connection, pick the terminal app and refresh rate |

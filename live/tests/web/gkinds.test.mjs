@@ -146,3 +146,28 @@ test('⌘K finds groups by name or kind and pins them from the results; ⌘F in 
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
 });
+
+test('Pins only has its own all-up view, like All machines (#57)', async () => {
+  const H1 = `document.querySelector('#main .hero h1').textContent`, CUR = `document.querySelector('#crumbs .cur').textContent`;
+  let fx = fixture(); fx.fleet.pins = ['lx', 'mac'];
+  let p = await browser.page(fx, {ui: ui({sel: 'fleet', pinsOnly: true})});
+  try {
+    await p.waitFor(`${H1} === 'Pins only'`);
+    assert.equal(await p.eval(CUR), 'Pins only');
+    assert.equal(await p.eval(`[...document.querySelectorAll('#main .mrow [data-select]')].map(b => b.dataset.select).join(',')`), 'lx,mac');   // only machines pinned: All machines for those
+    await p.eval(`(() => { document.querySelector('[data-pinsonly="0"]').click(); return true; })()`);
+    await p.waitFor(`${H1} === 'All machines'`);
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+  fx = fixture(); fx.fleet.pins = ['lx', 'lx2/containers/web', 'div:g1']; fx.fleet.prefs = {tgroups: TG};
+  p = await browser.page(fx, {ui: ui({sel: 'fleet', pinsOnly: true})});
+  try {
+    await p.waitFor(`${H1} === 'Pins only'`);
+    assert.match(await p.eval(`document.querySelector('#main .hero .facts').textContent`), /3 pinned/);
+    assert.deepEqual(await p.eval(`[...document.querySelectorAll('#main .pinlist [data-select]')].map(b => b.dataset.select)`), ['lx', 'lx2/containers/web', 'div:g1']);
+    assert.ok(!(await p.eval(`document.getElementById('main').textContent`)).includes('NaN'));
+    await p.eval(`(() => { document.querySelector('#main .pinlist [data-select="lx2/containers/web"]').click(); return true; })()`);
+    await p.waitFor(`S.sel === 'lx2/containers/web'`);
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
