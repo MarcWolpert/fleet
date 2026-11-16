@@ -322,7 +322,7 @@ class LocalCollectorStopsWithFleet(unittest.TestCase):
 
 class ProcessDetailsOnlyForNewPids(unittest.TestCase):
     """#161: a running process's parent and command line never change, so the collector asks WMI for just those,
-    about PIDs it hasn't seen (or that now run under another name), on the reading it first sees them."""
+    about PIDs it hasn't seen (or that a new process now has), on the reading it first sees them."""
     SRC = fl.ps_compact(open(os.path.join(LIVE, "collect_windows.ps1"), encoding="utf-8").read())
 
     def test_wmi_is_asked_for_three_properties(self):
@@ -340,6 +340,21 @@ class ProcessDetailsOnlyForNewPids(unittest.TestCase):
     def test_pids_that_are_gone_are_forgotten(self):
         line = "foreach ($k in @($cmdCache.Keys)) { if (-not $live.ContainsKey($k)) { $cmdCache.Remove($k) } }"
         self.assertTrue(line in self.SRC, line)
+
+    def test_a_pid_reused_under_the_same_name_is_asked_again(self):
+        # #304: Windows reuses freed PIDs, often for the same program (python.exe train.py exits, python.exe eval.py
+        # gets its PID). Each cache entry is keyed by the process's name and its start time, so a new process on an old
+        # PID is asked about on the reading it first appears, whatever its name. A process whose start time can't be read
+        # (a protected one) keeps the same key every reading, so it is still asked about once.
+        self.assertEqual(re.findall(r"[^\n]*\$live\[[^\n]*", self.SRC), [
+            "$live = @{}; foreach ($gp in $gps) { $st = ''; try { $st = $gp.StartTime.Ticks } catch {}; "
+            "$live[[int]$gp.Id] = $gp.ProcessName + '|' + $st }",
+            "$miss = @($gps | Where-Object { $wc = $cmdCache[[int]$_.Id]; -not $wc -or $wc[2] -ne $live[[int]$_.Id] })",
+            "foreach ($gp in $miss) { $cmdCache[[int]$gp.Id] = @(0, '', $live[[int]$gp.Id]) }",
+            "foreach ($wp in $res) { $id = [int]$wp.ProcessId; if ($live.ContainsKey($id)) { "
+            "$cmdCache[$id] = @([int]$wp.ParentProcessId, [string]$wp.CommandLine, $live[$id]) } }",
+        ])
+        self.assertNotIn("$wc[2] -ne $_.ProcessName", self.SRC)
 
 class DockerStatsRunsAlongside(unittest.TestCase):
     """#167: docker stats takes 1-2 s, so it starts before the counters' 1 s sample and is collected after the
