@@ -94,3 +94,19 @@ test('each kind has its own icon, on its header, its pill, the picker and its pa
   } finally { await p.close(); }
 });
 
+test('a group\'s header has a pin; a pinned group gets a space and goes first at its level (#55)', async () => {
+  const fx = fixture(); fx.fleet.prefs = {tgroups: {'machines|root': [{id: 'g1', name: 'Lab', ids: ['lx', 'lx2']}, {id: 'g4', name: 'Desks', ids: ['mac', 'win']}]}};
+  const p = await browser.page(fx, {ui: ui({sel: 'fleet', open: {lx: false, lx2: false, mac: false, win: false}})});
+  const ORDER = `[...document.querySelectorAll('#tree .tgroup')].map(g => g.dataset.tgroup)`;
+  try {
+    await p.waitFor(`document.querySelectorAll('#tree .tgroup').length === 2`);
+    assert.deepEqual(await p.eval(ORDER), ['g1', 'g4']);
+    await p.eval(`(() => { document.querySelector('.tgroup[data-tgroup="g4"] .tg-h [data-pin="div:g4"]').click(); return true; })()`);
+    await p.waitFor(`document.querySelector('#spaces [data-space="div:g4"]')`);
+    assert.equal(await p.eval(`S.sel`), 'fleet');   // the pin doesn't select the group
+    await p.waitFor(`${ORDER}[0] === 'g4'`);
+    assert.deepEqual(await p.eval(ORDER), ['g4', 'g1']);
+    assert.equal(await p.eval(`!!document.querySelector('#spaces [data-space="div:g4"]').closest('.space').querySelector('.tile svg[data-icon="gfleet"]')`), true);
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});

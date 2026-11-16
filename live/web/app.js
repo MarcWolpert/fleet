@@ -1238,7 +1238,7 @@ document.addEventListener('click', e => {
   const tf = e.target.closest('[data-tgfold]'); if (tf){ S.gfold = Object.assign({}, S.gfold, {[tf.dataset.tgfold]:!(S.gfold && S.gfold[tf.dataset.tgfold])}); save(); renderTree(); const b = document.querySelector(`[data-tgfold="${CSS.escape(tf.dataset.tgfold)}"]`); if (b) b.focus(); return; }
   // a group's header selects the group: its own all-up view (a fleet's is All machines for its members)
   const tgh = e.target.closest('#tree .tg-h');
-  if (tgh && !e.target.closest('input') && S.tree !== 'network'){ const id = 'div:' + tgh.closest('.tgroup').dataset.tgroup; buildDivisions(); if (nodes[id]) select(id); return; }   // empty space in a tree: nothing selected, everything shown
+  if (tgh && !e.target.closest('input, [data-pin], [data-unpin]') && S.tree !== 'network'){ const id = 'div:' + tgh.closest('.tgroup').dataset.tgroup; buildDivisions(); if (nodes[id]) select(id); return; }   // empty space in a tree: nothing selected, everything shown
   const nv = e.target.closest('[data-nav]'); if (nv){ navGo(nv.dataset.nav === 'back' ? -1 : 1); return; }
   const fs = e.target.closest('[data-mfstep]'); if (fs){ stepFind(+fs.dataset.mfstep); return; }
   if (e.target.closest('[data-mfclose]')){ closeFind(); return; }
@@ -2263,13 +2263,19 @@ function groupedWalk(roots, kidsOf, openFn, shownFn, scope){
   (function w(list, d, pk){
     const vis = list.filter(shownFn), key = scope + '|' + pk;
     const gs = ((PREFS.tgroups || {})[key] || []).map(g => ({g, members:vis.filter(n => g.ids.includes(n.id))})).filter(x => x.members.length);
-    const placed = new Set();
+    const placed = new Set(), items = [];
     const one = n => { out.push({n, d, pk}); if (n.children.length && openFn(n)) w(kidsOf(n), d + 1, n.id); };
     vis.forEach(n => {
       if (placed.has(n.id)) return;
       const gx = gs.find(x => x.members.includes(n));
-      if (!gx) return one(n);
+      if (!gx) return items.push({n});
       gx.members.forEach(m => placed.add(m.id));
+      items.push({gx});
+    });
+    // pinned groups go first at their level, as pinned rows go first in their list
+    const pinnedFirst = items.filter(it => it.gx && PINS.includes('div:' + it.gx.g.id)).concat(items.filter(it => !(it.gx && PINS.includes('div:' + it.gx.g.id))));
+    pinnedFirst.forEach(({n, gx}) => {
+      if (n) return one(n);
       // a folded group is just its header; its members keep their own open state for when it unfolds
       const folded = !!(S.gfold && S.gfold[gx.g.id]);
       out.push({open:gx.g, key, d, kind:groupKind(gx.members), folded, count:gx.members.length}); if (!folded) gx.members.forEach(one); out.push({close:true});
@@ -2281,7 +2287,7 @@ function tgroupOpen({open:g, key, d, kind, folded, count}){
   const label = GKIND[kind][1], dup = g.name.toLowerCase().startsWith(label);
   const fold = `<button type="button" class="tg-fold${folded ? '' : ' open'}" data-tgfold="${esc(g.id)}" aria-expanded="${!folded}" aria-label="${folded ? 'Unfold' : 'Fold'} ${esc(g.name)}">${icon('chev', 2.4)}</button>`;
   return `<div class="tgroup${S.tree !== 'network' && S.sel === 'div:' + g.id ? ' sel' : ''}" data-tgroup="${esc(g.id)}" data-tgkey="${esc(key)}" data-kind="${kind}" role="group" aria-label="${esc(g.name)}, ${label}" style="--gc:var(--g-${kind});--d:${d}">`
-    + `<div class="tg-h" title="Click to see this group; double-click to rename; right-click for more">${fold}<span class="tg-ic">${icon('g' + kind, 2)}</span><span class="tg-n">${esc(g.name)}</span>${dup ? '' : `<span class="tg-k">${label}</span>`}${folded ? `<span class="count">${count}</span>` : ''}</div>`;
+    + `<div class="tg-h" title="Click to see this group; double-click to rename; right-click for more">${fold}<span class="tg-ic">${icon('g' + kind, 2)}</span><span class="tg-n">${esc(g.name)}</span>${dup ? '' : `<span class="tg-k">${label}</span>`}${folded ? `<span class="count">${count}</span>` : ''}${key.startsWith('network|') ? '' : `<span class="tg-pin">${pinBtn('div:' + g.id)}</span>`}</div>`;
 }
 function updGroup(key, id, f){
   const all = Object.assign({}, PREFS.tgroups || {});
