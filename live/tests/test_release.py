@@ -118,5 +118,20 @@ class ReleaseNotes(unittest.TestCase):
         self.assertEqual([w for _, w in said if w != self.COUNT[n]], [], said)
 
 
+class MacInstall(unittest.TestCase):
+    """The release's Fleet.app is signed ad hoc and isn't notarized, so a downloaded copy is quarantined and
+    Gatekeeper stops its first launch: the README's Install row for macOS says how to get past that."""
+    def test_the_readme_says_how_to_open_the_app_gatekeeper_stops(self):
+        build = open(os.path.join(LIVE, "packaging", "macos", "build_macos.sh"), encoding="utf-8").read()
+        release = open(os.path.join(LIVE, "packaging", "release.sh"), encoding="utf-8").read()
+        self.assertRegex(build, r"codesign [^\n]*--sign - ", "signed ad hoc")
+        self.assertFalse(any(w in build + release for w in ("notarytool", "stapler")), "not notarized (if it is, this row needs no help)")
+        readme = open(os.path.join(os.path.dirname(LIVE), "README.md"), encoding="utf-8").read().splitlines()
+        rows = [l for l in readme if l.startswith("| **macOS** (Apple silicon) |")]
+        self.assertEqual(len(rows), 1, "one macOS row in Install")
+        for words in ("isn't notarized", "System Settings › Privacy & Security", "Open Anyway", "xattr -dr com.apple.quarantine /Applications/Fleet.app"):
+            self.assertIn(words, rows[0])
+
+
 if __name__ == "__main__":
     unittest.main()
