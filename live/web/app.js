@@ -843,7 +843,8 @@ function gpuEachCard(m){
       const pts = h.map((v, i) => `${(i/(H-1)*100).toFixed(1)},${(56 - Math.min(v, max)/max*52).toFixed(1)}`);
       const val = gpuValText(unit, now), sub = lim ? 'of ' + gpuValText(unit, lim) : '';
       return `<div class="lcell gmc${tpinned('gpum', m.id, g.key + ':' + k) ? ' pinned' : ''}" data-gm="${esc(k)}" title="${esc(full)}"><button type="button" class="tsel" data-gsel="${esc(g.key)}" aria-pressed="${on}" aria-label="GPU ${gi} ${esc(full)} ${esc(val)}${sub ? ' ' + esc(sub) : ''}"></button>`
-        + `<span class="trow"><span class="lt">${esc(label)}${tpinBtn('gpum', m.id, g.key + ':' + k, label)}</span><span class="lv">${esc(val)}</span></span><span class="lm">${sub ? esc(sub) : '&nbsp;'}</span>`
+        // the pin beside the label, not inside it: a label too long for the tile is cut short, the pin never is (#291)
+        + `<span class="trow"><span class="lt">${esc(label)}</span>${tpinBtn('gpum', m.id, g.key + ':' + k, label)}<span class="lv">${esc(val)}</span></span><span class="lm">${sub ? esc(sub) : '&nbsp;'}</span>`
         + `<svg viewBox="0 0 100 56" preserveAspectRatio="none" aria-hidden="true"><path d="M0,56L${pts.join('L')}L100,56Z" fill="var(--accent-bg)" fill-opacity=".35"/><polyline points="${pts.join(' ')}" fill="none" stroke="var(--accent)" stroke-width="1.4" vector-effect="non-scaling-stroke"/></svg></div>`;
     }).join('');
     const pt = /passed through/.test(g.mem || '') ? `<p class="lhint">Its use shows inside that VM, not on this host.</p>` : '';

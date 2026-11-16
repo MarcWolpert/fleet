@@ -186,9 +186,14 @@ async function openPage(cdp, fx, {ui = null, width = 1500, height = 950, fonts =
     async click(selector, {modifiers = 0} = {}){
       const r = await page.eval(`(() => { const e = document.querySelector(${JSON.stringify(selector)}); if (!e) return null; e.scrollIntoView({block: 'center', inline: 'center'}); const b = e.getBoundingClientRect(); return {x: b.left + b.width / 2, y: b.top + b.height / 2}; })()`);
       if (!r) throw new Error('no element for ' + selector);
-      await send('Input.dispatchMouseEvent', {type: 'mouseMoved', x: r.x, y: r.y, modifiers});
-      await send('Input.dispatchMouseEvent', {type: 'mousePressed', x: r.x, y: r.y, button: 'left', buttons: 1, clickCount: 1, modifiers});
-      await send('Input.dispatchMouseEvent', {type: 'mouseReleased', x: r.x, y: r.y, button: 'left', buttons: 0, clickCount: 1, modifiers});
+      await page.clickAt(r.x, r.y, {modifiers});
+    },
+    // A real mouse click at a point of the viewport. Unlike click(), nothing is scrolled first: scrollIntoView
+    // also scrolls an overflow:hidden ancestor, which would bring a clipped element into sight before the click.
+    async clickAt(x, y, {modifiers = 0} = {}){
+      await send('Input.dispatchMouseEvent', {type: 'mouseMoved', x, y, modifiers});
+      await send('Input.dispatchMouseEvent', {type: 'mousePressed', x, y, button: 'left', buttons: 1, clickCount: 1, modifiers});
+      await send('Input.dispatchMouseEvent', {type: 'mouseReleased', x, y, button: 'left', buttons: 0, clickCount: 1, modifiers});
     },
     async key(key, code = key){
       const vk = {Escape: 27, Enter: 13, ' ': 32}[key] || 0, text = {Enter: '\r', ' ': ' '}[key];
