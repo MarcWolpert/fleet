@@ -913,6 +913,8 @@ class MacCollector:
         if rc != 0:
             return []
         ticks = [[info[i * 4 + j] for j in range(4)] for i in range(count.value)]  # user, system, idle, nice
+        # The kernel allocated the array in this process and it is ours: give it back, or every reading leaks a page.
+        self.libc.vm_deallocate(self.libc.mach_task_self(), ctypes.cast(info, ctypes.c_void_p), ctypes.c_size_t(n_info.value * ctypes.sizeof(ctypes.c_int)))
         return ticks
 
     def rate(self, key, value, t):

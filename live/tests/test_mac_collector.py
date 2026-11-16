@@ -161,5 +161,34 @@ class DockerStatsItCannotRead(unittest.TestCase):
         self.assertEqual(view["containers"], EXPECTED_CONTAINERS)
 
 
+class CpuTicks(unittest.TestCase):
+    """#102: host_processor_info hands this process an array the kernel allocated; the collector owns it
+    and gives it back after every reading, so the server's memory stays flat."""
+
+    def test_each_reading_gives_back_the_array_it_was_handed(self):
+        mac = Mac(ticks=[[100, 50, 800, 10], [200, 60, 700, 0]])
+        c = mac.collector(self)
+        self.assertEqual(c.cpu_ticks(), [[100, 50, 800, 10], [200, 60, 700, 0]])
+        self.assertEqual(c.cpu_ticks(), [[100, 50, 800, 10], [200, 60, 700, 0]])
+        self.assertEqual(mac.libc.freed, [(5, addr, size) for addr, size in mac.libc.handed])
+        self.assertEqual([size for _, size in mac.libc.handed], [32, 32])
+
+    def test_a_snapshot_gives_it_back_too(self):
+        mac = Mac()
+        c = mac.collector(self)
+        c.snapshot()
+        mac.now += 3
+        c.snapshot()
+        self.assertEqual(len(mac.libc.handed), 2)
+        self.assertEqual(mac.libc.freed, [(5, addr, size) for addr, size in mac.libc.handed])
+
+    def test_nothing_is_given_back_when_the_call_fails(self):
+        mac = Mac()
+        c = mac.collector(self)
+        mac.libc.host_processor_info = lambda *a: 5  # KERN_FAILURE: nothing handed over
+        self.assertEqual(c.cpu_ticks(), [])
+        self.assertEqual(mac.libc.freed, [])
+
+
 if __name__ == "__main__":
     unittest.main()
