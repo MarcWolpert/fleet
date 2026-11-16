@@ -60,3 +60,21 @@ test('every kind can be pinned: the picker lists them with their kinds, and the 
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
 });
+
+test('clicking a group\'s header selects it and shows its own all-up view (#49)', async () => {
+  const [p] = await open();
+  const pick = id => p.eval(`(() => { document.querySelector('.tgroup[data-tgroup="${id}"] .tg-n').click(); return true; })()`);
+  try {
+    await pick('g1');
+    await p.waitFor(`S.sel === 'div:g1' && document.querySelector('#main .hero h1').textContent === 'Lab'`);
+    assert.equal(await p.eval(`[...document.querySelectorAll('#main .mrow [data-select]')].map(b => b.dataset.select).join(',')`), 'lx,lx2');
+    assert.equal(await p.eval(`document.querySelector('.tgroup[data-tgroup="g1"]').classList.contains('sel')`), true);
+    assert.equal(await p.eval(`document.querySelector('#crumbs .cur').textContent`), 'Lab');
+    assert.equal(await p.eval(`S.space`), 'fleet');
+    await pick('g3');
+    await p.waitFor(`S.sel === 'div:g3' && document.querySelector('#main .hero h1').textContent === 'Web tier'`);
+    assert.equal(await p.eval(`document.querySelector('.tgroup[data-tgroup="g1"]').classList.contains('sel')`), false);
+    assert.ok(!(await p.eval(`document.getElementById('main').textContent`)).includes('NaN'));
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});

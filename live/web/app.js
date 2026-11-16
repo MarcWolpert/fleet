@@ -1227,7 +1227,10 @@ function select(id){
   save(); renderAll(); refreshNow();
 }
 document.addEventListener('click', e => {
-  if (e.target === $('tree')){ selectNone(); return; }   // empty space in a tree: nothing selected, everything shown
+  if (e.target === $('tree')){ selectNone(); return; }
+  // a group's header selects the group: its own all-up view (a fleet's is All machines for its members)
+  const tgh = e.target.closest('#tree .tg-h');
+  if (tgh && !e.target.closest('input') && S.tree !== 'network'){ const id = 'div:' + tgh.closest('.tgroup').dataset.tgroup; buildDivisions(); if (nodes[id]) select(id); return; }   // empty space in a tree: nothing selected, everything shown
   const nv = e.target.closest('[data-nav]'); if (nv){ navGo(nv.dataset.nav === 'back' ? -1 : 1); return; }
   const fs = e.target.closest('[data-mfstep]'); if (fs){ stepFind(+fs.dataset.mfstep); return; }
   if (e.target.closest('[data-mfclose]')){ closeFind(); return; }
@@ -2266,8 +2269,8 @@ function groupedWalk(roots, kidsOf, openFn, shownFn, scope){
 }
 function tgroupOpen({open:g, key, d, kind}){
   const label = GKIND[kind][1], dup = g.name.toLowerCase().startsWith(label);
-  return `<div class="tgroup" data-tgroup="${esc(g.id)}" data-tgkey="${esc(key)}" data-kind="${kind}" role="group" aria-label="${esc(g.name)}, ${label}" style="--gc:var(--g-${kind});--d:${d}">`
-    + `<div class="tg-h" title="Right-click to rename, pin or disband"><i></i><span class="tg-n">${esc(g.name)}</span>${dup ? '' : `<span class="tg-k">${label}</span>`}</div>`;
+  return `<div class="tgroup${S.tree !== 'network' && S.sel === 'div:' + g.id ? ' sel' : ''}" data-tgroup="${esc(g.id)}" data-tgkey="${esc(key)}" data-kind="${kind}" role="group" aria-label="${esc(g.name)}, ${label}" style="--gc:var(--g-${kind});--d:${d}">`
+    + `<div class="tg-h" title="Click to see this group; double-click to rename; right-click for more"><i></i><span class="tg-n">${esc(g.name)}</span>${dup ? '' : `<span class="tg-k">${label}</span>`}</div>`;
 }
 function updGroup(key, id, f){
   const all = Object.assign({}, PREFS.tgroups || {});
