@@ -27,7 +27,7 @@ test('every Group by mode starts with every group collapsed and no process rows'
   try {
     const want = {
       cpugroup: {heads: ['CCD 1', 'CCD 0'], note: 'Showing 0 of 12 processes. 12 are in 2 collapsed groups; open a group to see them.'},
-      owner: {heads: ['Base system', 'web'], note: 'Showing 0 of 12 processes. 12 are in 2 collapsed groups; open a group to see them.'},
+      owner: {heads: ['lx/base', 'lx/containers/web'], note: 'Showing 0 of 12 processes. 12 are in 2 collapsed groups; open a group to see them.'},
       user: {heads: ['marc', 'postgres', 'root', 'www-data', 'redis'], note: 'Showing 0 of 12 processes. 12 are in 5 collapsed groups; open a group to see them.'},
       state: {heads: ['running', 'sleeping', 'idle'], note: 'Showing 0 of 12 processes. 12 are in 3 collapsed groups; open a group to see them.'}
     };
@@ -130,5 +130,40 @@ test('the docked Details panel collapses its groups the same way', async () => {
     assert.deepEqual(await view(p), {heads: ['running', 'sleeping', 'idle'], pids: [], note: 'Showing 0 of 12 processes. 12 are in 3 collapsed groups; open a group to see them.'});
     await p.click(header('running'));
     assert.deepEqual((await view(p)).pids, [104, 105, 106]);
+  } finally { await p.close(); }
+});
+
+// #143: Where it runs groups by tree node, not by name. Two Compose projects each have a service called db.
+function twoDbs(){
+  const fx = fixture(), lx = fx.fleet.machines.find(m => m.id === 'lx');
+  lx.compose = ['blog', 'wiki'].map(p => ({id: 'lx/compose/' + p, name: p, file: `/srv/${p}/compose.yaml`,
+    services: [{id: `lx/compose/${p}/db`, name: 'db', image: 'postgres:16', status: 'Up 2 hours', g: []}]}));
+  const ps = fx.procs.lx.procs, at = (pid, node, cpu) => { const q = ps.find(p => p[0] === pid) || ps[0].slice(); q[0] = pid; q[4] = cpu; q[10] = node; if (!ps.includes(q)) ps.push(q); };
+  at(103, 'lx/compose/blog/db', 0.50);                                   // postgres of blog
+  at(113, 'lx/compose/wiki/db', 0.25); at(114, 'lx/compose/wiki/db', 0.15);   // and two of wiki's
+  return fx;
+}
+const LABELS = `[...document.querySelectorAll('.ptbl tr.gh button[data-gtoggle]')].map(b => [...b.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('') + ': ' + b.querySelector('span').textContent.split(' · ')[0])`;
+
+test('Where it runs keeps same-named nodes apart, each named with what it is in, and opens just one', async () => {
+  const p = await open({group: 'owner'}, twoDbs());
+  try {
+    assert.deepEqual(await p.eval(`({heads: ${HEADS}, labels: ${LABELS}, pids: ${PIDS}})`), {
+      heads: ['lx/base', 'lx/containers/web', 'lx/compose/blog/db', 'lx/compose/wiki/db'],
+      labels: ['Base system: 8 processes', 'web: 3 processes', 'db · blog: 1 process', 'db · wiki: 2 processes'],
+      pids: []});
+    await p.click(header('lx/compose/wiki/db'));
+    assert.deepEqual(await view(p), {heads: ['lx/base', 'lx/containers/web', 'lx/compose/blog/db', 'lx/compose/wiki/db (open)'], pids: [113, 114],
+      note: 'Showing 2 of 14 processes. 12 are in 3 collapsed groups; open a group to see them.'});
+    assert.deepEqual(await p.eval(SAVED), {owner: ['lx/compose/wiki/db']});
+    assert.equal(await p.eval(`document.querySelector(${JSON.stringify(header('lx/compose/wiki/db'))}).getAttribute('aria-label')`), 'Collapse db · wiki');
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
+test('nothing else: names nobody else has stay bare', async () => {
+  const p = await open({group: 'owner'});
+  try {
+    assert.deepEqual(await p.eval(LABELS), ['Base system: 9 processes', 'web: 3 processes']);
   } finally { await p.close(); }
 });

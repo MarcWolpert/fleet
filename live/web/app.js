@@ -1148,7 +1148,7 @@ function detailsView(n, docked){
   // A process is open: rows keep the places they had when it opened (new ones go last), so nothing moves under you.
   const holding = INSP.pid && INSP.mid === mid && INSP.order;
   if (holding){ const pos = new Map(INSP.order.map((pid, i) => [pid, i])); list = list.filter(p => pos.has(p[0])).sort((a, b) => pos.get(a[0]) - pos.get(b[0])).concat(list.filter(p => !pos.has(p[0]))); }
-  const groupBy = {none:null, cpugroup:groupOf, owner:p => ownerName(p[10]) || '—', user:p => p[2] || '—', state:p => stateLabel(p[3]) || '—'}[S.group];
+  const groupBy = {none:null, cpugroup:groupOf, owner:p => nodes[p[10]] ? p[10] : '—', user:p => p[2] || '—', state:p => stateLabel(p[3]) || '—'}[S.group];
   const LIMIT = 400;
   let body = '', shown = 0, more = '';
   const isInsp = p => INSP.pid === p[0] && INSP.mid === mid;
@@ -1160,6 +1160,9 @@ function detailsView(n, docked){
     // and share the row limit.
     const groups = new Map();
     list.forEach(p => { const g = groupBy(p); if (!groups.has(g)) groups.set(g, []); groups.get(g).push(p); });
+    // Where it runs is keyed by tree node; a name two of them share (db in two Compose projects) says what each is in
+    const names = S.group === 'owner' ? [...groups.keys()].map(ownerName) : [];
+    const label = g => { const o = S.group === 'owner' && nodes[g]; if (!o) return g; const par = o.kind === 'cron' ? ownerOf(o) : o.parent; return names.filter(x => x === o.name).length > 1 && par ? o.name + ' · ' + par.name : o.name; };
     let ordered = [...groups.entries()].sort((a, b) => b[1].reduce((s, p) => s + p[4], 0) - a[1].reduce((s, p) => s + p[4], 0));
     if (holding && INSP.gorder){ const gp = new Map(INSP.gorder.map((g, i) => [g, i])); ordered = ordered.filter(x => gp.has(x[0])).sort((a, b) => gp.get(a[0]) - gp.get(b[0])).concat(ordered.filter(x => !gp.has(x[0]))); }
     const isOpen = g => groupOpen(S.group, g);
@@ -1169,7 +1172,7 @@ function detailsView(n, docked){
     ordered.forEach(([g, ps]) => {
       const c = ps.reduce((s, p) => s + p[4], 0), mem = ps.reduce((s, p) => s + p[5], 0), open = isOpen(g);
       const dk = ps.reduce((s, p) => s + (p[6] || 0), 0), nt = ps.reduce((s, p) => s + Math.max(0, p[16] || 0), 0);
-      body += `<tr class="gh"><td colspan="${COLS.length}"><button type="button" class="ghbtn" data-gtoggle="${esc(g)}" aria-expanded="${open}" aria-label="${open ? 'Collapse' : 'Expand'} ${esc(g)}">${icon('chev', 2.4)}${esc(g)}<span>${ps.length} process${ps.length === 1 ? '' : 'es'} · CPU ${pct(c / ncpu * 100)} · ${memText(mem)}${dk > 0 ? ' · disk ' + rateText(dk) : ''}${nt > 0 ? ' · net ' + rateText(nt) : ''}</span></button></td></tr>`;
+      body += `<tr class="gh"><td colspan="${COLS.length}"><button type="button" class="ghbtn" data-gtoggle="${esc(g)}" aria-expanded="${open}" aria-label="${open ? 'Collapse' : 'Expand'} ${esc(label(g))}">${icon('chev', 2.4)}${esc(label(g))}<span>${ps.length} process${ps.length === 1 ? '' : 'es'} · CPU ${pct(c / ncpu * 100)} · ${memText(mem)}${dk > 0 ? ' · disk ' + rateText(dk) : ''}${nt > 0 ? ' · net ' + rateText(nt) : ''}</span></button></td></tr>`;
       if (!open){ closedN += ps.length; closedG++; return; }
       ps.slice(0, per).forEach(p => { body += rowHTML(p); shown++; });
       cut += Math.max(0, ps.length - per);
@@ -1183,10 +1186,14 @@ function detailsView(n, docked){
     if (list.length > shown) more = `Showing ${shown} of ${list.length}. Sort or filter to see others.`;
   }
   const hasGroups = (m && m.groups || []).length > 1;
+  // the machine isn't answering: its list is from the last reading, or there is none (never "0 processes")
+  const off = m && !isLive(m);
+  const count = !all ? 'loading…' : off && !all.length ? statusText(m) : list.length + ' processes';
+  const offNote = off && all ? noteHTML(all.length ? `<b>${esc(m.name)} is ${statusText(m)}.</b> These are its processes at the last reading${m.lastOk ? ', ' + ago(staleFor(m)) : ''}; the list updates when it answers again.` : `<b>${esc(m.name)} is ${statusText(m)}</b>, so there are no processes to show. They appear here when it answers.`) : '';
   const groupNote = Object.keys(gnames).length && all && !all.some(p => p[12] >= 0) && S.group === 'cpugroup' && !FS.some(f => f.kind === 'cpu') ? noteHTML('This OS doesn’t report which processor a process last ran on, so CPU groups can’t be assigned per process here. The <b>Logical processors</b> view under CPU still shows each group.') : '';
   const head = docked
-    ? `<div class="dhead"><div class="dtitle"><b>Details · ${esc(n.name)}${FS.length ? ' · ' + esc(FS.map(f => f.label).join(' · ')) : ''}</b><span>${all ? list.length + ' processes' : 'loading…'} on ${esc(m ? m.name : '')}</span></div><button type="button" class="iconbtn" data-undock="1" title="Pop out to the full Details view" aria-label="Pop out Details">${icon('layers')}</button><button type="button" class="iconbtn" data-closedock="1" title="Close the Details panel" aria-label="Close the Details panel">${icon('x', 2.2)}</button></div>`
-    : `<div class="hero"><span class="tile" style="background:var(--track);color:var(--ink-2)">${icon('chip')}</span><div><h1>Details · ${esc(n.name)}${FS.length ? ' · ' + esc(FS.map(f => f.label).join(' · ')) : ''}</h1><div class="facts"><span>${all ? list.length + ' processes' : 'loading…'}</span><span>on ${esc(m ? m.name : '')}</span>${hasGroups ? `<span>CPU groups: ${esc(m.groups.map(g => g.name).join(', '))}</span>` : ''}</div></div><button type="button" class="btn" data-dock="1" style="margin-left:auto" title="Or drag the Details pill onto the right side">${icon('layers')}Dock to the right</button></div>`;
+    ? `<div class="dhead"><div class="dtitle"><b>Details · ${esc(n.name)}${FS.length ? ' · ' + esc(FS.map(f => f.label).join(' · ')) : ''}</b><span>${count} on ${esc(m ? m.name : '')}</span></div><button type="button" class="iconbtn" data-undock="1" title="Pop out to the full Details view" aria-label="Pop out Details">${icon('layers')}</button><button type="button" class="iconbtn" data-closedock="1" title="Close the Details panel" aria-label="Close the Details panel">${icon('x', 2.2)}</button></div>`
+    : `<div class="hero"><span class="tile" style="background:var(--track);color:var(--ink-2)">${icon('chip')}</span><div><h1>Details · ${esc(n.name)}${FS.length ? ' · ' + esc(FS.map(f => f.label).join(' · ')) : ''}</h1><div class="facts"><span>${count}</span><span>on ${esc(m ? m.name : '')}</span>${hasGroups ? `<span>CPU groups: ${esc(m.groups.map(g => g.name).join(', '))}</span>` : ''}</div></div><button type="button" class="btn" data-dock="1" style="margin-left:auto" title="Or drag the Details pill onto the right side">${icon('layers')}Dock to the right</button></div>`;
   const tools = `<div class="dtools"><input type="search" id="pfilter" placeholder="Filter by name, PID, user or command" value="${esc(S.filter)}" aria-label="Filter processes"><label>Group by <select id="pgroup"><option value="none"${S.group==='none'?' selected':''}>Nothing</option><option value="cpugroup"${S.group==='cpugroup'?' selected':''}>CPU group (CCD, P-/E-cores)</option><option value="owner"${S.group==='owner'?' selected':''}>Where it runs (tree node)</option><option value="user"${S.group==='user'?' selected':''}>User</option><option value="state"${S.group==='state'?' selected':''}>Status</option></select></label>${groupBy ? `<span class="gall"><button type="button" class="btn" data-gall="open">Expand all</button><button type="button" class="btn" data-gall="close">Collapse all</button></span>` : ''}</div>`;
   const thead = `<tr>${COLS.map(c => `<th class="${c.l ? 'l' : ''}" data-colk="${c.k}" ${c.k === SORT.k ? `aria-sort="${dir < 0 ? 'descending' : 'ascending'}"` : ''}><button type="button" data-sort="${c.k}" title="Sort; right-click to choose and arrange columns">${c.label}${c.k === SORT.k ? (dir < 0 ? ' ↓' : ' ↑') : ''}</button></th>`).join('')}</tr>`;
   const applied = FS.filter(f => f.apply);
@@ -1194,7 +1201,7 @@ function detailsView(n, docked){
   if (INSP.pid && INSP.mid === mid && !inspShown && all) body = `<tr class="pinsp"><td colspan="${COLS.length}">${inspectPanel(null)}</td></tr>` + body;
   if (applied.length && all && !list.length && !INSP.pid) body = `<tr class="empty"><td colspan="${COLS.length}" class="l" style="padding:18px 10px;color:var(--ink-3)">No process matches ${esc(applied.map(f => f.short).concat(q ? ['“' + S.filter.trim() + '”'] : []).join(' + '))} right now.</td></tr>`;
   const hold = holding ? `<div class="holdbar">${icon('pin')}<span>Rows hold their places while <b>${esc(INSP.name || 'PID ' + INSP.pid)}</b> is open</span><button type="button" class="btn" data-inspclose="1">Resume live order</button></div>` : '';
-  return head + groupNote + `<section class="card">${tools}${filterChips(FS)}${hold}<div class="pscroll"><table class="ptbl" data-mid="${esc(mid)}"><thead>${thead}</thead><tbody>${body}</tbody></table>${more ? `<div class="more">${more}</div>` : ''}</div></section>`;
+  return head + groupNote + offNote + `<section class="card">${tools}${filterChips(FS)}${hold}<div class="pscroll"><table class="ptbl" data-mid="${esc(mid)}"><thead>${thead}</thead><tbody>${body}</tbody></table>${more ? `<div class="more">${more}</div>` : ''}</div></section>`;
 }
 
 /* ---------- network detail ---------- */
@@ -1216,11 +1223,19 @@ function netView(){
 
 /* ---------- main ---------- */
 let lastMainHTML = '';
-// text selected in the main pane (an image name, a cron command to copy): a rebuild would drop it
-function textSelectedIn(el){ const s = getSelection(); return !!(s && !s.isCollapsed && (el.contains(s.anchorNode) || el.contains(s.focusNode))); }
-// refresh: a poll's redraw, which waits while text is selected in the pane; anything you do redraws at once
-function renderMain(refresh){
-  if (refresh && textSelectedIn($('main'))) return;
+// A text selection in the pane (a command line to copy) survives its rebuild: each end is kept as its process
+// row (rows re-sort) or the pane, the child path down to the text, and the offset there.
+function selEnd(root, node, off){
+  const row = (node.nodeType === 1 ? node : node.parentNode).closest('tr[data-pid]'), top = row && root.contains(row) ? row : root, path = [];
+  for (let n = node; n !== top; n = n.parentNode) path.unshift([...n.parentNode.childNodes].indexOf(n));
+  return {pid:top === row ? row.dataset.pid : null, path, off};
+}
+function selAt(root, e){
+  let n = e.pid ? root.querySelector(`tr[data-pid="${CSS.escape(e.pid)}"]`) : root;
+  for (const i of e.path){ if (!n) break; n = n.childNodes[i]; }
+  return n ? [n, Math.min(e.off, n.nodeType === 3 ? n.length : n.childNodes.length)] : null;   // its process exited: gone
+}
+function renderMain(){
   renderFilterBar();
   const main = $('main');
   const a = document.activeElement;
@@ -1248,13 +1263,16 @@ function renderMain(refresh){
   // the panels inside are rebuilt: keep where each was scrolled (the docked Details, the page beside it, wide tables)
   const SCROLLERS = '.split > .wrap, .dpanel, .pscroll, .scroll-x';
   const scrolled = [...main.querySelectorAll(SCROLLERS)].map(e => [e.scrollTop, e.scrollLeft]);
+  const sel = getSelection(), ends = sel.rangeCount && !sel.isCollapsed && main.contains(sel.anchorNode) && main.contains(sel.focusNode) && selStart == null
+    ? [selEnd(main, sel.anchorNode, sel.anchorOffset), selEnd(main, sel.focusNode, sel.focusOffset)] : null;
   main.innerHTML = full;
   const now = [...main.querySelectorAll(SCROLLERS)];
   if (now.length === scrolled.length) now.forEach((e, i) => { if (scrolled[i][0]) e.scrollTop = scrolled[i][0]; if (scrolled[i][1]) e.scrollLeft = scrolled[i][1]; });
   markPanel(); if (FIND.q) applyFind(false);
+  if (ends){ const x = selAt(main, ends[0]), y = selAt(main, ends[1]); if (x && y) try { sel.setBaseAndExtent(x[0], x[1], y[0], y[1]); } catch (e) {} }
   if (refocus){ const all = main.querySelectorAll(refocus), e = all[refocusAt] || all[0]; if (e){ e.focus({preventScroll:true}); if (selStart != null && e.setSelectionRange) try { e.setSelectionRange(selStart, selStart); } catch (x) {} } }
 }
-function renderAll(refresh){ renderSpaces(); renderToolbar(); renderTree(); renderMain(refresh); refreshTip(); }
+function renderAll(){ renderSpaces(); renderToolbar(); renderTree(); renderMain(); refreshTip(); }
 
 /* ---------- tooltips ---------- */
 const tip = $('tip');
@@ -1483,8 +1501,8 @@ async function refreshNow(){
     await Promise.all(jobs.map(p => p.catch(() => null)));
     fails = 0; $('conn').hidden = true; $('live').hidden = false;
     const sig = sigOf();
-    if (sig !== lastSig){ lastSig = sig; renderAll(true); }
-    else { updateSpaces(); updateTree(); renderMain(true); refreshTip(); }
+    if (sig !== lastSig){ lastSig = sig; renderAll(); }
+    else { updateSpaces(); updateTree(); renderMain(); refreshTip(); }
   } catch (e) {
     fails++;
     if (fails >= 3){ $('conn').hidden = false; $('live').hidden = true; }  // a restart takes a second or two: don't flash
