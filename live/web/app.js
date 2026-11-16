@@ -924,7 +924,14 @@ function diagnose(m){
   if (m.status === 'disabled') return {kind:'off', ic:'power', title:'Not connected', text:`Fleet isn’t connecting to ${name}: its connection was turned off, or it isn’t in the machines <b>Connect automatically</b> connects to when Fleet starts. Connect to read it now.`, steps:[]};
   if (m.status === 'off') return {kind:'off', ic:'power', title:`${name} is turned off`, text:'Its host reports this VM as not running. Start it there and Fleet picks it up within a few seconds.', steps:[]};
   if (m.status === 'connecting' && !e) return {kind:'wait', ic:'refresh', title:`Connecting to ${name}…`, text:'Waiting for its first reading.', steps:[]};
-  if (/host key verification failed|remote host identification has changed/.test(e)) return {kind:'key', ic:'key', title:`Fleet can’t confirm this is really ${name}`,
+  // a changed key ends in "host key verification failed" too; its banner is cut off (the server keeps ssh's last lines), its "host key for X has changed" line isn't
+  const changed = /host key for (\S+) has changed|remote host identification has changed/.exec(e);
+  if (changed) return {kind:'key', ic:'key', title:`${name}’s SSH host key has changed`,
+    text:`SSH remembers another key for <code>${host}</code> than the one it was just sent, so it refused to connect. A rebuilt or reinstalled machine does that, but so does an impostor: check the new key before you trust it.`,
+    steps:[`If you didn’t rebuild or reinstall ${name}, don’t connect: find out first why its key changed.`,
+      'Otherwise read its new fingerprint on the machine itself, e.g. <code>ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub</code> on Linux, or the same file under <code>C:\\ProgramData\\ssh</code> on Windows.',
+      `Remove the old key with <code>ssh-keygen -R ${esc(changed[1] || (m.ssh || m.name).replace(/^.*@/, ''))}</code>, then run <code>ssh ${host}</code>, check that the fingerprint matches, type <b>yes</b>, and log out.`, retry]};
+  if (/host key verification failed/.test(e)) return {kind:'key', ic:'key', title:`Fleet can’t confirm this is really ${name}`,
     text:`SSH has no trusted host key for <code>${host}</code> yet, so it refused to connect. That’s SSH protecting you from an impostor; trusting the key once fixes it.`,
     steps:[`Open Terminal and run <code>ssh ${host}</code>.`, 'Check the fingerprint, type <b>yes</b> to trust it, then log out.', retry]};
   if (/permission denied|authentication failed|too many authentication failures/.test(e)) return {kind:'auth', ic:'lock', title:`${name} didn’t accept the login`,
@@ -1366,7 +1373,7 @@ document.addEventListener('click', e => {
   const st = e.target.closest('[data-settings]'); if (st){ openSettings(); return; }
   if (e.target.closest('[data-addmachinedlg]')){ openAddMachine(); return; }
   const tm = e.target.closest('[data-terminal]'); if (tm){ const n = nodes[tm.dataset.terminal]; api('/api/terminal', {node:tm.dataset.terminal}).then(r => toast(r.ok ? `Opened ${r.title} in ${r.terminal}` : (r.error || 'Couldn’t open a terminal'))).catch(() => toast('Couldn’t reach Fleet')); return; }
-  const rt = e.target.closest('[data-retry]'); if (rt){ rt.disabled = true; rt.innerHTML = icon('refresh') + 'Retrying…'; api('/api/retry', {machine:rt.dataset.retry}).catch(() => null); setTimeout(refreshNow, 2500); return; }
+  const rt = e.target.closest('[data-retry]'); if (rt){ rt.disabled = true; rt.innerHTML = icon('refresh') + 'Retrying…'; api('/api/retry', {machine:rt.dataset.retry}).catch(() => null); setTimeout(() => { lastMainHTML = ''; refreshNow(); }, 2500); return; }   // a fast failure reads the same as before: redraw anyway, so Retry comes back
   if (PICK.open && !$('picker').contains(e.target)) closePicker(false);
   const up = e.target.closest('[data-unpin]'); if (up){ e.stopPropagation(); togglePin(up.dataset.unpin); if (S.space === up.dataset.unpin) goSpace('fleet'); return; }
   const pn = e.target.closest('[data-pin]'); if (pn){ e.stopPropagation(); togglePin(pn.dataset.pin); return; }
@@ -1584,8 +1591,12 @@ function toast(msg){
   if (!t){ t = document.createElement('div'); t.id = 'toast'; t.className = 'toast'; t.setAttribute('role', 'status'); document.body.appendChild(t); }
   t.textContent = msg; t.classList.add('show'); clearTimeout(toast.h); toast.h = setTimeout(() => t.classList.remove('show'), 3200);
 }
+// the backdrop closes Settings only when the press and the release are both on it: a drag-select out of an input also clicks it
+let sheetPress = null;
+$('sheet').addEventListener('mousedown', e => { sheetPress = e.target; });
+$('sheet').addEventListener('mouseup', e => { if (e.target !== $('sheet')) sheetPress = null; });
 $('sheet').addEventListener('click', async e => {
-  if (e.target === $('sheet') || e.target.closest('[data-closesettings]')){ closeSettings(); return; }
+  if ((e.target === $('sheet') && sheetPress === $('sheet')) || e.target.closest('[data-closesettings]')){ closeSettings(); return; }
   if (e.target.closest('[data-savesettings]')){ saveSettings(); return; }
   const tc = e.target.closest('[data-togglecard]'); if (tc){ const i = +tc.dataset.togglecard; SET.expanded.has(i) ? SET.expanded.delete(i) : SET.expanded.add(i); renderSettings(); const h = $('sheet').querySelector(`[data-togglecard="${i}"]`); if (h) h.focus(); return; }
   if (e.target.closest('[data-addmachine]')){ SET.draft.machines.push({id:'', name:'', ssh:'', os:'linux', tile:'terminal'}); SET.expanded.add(SET.draft.machines.length - 1); renderSettings(); const c = $('sheet').querySelector(`[data-field="${SET.draft.machines.length - 1}:name"]`); if (c) c.focus(); return; }
