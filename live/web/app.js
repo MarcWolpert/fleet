@@ -678,7 +678,7 @@ function cpuSelCard(m){
     + `<h3 class="cpuproc">On these processors</h3>${procs}</section>`;
 }
 function ifToggle(){ return `<div class="seg" role="group" aria-label="Network graph"><button type="button" data-ifview="type" aria-pressed="${S.ifView!=='each'}">By type</button><button type="button" data-ifview="each" aria-pressed="${S.ifView==='each'}">Each interface</button></div>`; }
-function ifSel(m){ return S.ifSel && S.ifSel.mid === m.id ? S.ifSel.names : []; }
+function ifSel(m){ const D = IFS[m.id]; return S.ifSel && S.ifSel.mid === m.id ? S.ifSel.names.filter(k => !D || !D.ifs || D.ifs.some(x => x.name === k)) : []; }
 function ifKind(x){ return x.vm ? 'VM tap · ' + x.vm : x.dnet ? 'Docker network · ' + x.dnet : x.kind === 'bridge' ? 'bridge' + (x.members ? ' · ' + x.members + ' member' + (x.members > 1 ? 's' : '') : '') + (x.containers ? ' · ' + x.containers + ' container' + (x.containers > 1 ? 's' : '') : '') : x.kind === 'physical' ? 'physical' : x.desc || x.kind; }
 function speedText(sp){
   if (/^\d+$/.test(String(sp))) return +sp > 0 ? (+sp >= 1000 ? (+sp / 1000) + ' Gb/s' : sp + ' Mb/s') : '';
@@ -754,7 +754,8 @@ async function toggleTilePin(spec){
   tpinBusy = false;
 }
 function diskToggle(){ return `<div class="seg" role="group" aria-label="Disk graph"><button type="button" data-diskview="type" aria-pressed="${S.diskView!=='each'}">By type</button><button type="button" data-diskview="each" aria-pressed="${S.diskView==='each'}">Each disk</button></div>`; }
-function diskSel(m){ return S.diskSel && S.diskSel.mid === m.id ? S.diskSel.names : []; }
+// A saved pick of a disk or interface that's gone (unplugged, renamed) counts as not picked, like a GPU's.
+function diskSel(m){ const D = DISKS[m.id]; return S.diskSel && S.diskSel.mid === m.id ? S.diskSel.names.filter(k => !D || !D.disks || D.disks.some(d => d.name === k)) : []; }
 function bytesText(b){ return b >= 1e12 ? (b / 1e12).toFixed(b >= 1e13 ? 0 : 1) + ' TB' : b >= 1e9 ? Math.round(b / 1e9) + ' GB' : b ? Math.round(b / 1e6) + ' MB' : ''; }
 function diskLabel(d){ return [d.role, d.model].filter(Boolean).join(' · ') || d.name; }
 function diskEachCard(m){
@@ -793,6 +794,8 @@ function diskSelCard(m){
 function gpuToggle(){ return `<div class="seg" role="group" aria-label="GPU graph"><button type="button" data-gpuview="type" aria-pressed="${S.gpuView!=='each'}">By type</button><button type="button" data-gpuview="each" aria-pressed="${S.gpuView==='each'}">Each GPU</button></div>`; }
 function gpuSel(m){ return S.gpuSel && S.gpuSel.mid === m.id ? S.gpuSel.keys.filter(k => m.gpus.some(g => g.key === k)) : []; }
 function gpuHist(m, key){ const g = (m.inside || m).gseries; return (g && g[key]) || zero(); }   // a VM's own GPUs: its inside view
+// A GPU's own utilisation, as its tiles show it; what the tree counts on it only for a GPU that doesn't report one.
+function gpuUtil(m, key){ const g = m.gpus.find(x => x.key === key), u = g && (g.m || []).find(x => x[0] === 'util'); return u && u[2] && u[2].length === H ? u[2] : gpuHist(m, key); }
 // Each GPU (issue #6): like the CCD viewer, a group per GPU with a live tile per metric it reports.
 const GPU_M = {util:['Utilisation', '%'], '3d':['3D', '%'], compute:['Compute', '%'], copy:['Copy', '%'], video:['Video', '%'], encode:['Video encode', '%'],
   decode:['Video decode', '%'], vpp:['Video proc.', '%', 'Video processing'], jpeg:['JPEG', '%'], tiler:['Tiler', '%'], memctl:['Mem. controller', '%', 'Memory controller'],
@@ -809,10 +812,10 @@ function gpuValText(unit, v){
 }
 function gpuEachCard(m){
   const sel = gpuSel(m), mac = /mac/i.test(m.os || '');
-  const groups = m.gpus.map((g, gi) => [g, gi, gpuHist(m, g.key)[H-1]]).sort((a, b) => pinFirst('gpu', m.id, x => x[0].key)(a, b) || bySort('gpu')(a, b)).map(([g, gi]) => {
+  const groups = m.gpus.map((g, gi) => [g, gi, gpuUtil(m, g.key)[H-1]]).sort((a, b) => pinFirst('gpu', m.id, x => x[0].key)(a, b) || bySort('gpu')(a, b)).map(([g, gi]) => {
     const on = sel.includes(g.key);
     const metrics = g.m && g.m.length ? g.m : [['util', null, gpuHist(m, g.key)]];
-    const util = (metrics.find(x => x[0] === 'util') || [0, 0, gpuHist(m, g.key)])[2];
+    const util = gpuUtil(m, g.key);
     const tiles = metrics.map((x, i) => [x, i]).sort((a, b) => pinFirst('gpum', m.id, y => g.key + ':' + y[0][0])(a, b) || a[1] - b[1]).map(([[k, lim, h]]) => {
       const [label0, unit, long] = GPU_M[k] || [k, ''], label = k === '3d' && mac ? 'Renderer' : label0, full = long || label;
       const now = h[H-1], peak = Math.max(...h);
@@ -833,7 +836,7 @@ function gpuSelCard(m){
   const sel = gpuSel(m);
   if (!sel.length) return `<p class="lhint">Click a GPU to see its use over time by what runs on it; ⌘/Ctrl- or Shift-click to compare several.</p>`;
   return sel.map(key => {
-    const gi = m.gpus.findIndex(g => g.key === key), g = m.gpus[gi], h = gpuHist(m, key);
+    const gi = m.gpus.findIndex(g => g.key === key), g = m.gpus[gi], h = gpuUtil(m, key);
     const cons = gpuConsumers(m, key);
     const top = cons.slice(0, 6);
     const hist = n => n.gseries[key] || zero();
@@ -842,7 +845,7 @@ function gpuSelCard(m){
     if (rest.some(v => v > 0.05)) series.push({label:'everything else', color:'var(--t-base)', data:rest});
     const peak = Math.max(...h);
     const card = graphCard(`GPU ${gi} · ${esc(g.name)}`, `${esc(g.mem || '')}${g.mem ? ' · ' : ''}now ${pct(h[H-1])} · peak ${pct(peak)}`, series.length ? series : [{label:g.name, color:'var(--accent)', data:h}], 100, 'gpu', `<button type="button" class="btn" data-gpuclear="1">${icon('x', 2.2)}Clear</button>`);
-    const list = cons.length ? `<div class="rank gpu-rank" style="margin-top:12px">${cons.slice(0, 12).map(c => `<button type="button" class="namebtn" data-select="${esc(c.n.id)}"><span class="ico" style="color:${colOf(c.n)}">${icon(iconOf(c.n))}</span>${esc(c.n.name)}</button><div class="track"><div class="bar" style="width:${Math.min(100, c.v).toFixed(2)}%;background:${colOf(c.n)}"></div></div><div class="tot">${pct(c.v)}</div>`).join('')}</div>` : `<div class="sub" style="margin-top:10px">Nothing is using this GPU.</div>`;
+    const list = cons.length ? `<div class="rank gpu-rank" style="margin-top:12px">${cons.slice(0, 12).map(c => `<button type="button" class="namebtn" data-select="${esc(c.n.id)}"><span class="ico" style="color:${colOf(c.n)}">${icon(iconOf(c.n))}</span>${esc(c.n.name)}</button><div class="track"><div class="bar" style="width:${Math.min(100, c.v).toFixed(2)}%;background:${colOf(c.n)}"></div></div><div class="tot">${pct(c.v)}</div>`).join('')}</div>` : `<div class="sub" style="margin-top:10px">${h[H-1] > 0.05 ? 'Nothing in the tree is counted on this GPU, though it’s busy. <b>Details</b> lists the processes using it.' : 'Nothing is using this GPU.'}</div>`;
     return card.replace(/<\/section>$/, list + '</section>');
   }).join('');
 }
@@ -1498,9 +1501,11 @@ async function refreshNow(){
     if (S.view !== 'details' && !S.detailsDocked && n && n.kind === 'machine' && S.metric === 'cpu' && S.cpuView === 'logical' && cpuSel(n).length && n.status === 'ok') jobs.push(fetch('/api/procs?machine=' + encodeURIComponent(n.id), {cache:'no-store'}).then(r => r.json()).then(d => takeProcs(n.id, d)));
     if (S.view !== 'details' && n && n.kind === 'machine' && S.metric === 'cpu' && S.cpuView === 'logical') jobs.push(fetch('/api/cpus?machine=' + encodeURIComponent(n.id), {cache:'no-store'}).then(r => r.json()).then(d => { CPUS[n.id] = d; }));
     const nm = n && n.kind === 'machine' ? n : null;
-    if (nm && S.metric === 'net' && S.view !== 'details') jobs.push(fetch('/api/ifs?machine=' + encodeURIComponent(nm.id), {cache:'no-store'}).then(r => r.json()).then(d => { IFS[nm.id] = d; }));
-    if (nm && S.metric === 'disk' && S.view !== 'details') jobs.push(fetch('/api/disks?machine=' + encodeURIComponent(nm.id), {cache:'no-store'}).then(r => r.json()).then(d => { DISKS[nm.id] = d; }));
-    if (nm && S.view !== 'details' && !S.detailsDocked && ((S.metric === 'disk' && diskSel(nm).length) || (S.metric === 'gpu' && gpuSel(nm).length) || (S.metric === 'net' && ifSel(nm).length)) && nm.status === 'ok') jobs.push(fetch('/api/procs?machine=' + encodeURIComponent(nm.id), {cache:'no-store'}).then(r => r.json()).then(d => takeProcs(nm.id, d)));
+    // Each interface / Each disk shows nm's; Details filtered by a disk or interface pick needs its machine's to tell whether that's still there.
+    const dn = shownDetails(), dmid = dn && procMachineFor(dn), lists = (shown, pick) => [...new Set([shown && nm ? nm.id : null, pick && pick.mid === dmid && pick.names.length ? dmid : null].filter(Boolean))];
+    lists(S.metric === 'net' && S.view !== 'details', S.ifSel).forEach(id => jobs.push(fetch('/api/ifs?machine=' + encodeURIComponent(id), {cache:'no-store'}).then(r => r.json()).then(d => { IFS[id] = d; })));
+    lists(S.metric === 'disk' && S.view !== 'details', S.diskSel).forEach(id => jobs.push(fetch('/api/disks?machine=' + encodeURIComponent(id), {cache:'no-store'}).then(r => r.json()).then(d => { DISKS[id] = d; })));
+    if (nm && S.view !== 'details' && !S.detailsDocked && ((S.metric === 'disk' && S.diskView === 'each' && diskSel(nm).length) || (S.metric === 'net' && S.ifView === 'each' && ifSel(nm).length)) && nm.status === 'ok') jobs.push(fetch('/api/procs?machine=' + encodeURIComponent(nm.id), {cache:'no-store'}).then(r => r.json()).then(d => takeProcs(nm.id, d)));
     await Promise.all(jobs.map(p => p.catch(() => null)));
     fails = 0; $('conn').hidden = true; $('live').hidden = false;
     const sig = sigOf();
