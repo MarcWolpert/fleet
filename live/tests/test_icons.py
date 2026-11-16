@@ -2,9 +2,9 @@
 """The icon script (issue #90): make_icons.sh renders packaging/icon/fleet.svg with headless Chrome and only
 then replaces the PNGs, Fleet.icns and web/icon.svg. When Chrome could not load the SVG (truncated, empty or
 missing) it still writes a screenshot, of its broken-image placeholder, so the script must refuse and change
-nothing; and a checkout or TMPDIR whose path holds # ? or % must still render the SVG itself. Every case runs a
-copy of the script in a temporary checkout, so the committed icons are never touched. Needs macOS (sips,
-iconutil) and Google Chrome, like the script."""
+nothing; and a checkout or TMPDIR whose path holds # ? % or a character outside ASCII must still render the SVG
+itself. Every case runs a copy of the script in a temporary checkout, so the committed icons are never touched.
+Needs macOS (sips, iconutil) and Google Chrome, like the script."""
 import os, shutil, struct, subprocess, sys, tempfile, unittest, zlib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -105,8 +105,10 @@ class MakeIcons(unittest.TestCase):
 
     def test_the_svg_renders_from_any_checkout_path(self):
         want = [[(0, 255, 0, 255) if 256 <= x < 768 and 256 <= y < 768 else (0, 0, 0, 0) for x in range(1024)] for y in range(1024)]
-        # (checkout dir, TMPDIR): a plain path (the control), then each character a file:// URL reads as syntax
-        for name, tmpname in (("fleet", "tmp"), ("fleet #1", "tmp"), ("fleet ?2", "tmp"), ("fleet %41", "tmp"), ("fleet", "tmp #3")):
+        # (checkout dir, TMPDIR): a plain path (the control), then each character a file:// URL reads as syntax, then
+        # characters outside ASCII (#305: the page Chrome loads must be read as UTF-8, or "é" reaches it as "Ã©")
+        for name, tmpname in (("fleet", "tmp"), ("fleet #1", "tmp"), ("fleet ?2", "tmp"), ("fleet %41", "tmp"), ("fleet", "tmp #3"),
+                              ("Développement", "tmp"), ("開発 fleet", "tmp"), ("fleet", "tmp é")):
             with self.subTest(checkout=name, tmpdir=tmpname), tempfile.TemporaryDirectory() as tmp:
                 root = self.checkout(tmp, name, SVG)
                 r = self.run_script(root, os.path.join(tmp, tmpname))

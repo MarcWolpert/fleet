@@ -8,6 +8,7 @@ Run: python3 -m unittest discover -s live/tests -p 'test_*.py'   (or live/tests/
 import os
 import sys
 import threading
+import time
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
@@ -156,6 +157,86 @@ class JobsByCommand(unittest.TestCase):
         ], cron=[A_SH, DUMP])
         self.assertEqual(jobs(m), [("a.sh", False, IDLE), ("pg_dump", True, [0.5, 0.0, 0.0, 0.0, 0.0])])
         self.assertEqual(nodes(m), {1: "m1/base", 500: "m1/base", 600: "m1/base", 730: "m1/base", 731: cron(m, 1), 732: cron(m, 1)})
+
+
+LOGGED = {"sched": "*/10 * * * *", "cmd": "python3 /opt/jobs/sync.py >> /var/log/sync.log 2>&1", "src": "crontab"}
+DAILY = {"sched": "25 6 * * *", "cmd": "test -x /usr/sbin/anacron || { cd / && run-parts --report /etc/cron.daily; }", "src": "/etc/crontab"}
+IN_DIR = {"sched": "0 5 * * *", "cmd": "cd /srv/app && ./bin/report.sh > /dev/null 2>&1", "src": "crontab"}
+ROTATE = {"sched": "0 1 * * *", "cmd": "HOME=/root /usr/local/bin/rotate --day=$(date +\\%u) --keep '7 days' 2>>/var/log/rotate.err",
+          "src": "crontab"}
+FULL = {"sched": "0 0 * * 0", "cmd": "cd /opt/jobs && python3 sync.py --full >> /var/log/sync.log 2>&1", "src": "crontab"}
+CHAIN = {"sched": "0 6 * * *", "cmd": "/usr/local/bin/b.sh; /usr/local/bin/notify --done", "src": "crontab"}
+
+
+class ShellExecsTheLastCommand(unittest.TestCase):
+    """#306: dash, /bin/sh on Debian and Ubuntu, applies a job line's redirections and runs its `cd X &&` itself, then
+    execs the line's last command in its own place: no `sh -c` is left, and the process cron started runs that
+    command alone (its arguments expanded, without redirections or VAR=value)."""
+
+    def test_debians_hourly_line_and_a_job_that_logs_its_output(self):
+        m = derive(HOST + [
+            proc(760, 500, "cron", "/usr/sbin/CRON -f", 0.01),
+            proc(761, 760, "run-parts", "run-parts --report /etc/cron.hourly", 0.02),
+            proc(762, 761, "logrotate", "/usr/sbin/logrotate /etc/logrotate.conf", 0.5),
+            proc(770, 500, "cron", "/usr/sbin/CRON -f", 0.01),
+            proc(771, 770, "python3", "python3 /opt/jobs/sync.py", 0.25),
+        ], cron=[HOURLY, LOGGED, REPORT])
+        self.assertEqual(jobs(m), [("cron.hourly", True, [0.52, 0.0, 0.0, 0.0, 0.0]), ("sync.py", True, [0.25, 0.0, 0.0, 0.0, 0.0]),
+                                   ("report.py", False, IDLE)])
+        self.assertEqual(nodes(m), {1: "m1/base", 500: "m1/base", 600: "m1/base", 760: "m1/base", 761: cron(m, 0), 762: cron(m, 0),
+                                    770: "m1/base", 771: cron(m, 1)})
+        self.assertEqual(base(m), [0.52, 0.0, 0.0, 0.0, 0.0], "Base keeps sshd and cron's two per-job children")
+
+    def test_a_redirect_to_a_file_named_by_date(self):
+        m = derive(HOST + [proc(730, 500, "cron", "/usr/sbin/CRON -f"), proc(732, 730, "pg_dump", "pg_dump shop", 0.5)], cron=[A_SH, DUMP])
+        self.assertEqual(jobs(m), [("a.sh", False, IDLE), ("pg_dump", True, [0.5, 0.0, 0.0, 0.0, 0.0])])
+        self.assertEqual(nodes(m), {1: "m1/base", 500: "m1/base", 600: "m1/base", 730: "m1/base", 732: cron(m, 1)})
+
+    def test_a_guard_a_cd_into_a_script_and_expanded_arguments(self):
+        m = derive(HOST + [
+            proc(780, 500, "cron", "/usr/sbin/CRON -f"),
+            proc(781, 780, "run-parts", "run-parts --report /etc/cron.daily", 0.1),
+            proc(785, 500, "cron", "/usr/sbin/CRON -f"),
+            proc(786, 785, "report.sh", "/bin/bash ./bin/report.sh", 0.2),        # the script's #! line: its interpreter runs it
+            proc(790, 500, "cron", "/usr/sbin/CRON -f"),
+            proc(791, 790, "rotate", "/usr/local/bin/rotate --day=3 --keep 7 days", 0.3),
+        ], cron=[DAILY, IN_DIR, ROTATE])
+        self.assertEqual(jobs(m), [("cron.daily", True, [0.1, 0.0, 0.0, 0.0, 0.0]), ("report.sh", True, [0.2, 0.0, 0.0, 0.0, 0.0]),
+                                   ("rotate", True, [0.3, 0.0, 0.0, 0.0, 0.0])])
+        self.assertEqual(nodes(m), {1: "m1/base", 500: "m1/base", 600: "m1/base", 780: "m1/base", 781: cron(m, 0),
+                                    785: "m1/base", 786: cron(m, 1), 790: "m1/base", 791: cron(m, 2)})
+
+    def test_nothing_else_matches(self):
+        # The hourly line's command typed in an ssh session is not the job; the same script with other arguments is
+        # another job; and a shell execs only a line's last command, so b.sh under cron is B_SH's, not CHAIN's.
+        m = derive(HOST + [
+            proc(601, 600, "bash", "-bash"),
+            proc(602, 601, "run-parts", "run-parts --report /etc/cron.hourly", 0.5),
+            proc(770, 500, "cron", "/usr/sbin/CRON -f"),
+            proc(771, 770, "python3", "python3 /opt/jobs/sync.py", 0.25),
+            proc(775, 500, "cron", "/usr/sbin/CRON -f"),
+            proc(776, 775, "b.sh", "/bin/bash /usr/local/bin/b.sh", 0.2),
+        ], cron=[HOURLY, FULL, LOGGED, CHAIN, B_SH])
+        self.assertEqual(jobs(m), [("cron.hourly", False, IDLE), ("sync.py", False, IDLE), ("sync.py", True, [0.25, 0.0, 0.0, 0.0, 0.0]),
+                                   ("b.sh", False, IDLE), ("b.sh", True, [0.2, 0.0, 0.0, 0.0, 0.0])])
+        self.assertEqual(nodes(m), {1: "m1/base", 500: "m1/base", 600: "m1/base", 601: "m1/base", 602: "m1/base",
+                                    770: "m1/base", 771: cron(m, 2), 775: "m1/base", 776: cron(m, 4)})
+
+    def test_many_expansions_match_at_once(self):
+        # What the shell expands matches any text, word by word, so a line full of $(...) is no slower to match against
+        # a long command line (a host's, up to 300 characters) than any other line.
+        many = {"sched": "* * * * *", "cmd": "/usr/local/bin/x " + " ".join("$v%d" % i for i in range(12)) + " end", "src": "crontab"}
+        tarball = {"sched": "0 3 * * *", "cmd": "tar -czf /backups/home-$(hostname)-$(date +\\%F).tgz /home 2>/dev/null", "src": "crontab"}
+        began = time.monotonic()
+        m = derive(HOST + [
+            proc(800, 500, "cron", "/usr/sbin/CRON -f"),
+            proc(801, 800, "x", "/usr/local/bin/x " + "a " * 140, 0.2),
+            proc(810, 500, "cron", "/usr/sbin/CRON -f"),
+            proc(811, 810, "tar", "tar -czf /backups/home-nas-2026-11-15.tgz /home", 0.4),
+        ], cron=[many, tarball])
+        self.assertLess(time.monotonic() - began, 1.0)
+        self.assertEqual(jobs(m), [("x", False, IDLE), ("tar", True, [0.4, 0.0, 0.0, 0.0, 0.0])])
+        self.assertEqual(nodes(m), {1: "m1/base", 500: "m1/base", 600: "m1/base", 800: "m1/base", 801: "m1/base", 810: "m1/base", 811: cron(m, 1)})
 
 
 BACKUP = {"sched": "0 4 * * *", "cmd": "/usr/local/bin/backup.sh", "src": "crontab"}

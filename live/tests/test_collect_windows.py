@@ -123,6 +123,27 @@ class LaunchFitsAnyShell(unittest.TestCase):
         self.check_payload(p.stdin.writes[0])
         self.assertEqual((p.stdin.flushed, p.stdin.closed), (True, False))
 
+    def test_the_process_inspector_over_ssh(self):
+        # #304: the inspector is the other long script Fleet sends a Windows machine. As one -EncodedCommand it was
+        # about 10,800 characters, so on a host whose OpenSSH keeps cmd.exe as its shell every inspection failed with
+        # "The command line is too long." It goes the collector's way: the short bootstrap, and the script on stdin.
+        ran = []
+        def run(cmd, **kw):
+            ran.append((cmd, kw.get("input")))
+            return subprocess.CompletedProcess(cmd, 0, b'#< CLIXML\r\n{"pid": 4242, "threads_n": 3}\r\n', b"")
+        m = fl.Machine({"id": "w", "name": "win-desktop", "os": "windows", "ssh": "win-desktop"}, 3)
+        with mock.patch.object(fl.subprocess, "run", run), mock.patch.object(fl, "INSPECT_CACHE", {}):
+            out = fl.inspect_process(m, 4242)
+        [(cmd, stdin)] = ran
+        self.assertEqual(cmd[:-1], ["ssh"] + fl.SSH_MARK + ["win-desktop"])
+        self.check_bootstrap(cmd[-1])
+        self.assertTrue(stdin.isascii(), "plain text: the console's code page reads it as sent")
+        script = "$FleetPid=4242\n$FleetSecs=%s\n" % fl.INSPECT_SECS + fl.ps_compact(
+            open(os.path.join(LIVE, "inspect_windows.ps1"), encoding="utf-8").read())
+        self.assertEqual(stdin.decode("ascii"), script + "\n" + END + "\n")
+        self.assertGreater(len(base64.b64encode(script.encode("utf-16-le"))), CMD_EXE_MAX, "the script alone is too long for cmd.exe")
+        self.assertEqual({k: v for k, v in out.items() if k != "t"}, {"pid": 4242, "threads_n": 3, "machine": "w"})
+
 
 MIB = 1024 * 1024
 LO, HI = "0x00000000_0x0000d1b5", "0x00000000_0x00010f2c"   # two adapters' LUIDs, LO the lower
@@ -322,7 +343,7 @@ class LocalCollectorStopsWithFleet(unittest.TestCase):
 
 class ProcessDetailsOnlyForNewPids(unittest.TestCase):
     """#161: a running process's parent and command line never change, so the collector asks WMI for just those,
-    about PIDs it hasn't seen (or that now run under another name), on the reading it first sees them."""
+    about PIDs it hasn't seen (or that a new process now has), on the reading it first sees them."""
     SRC = fl.ps_compact(open(os.path.join(LIVE, "collect_windows.ps1"), encoding="utf-8").read())
 
     def test_wmi_is_asked_for_three_properties(self):
@@ -340,6 +361,21 @@ class ProcessDetailsOnlyForNewPids(unittest.TestCase):
     def test_pids_that_are_gone_are_forgotten(self):
         line = "foreach ($k in @($cmdCache.Keys)) { if (-not $live.ContainsKey($k)) { $cmdCache.Remove($k) } }"
         self.assertTrue(line in self.SRC, line)
+
+    def test_a_pid_reused_under_the_same_name_is_asked_again(self):
+        # #304: Windows reuses freed PIDs, often for the same program (python.exe train.py exits, python.exe eval.py
+        # gets its PID). Each cache entry is keyed by the process's name and its start time, so a new process on an old
+        # PID is asked about on the reading it first appears, whatever its name. A process whose start time can't be read
+        # (a protected one) keeps the same key every reading, so it is still asked about once.
+        self.assertEqual(re.findall(r"[^\n]*\$live\[[^\n]*", self.SRC), [
+            "$live = @{}; foreach ($gp in $gps) { $st = ''; try { $st = $gp.StartTime.Ticks } catch {}; "
+            "$live[[int]$gp.Id] = $gp.ProcessName + '|' + $st }",
+            "$miss = @($gps | Where-Object { $wc = $cmdCache[[int]$_.Id]; -not $wc -or $wc[2] -ne $live[[int]$_.Id] })",
+            "foreach ($gp in $miss) { $cmdCache[[int]$gp.Id] = @(0, '', $live[[int]$gp.Id]) }",
+            "foreach ($wp in $res) { $id = [int]$wp.ProcessId; if ($live.ContainsKey($id)) { "
+            "$cmdCache[$id] = @([int]$wp.ParentProcessId, [string]$wp.CommandLine, $live[$id]) } }",
+        ])
+        self.assertNotIn("$wc[2] -ne $_.ProcessName", self.SRC)
 
 class DockerStatsRunsAlongside(unittest.TestCase):
     """#167: docker stats takes 1-2 s, so it starts before the counters' 1 s sample and is collected after the

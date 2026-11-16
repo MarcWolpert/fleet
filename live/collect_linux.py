@@ -422,7 +422,8 @@ def net_users(ifaddr, procs):
     text = run(["ss", "-tinpH" if walk else "-tinH", "state", "established"], timeout=8)
     if walk:
         NETSCAN["cost"] = time.time() - began
-        OWNERS.clear()
+        if text.strip():  # a walk that gave nothing (it timed out or failed) leaves the owners the last one found
+            OWNERS.clear()
     prev, conns, total = NET["conns"], {}, NET["pids"]
     users, cur, key = {}, None, ""
     for line in text.splitlines():
@@ -444,16 +445,19 @@ def net_users(ifaddr, procs):
                 u = users.setdefault(pid, {"ifs": [], "b": 0})
                 if ifn and ifn not in u["ifs"]:
                     u["ifs"].append(ifn)
-        elif cur:
+        elif cur is not None:
             sent = re.search(r"bytes_(?:sent|acked):(\d+)", line)
             got = re.search(r"bytes_received:(\d+)", line)
             b = (int(sent.group(1)) if sent else 0) + (int(got.group(1)) if got else 0)
             # Add what this connection moved since the last reading (all of it if it's new), so a process's total only
             # grows: a connection that closes doesn't take its bytes back out, and Fleet Live can diff it as a counter.
-            conns[key] = b
-            grew = b - prev[key] if key in prev and b >= prev[key] else b
-            for pid in cur:
-                total[pid] = total.get(pid, 0) + grew
+            if cur:
+                conns[key] = b
+                grew = b - prev[key] if key in prev and b >= prev[key] else b
+                for pid in cur:
+                    total[pid] = total.get(pid, 0) + grew
+            elif key in prev and b >= prev[key]:  # no process named for it this time: what was counted still holds, so
+                conns[key] = prev[key]            # its growth goes to its process once one is named again, not all of it
             cur = None
     if text.strip():  # no output: ss failed (or nothing is open), and the last baseline still holds
         NET["conns"] = conns

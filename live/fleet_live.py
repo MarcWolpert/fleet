@@ -344,6 +344,7 @@ class Machine:
         self.view = None          # derived, see derive_*()
         self.fresh = False        # a reading arrived in this run (a view restored at start has no processes)
         self.cum = {}             # cumulative counters from the previous reading
+        self.nv_pair = {}         # Windows: each adapter's (LUID's) nvidia-smi index, as the last reading paired them
         self.disk_peak = 500 * MB
         self.lock = threading.Lock()
         self.proc = None
@@ -822,7 +823,8 @@ class Machine:
     def windows_gpus(self, r):
         """Adapters by VRAM size, largest first, each named by its LUID (DXGI's adapter list), with its engines by
         type (the GPU Engine counters), dedicated and shared memory, and NVIDIA's own numbers from the nvidia-smi
-        row of the same name (two cards of one model pair in order: nvidia-smi's index, DXGI's)."""
+        row of the same card: one of the same name, and of two cards of one model the one whose memory.used is the
+        adapter's dedicated VRAM in use."""
         nv = [[x.strip() for x in line.split(",")] for line in r.get("nvidia", []) if line and line.count(",") >= 4]
         num = lambda x: float(x) if re.match(r"^-?\d+(\.\d+)?$", x or "") else None
         key = lambda s: tuple(int(x, 16) for x in s.split("_")) if re.match(r"^0x[0-9a-fA-F]+_0x[0-9a-fA-F]+$", str(s)) else str(s).lower()
@@ -831,20 +833,31 @@ class Machine:
             dx.setdefault(key(a.get("luid")), (i, str(a.get("name") or ""), float(a.get("vram") or 0)))
         info = lambda g: dx.get(key(g.get("luid")))
         lone = len(r.get("gpus", [])) == 1 and not dx   # no adapter list: a lone adapter can only be the one nvidia-smi or Windows names
-        free = list(nv)
-        def nv_row(name):
-            for x in free:
-                if x[1].lower() == name.lower():
-                    free.remove(x)
-                    return x
-            return []
         gpus, luid_idx = [], {}
         order = lambda g: (-info(g)[2], info(g)[0], "") if info(g) else (0.0, len(dx), str(g.get("luid")).lower())
-        for i, g in enumerate(sorted(r.get("gpus", []), key=order)):
+        ordered = sorted(r.get("gpus", []), key=order)
+        # Each adapter's nvidia-smi row. Older GeForce and Quadro drivers leave "NVIDIA " out of nvidia-smi's name. Cards
+        # of one model share a name, and DXGI lists the primary display's first, whatever nvidia-smi's index: WDDM reports
+        # one VRAM-in-use number to both, so a row goes to the adapter whose dedicated use is its memory.used. Within
+        # 64 MiB (both idle, say) that can't tell them apart: the pairing the last reading found holds, else Fleet's order.
+        model = lambda s: re.sub(r"^nvidia ", "", " ".join(s.lower().split()))
+        near = []
+        for i, g in enumerate(ordered):
+            for j, x in enumerate(nv):
+                if info(g) and model(x[1]) == model(info(g)[1]):
+                    used, ded = num(x[3]), g.get("dedicated")
+                    d = abs(used * MIB - float(ded)) if used is not None and isinstance(ded, (int, float)) else float("inf")
+                    near.append((d if d > 64 * MIB else 0.0, self.nv_pair.get(key(g["luid"])) != x[0], i, j))
+        rows = {}
+        for _, _, i, j in sorted(near):
+            if i not in rows and j not in rows.values():
+                rows[i] = j
+        self.nv_pair = {key(ordered[i]["luid"]): nv[j][0] for i, j in rows.items()}
+        for i, g in enumerate(ordered):
             luid_idx[g["luid"]] = i
             a, videos = info(g), r.get("videoNames", [])
             if a:
-                name, size, row = a[1] or "GPU %d" % i, a[2], nv_row(a[1])
+                name, size, row = a[1] or "GPU %d" % i, a[2], nv[rows[i]] if i in rows else []
             elif lone:
                 row = nv[0] if len(nv) == 1 else []
                 name, size = row[1] if row else videos[0] if len(videos) == 1 else "GPU 0", 0.0
@@ -1117,22 +1130,170 @@ def timer_last(line):
 
 
 SHELLS = ("sh", "bash", "dash", "ash", "zsh", "ksh", "mksh", "busybox")
+SH_RESERVED = ("{", "}", "!", "if", "then", "else", "elif", "fi", "do", "done", "while", "until", "exec")
+SH_REDIRECT = re.compile(r"&>>?|\d*(?:>>|>&|>\||<&|<>|<<<|<<-?|>|<)")   # each takes a word: its file, fd or here-doc tag
+
+
+def sh_word(line, i):
+    """The shell word that starts at line[i]: (its pieces, where it ends). A piece is text as the program gets it (quotes
+    gone), or None where the shell expands something ($name, ${...}, $(...), `...`, a glob, a leading ~): any text."""
+    out, n = [], len(line)
+
+    def text(s):
+        if out and out[-1] is not None:
+            out[-1] += s
+        else:
+            out.append(s)
+
+    def expands():
+        if not out or out[-1] is not None:
+            out.append(None)
+
+    def closing(j, open_, close):   # just past what closes the bracket opened before line[j]
+        depth = 1
+        while j < n and depth:
+            depth += (line[j] == open_) - (line[j] == close)
+            j += 2 if line[j] == "\\" else 1
+        return j
+
+    while i < n and line[i] not in " \t\n;&|()<>":
+        c = line[i]
+        if c == "'":
+            j = line.find("'", i + 1)
+            j = n if j < 0 else j
+            text(line[i + 1:j])
+            i = j + 1
+        elif c == "\\":
+            text(line[i + 1:i + 2])
+            i += 2
+        elif c == '"':
+            i += 1
+            while i < n and line[i] != '"':
+                if line[i] == "\\" and line[i + 1:i + 2] in ("$", "`", '"', "\\"):
+                    text(line[i + 1])
+                    i += 2
+                elif line[i] in "$`" and line[i + 1:i + 2] not in ("", '"', " "):
+                    i = sh_expansion(line, i, closing)
+                    expands()
+                else:
+                    text(line[i])
+                    i += 1
+            i += 1
+        elif c in "$`" and line[i + 1:i + 2] not in ("", " ", "\t"):
+            i = sh_expansion(line, i, closing)
+            expands()
+        elif c in "*?[" or (c == "~" and not out):
+            i += 1
+            expands()
+        else:
+            text(c)
+            i += 1
+    return out, i
+
+
+def sh_expansion(line, i, closing):
+    """Where the expansion at line[i] ($name, $1, ${...}, $(...), $((...)), `...`) ends."""
+    if line[i] == "`":
+        j = i + 1
+        while j < len(line) and line[j] != "`":
+            j += 2 if line[j] == "\\" else 1
+        return j + 1
+    if line[i + 1] in "({":
+        return closing(i + 2, line[i + 1], ")" if line[i + 1] == "(" else "}")
+    m = re.compile(r"[A-Za-z_]\w*|[0-9@*#?$!-]").match(line, i + 1)
+    return m.end() if m else i + 1
+
+
+def sh_last_command(line):
+    """The words of the last simple command of a shell line, as the program it runs gets them, or None. Each word is
+    its texts with any text between each two (what the shell expands). A shell execs a line's last command in its
+    own place (dash, cron's /bin/sh on Debian and Ubuntu, does so past a `cd X &&` or a guard, and with
+    redirections applied), so it is what cron's child runs then. The line splits at && || ; | & and brackets;
+    redirections and their words, VAR=value before the command and reserved words go."""
+    cmds, cur, i, n, target = [], [], 0, len(line), False
+    while i < n:
+        c = line[i]
+        m = SH_REDIRECT.match(line, i)
+        if c in " \t":
+            i += 1
+        elif m:
+            i, target = m.end(), True
+        elif line.startswith(("&&", "||"), i) or c in ";&|()\n":
+            cmds.append(cur)
+            cur, target = [], False
+            i += 2 if line.startswith(("&&", "||"), i) else 1
+        elif c == "#":   # a comment, from a word's start to the end of the line
+            break
+        else:
+            start = i
+            pieces, i = sh_word(line, i)
+            raw = line[start:i]
+            if target:
+                target = False
+            elif cur or not (raw in SH_RESERVED or re.match(r"[A-Za-z_]\w*=", raw)):
+                cur.append(pieces)
+    cmds = [c for c in cmds + [cur] if c]
+    if not cmds:
+        return None
+    words = []   # a command line's words are what it holds between spaces: a quoted "7 days" is two of them
+    for pieces in cmds[-1]:
+        w = [""]
+        for p in pieces:
+            if p is None:
+                w.append("")
+                continue
+            segs = re.split(r"\s+", p)
+            w[-1] += segs[0]
+            for seg in segs[1:]:
+                if w != [""]:
+                    words.append(w)
+                w = [seg]
+        if w != [""]:
+            words.append(w)
+    return words or None
+
+
+def sh_runs(words, got):
+    """Whether the command line got (its words) is the command words (from sh_last_command): word for word, where
+    each word's texts come in order and anything may lie between them. Linear: nothing is tried twice."""
+    if len(got) != len(words):
+        return False
+    for w, s in zip(words, got):
+        if len(w) == 1:
+            if s != w[0]:
+                return False
+            continue
+        if len(s) < len(w[0]) + len(w[-1]) or not s.startswith(w[0]) or not s.endswith(w[-1]):
+            return False
+        at, end = len(w[0]), len(s) - len(w[-1])
+        for part in w[1:-1]:
+            at = s.find(part, at, end)
+            if at < 0:
+                return False
+            at += len(part)
+    return True
 
 
 def cron_job(jobs, cmd):
     """Index of the crontab job a process cron started runs, from its command line (cmd), or None. Cron
-    hands the job's line (up to an unescaped %, with \\% as %) to `sh -c`; a shell may exec a lone command
-    in its place, and a script then runs as `<interpreter> <script>`."""
+    hands the job's line (up to an unescaped %, with \\% as %) to `sh -c`; a shell may exec the line's last
+    command in its place (a lone command, or the one after a `cd X &&`, without its redirections), and a
+    script then runs as `<interpreter> <script>`."""
     words = cmd.split()
     shell = len(words) > 2 and os.path.basename(words[0]) in SHELLS and words[1] == "-c"
     got = " ".join(words[2:] if shell else words)
     cut = len(cmd) >= 300  # the collector keeps 300 characters of a command line
-    for exact in (True, False):
-        for i, j in enumerate(jobs):
-            line = " ".join(re.split(r"(?<!\\)%", j["cmd"])[0].replace("\\%", "%").split())
-            if not line:
-                continue
-            if got == line or (cut and line.startswith(got)) or (not exact and not shell and got.endswith(" " + line)):
+    lines = []
+    for j in jobs:
+        line = " ".join(re.split(r"(?<!\\)%", j["cmd"])[0].replace("\\%", "%").split())
+        lines.append((line, sh_last_command(line) if line and not shell else None))
+    gw = got.split()
+    tests = (lambda line, last: got == line or (cut and line.startswith(got)),                  # sh -c <line>, or the line itself
+             lambda line, last: last and sh_runs(last, gw),                                     # the line's last command
+             lambda line, last: not shell and (got.endswith(" " + line) or (last and len(gw) > len(last) and sh_runs(last, gw[-len(last):]))))
+    for test in tests:
+        for i, (line, last) in enumerate(lines):
+            if line and test(line, last):
                 return i
     return None
 
@@ -1869,9 +2030,13 @@ class Fleet:
             return {"procs": [], "ready": m.status == "disabled"}
         own = spec.get("procs_owner", {"cont": {}, "vm": {}})
         num = lambda x: x if isinstance(x, (int, float)) and not isinstance(x, bool) else 0   # what a host sends is data: numbers only
+        gpus = lambda xs: [i for i in xs if isinstance(i, int) and not isinstance(i, bool)] if isinstance(xs, list) else []   # GPU places
+        lastcpu = lambda x: x if isinstance(x, int) and not isinstance(x, bool) else -1   # a CPU's number, or -1: not reported
         jids = job_ids(mid, view.get("jobs", []))   # job:<n> is a place in this view's own job list
         out = []
         for p in view["procs"]:
+            if not isinstance(p[0], int) or isinstance(p[0], bool):   # a pid that isn't a number names no process
+                continue
             o = p[11]
             if o.startswith("c:"):
                 node = own["cont"].get(o[2:], mid + "/base")
@@ -1885,7 +2050,7 @@ class Fleet:
             else:
                 node = mid + "/base"
             out.append([p[0], p[2], p[3], p[4], round(p[5], 4), round(p[6], 5), round(p[7], 4), round(p[8], 2), num(p[9]), p[10], node, num(p[1]),
-                        p[12] if len(p) > 12 else -1, p[13] if len(p) > 13 else [], p[14] if len(p) > 14 else [],
+                        lastcpu(p[12] if len(p) > 12 else -1), gpus(p[13] if len(p) > 13 else []), p[14] if len(p) > 14 else [],
                         p[15] if len(p) > 15 else [], round(p[16], 4) if len(p) > 16 else -1])
         # p[13]: the GPUs the process uses (positions in this machine's gpus); gpu_procs says whether the
         # host reports that at all (macOS doesn't), so an empty p[13] isn't taken for "on no GPU".
@@ -2296,8 +2461,9 @@ def inspect_process(m, pid):
             elif cfg.get("os") == "macos":
                 cmd, stdin = ["ssh"] + SSH_MARK + [cfg["ssh"], "python3 -"], mac_inspect_script(pid, INSPECT_SECS).encode()
             elif cfg.get("os") == "windows":
-                enc = base64.b64encode(windows_inspect_script(pid).encode("utf-16-le")).decode()
-                cmd, stdin = ["ssh"] + SSH_MARK + [cfg["ssh"], "powershell -NoProfile -NonInteractive -EncodedCommand " + enc], None
+                # like the collector: a short bootstrap any default shell runs (cmd.exe takes 8,191 characters), the script on stdin
+                argv, stdin = ps_launch(windows_inspect_script(pid))
+                cmd = ["ssh"] + SSH_MARK + [cfg["ssh"], " ".join(argv)]
             else:
                 cmd = ["ssh"] + SSH_MARK + [cfg["ssh"], "python3 - %d %s" % (pid, INSPECT_SECS)]
                 with open(os.path.join(HERE, "inspect_linux.py"), "rb") as f:
