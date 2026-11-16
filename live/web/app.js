@@ -1235,7 +1235,9 @@ function selAt(root, e){
   for (const i of e.path){ if (!n) break; n = n.childNodes[i]; }
   return n ? [n, Math.min(e.off, n.nodeType === 3 ? n.length : n.childNodes.length)] : null;   // its process exited: gone
 }
+let resizing = false;  // the docked panel's edge is being dragged: hold the page still till it's let go
 function renderMain(){
+  if (resizing) return;  // a rebuild would replace the handle, which drops its pointer capture and strands the drag
   renderFilterBar();
   const main = $('main');
   const a = document.activeElement;
@@ -1689,14 +1691,16 @@ document.addEventListener('dragleave', e => {
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && (dragging || $('dockzone'))) endDrag(); });
 window.addEventListener('blur', () => { if (dragging || $('dockzone')) endDrag(); });
 ['mousemove', 'pointermove', 'pointerdown'].forEach(t => document.addEventListener(t, e => { if ((t === 'pointerdown' || e.buttons === 0) && (dragging || $('dockzone'))) endDrag(); }, true));
-// Resize the docked panel by its left edge.
+// Resize the docked panel by its left edge. Polls don't rebuild the page while the drag lasts (see renderMain);
+// letting go, or the browser cancelling the drag, ends it, saves the width and shows what came in meanwhile.
+const RESIZE_ENDS = ['pointerup', 'pointercancel', 'lostpointercapture'];
 document.addEventListener('pointerdown', e => {
   const h = e.target.closest && e.target.closest('[data-resize]'); if (!h) return;
   e.preventDefault();
-  const panel = h.parentElement; h.setPointerCapture(e.pointerId);
+  const panel = h.parentElement; h.setPointerCapture(e.pointerId); resizing = true;
   const move = ev => { const w = Math.max(360, Math.min(innerWidth - 520, innerWidth - ev.clientX - 8)); panel.style.width = w + 'px'; S.dockW = w; };
-  const up = () => { h.removeEventListener('pointermove', move); h.removeEventListener('pointerup', up); save(); lastMainHTML = ''; };
-  h.addEventListener('pointermove', move); h.addEventListener('pointerup', up);
+  const up = () => { h.removeEventListener('pointermove', move); RESIZE_ENDS.forEach(t => h.removeEventListener(t, up)); resizing = false; save(); lastMainHTML = ''; renderMain(); };
+  h.addEventListener('pointermove', move); RESIZE_ENDS.forEach(t => h.addEventListener(t, up));
 });
 
 
