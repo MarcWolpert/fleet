@@ -204,3 +204,40 @@ test('renaming a group in the machine tree survives a poll that brings a new nod
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
 });
+
+// The box groups what you can see: rows scrolled out of the tree's view (above or below it) stay out of it, even when
+// the box is dragged past the tree's edge into the title above. A hidden row at another level doesn't refuse the
+// box, and a hidden sibling doesn't join (#293).
+const cloneMachine = (m, id, name) => Object.assign(JSON.parse(JSON.stringify(m).split('"' + m.id + '/').join('"' + id + '/').split('"' + m.id + '"').join('"' + id + '"')), {name});
+function manyMachines(){
+  const fx = fixture(), lx2 = fx.fleet.machines.find(m => m.id === 'lx2');
+  for (let i = 3; i <= 12; i++) fx.fleet.machines.push(cloneMachine(lx2, 'lab' + i, 'lab-' + String(i).padStart(2, '0')));
+  return fx;
+}
+const allClosed = fx => Object.fromEntries(fx.fleet.machines.map(m => [m.id, false]));
+// press in a row, drag straight up to y, let go (and the click that follows a drag)
+const dragUpTo = (p, from, y1) => p.eval(`(() => { const a = (${from}).getBoundingClientRect(); const x0 = a.left + 40, y0 = a.top + a.height / 2; const t = document.elementFromPoint(x0, y0); const o = (x, y) => ({bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0, pointerId: 1}); t.dispatchEvent(new PointerEvent('pointerdown', o(x0, y0))); for (let i = 1; i <= 6; i++) document.dispatchEvent(new PointerEvent('pointermove', o(x0 + 10 * i, y0 + (${y1} - y0) * i / 6))); document.dispatchEvent(new PointerEvent('pointerup', o(x0 + 60, ${y1}))); t.dispatchEvent(new MouseEvent('click', o(x0 + 60, ${y1}))); return true; })()`);
+const VISIBLE = `(() => { const t = document.getElementById('tree').getBoundingClientRect(); return [...document.querySelectorAll('#tree .row[data-select]')].filter(r => { const b = r.getBoundingClientRect(); return Math.min(b.bottom, t.bottom) - Math.max(b.top, t.top) >= b.height / 2; }).map(r => r.dataset.select); })()`;
+for (const [name, open] of [
+  ['hidden siblings above stay out of it', {}],
+  ['a hidden row at another level does not refuse it', {lab3: true}]])
+  test(`a box dragged past the top of a scrolled tree groups only the rows you can see: ${name}`, async () => {
+    const fx = manyMachines();
+    const p = await browser.page(fx, {ui: ui({sel: 'fleet', open: Object.assign(allClosed(fx), open)}), height: 600});
+    try {
+      await p.waitFor(`document.querySelectorAll('#tree .row').length > 10`);
+      await p.eval(`(() => { const t = document.getElementById('tree'); t.scrollTop = 98; return true; })()`);
+      const seen = await p.eval(VISIBLE), top3 = seen.slice(0, 3);
+      assert.equal(await p.eval(`document.getElementById('tree').scrollTop`), 98);   // three rows (and the tree's padding) out of view
+      assert.deepEqual(top3, open.lab3 ? ['lab4', 'lab5', 'lab6'] : ['lab6', 'lab7', 'lab8']);
+      const titleTop = await p.eval(`document.getElementById('tree-title').getBoundingClientRect().top`);
+      await dragUpTo(p, ROW(top3[2]), titleTop - 25);   // about 90 px above the tree's top: three hidden rows' worth
+      await p.waitFor(`document.querySelector('#tree .tgroup') || (document.getElementById('toast') || {}).textContent`);
+      assert.equal(await p.eval(`(document.getElementById('toast') || {}).textContent || ''`), '');
+      assert.deepEqual(saved(fx)['machines|root'].map(g => g.ids), [top3]);
+      assert.deepEqual(Object.keys(saved(fx)), ['machines|root']);
+      assert.deepEqual(await p.eval(`[...document.querySelectorAll('#tree .tgroup .row')].map(r => r.dataset.select)`), top3);
+      assert.equal(await p.eval(`S.sel`), 'fleet');
+      assert.deepEqual(p.errors, []);
+    } finally { await p.close(); }
+  });

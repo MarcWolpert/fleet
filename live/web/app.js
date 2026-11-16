@@ -2635,7 +2635,9 @@ document.addEventListener('pointermove', e => {
   if (!m.on){ if (Math.hypot(e.clientX - m.x0, e.clientY - m.y0) < 6) return; m.on = true; m.box = document.createElement('div'); m.box.className = 'mqbox'; document.body.appendChild(m.box); }
   const x = Math.min(m.x0, e.clientX), y = Math.min(m.y0, e.clientY), w = Math.abs(e.clientX - m.x0), h = Math.abs(e.clientY - m.y0);
   Object.assign(m.box.style, {left:x + 'px', top:y + 'px', width:w + 'px', height:h + 'px'});
-  document.querySelectorAll('#tree .row').forEach(r => { const b = r.getBoundingClientRect(); r.classList.toggle('mqhit', b.bottom > y && b.top < y + h && b.right > x && b.left < x + w); });
+  // only what you can see: the box is cut to the tree's view, so rows scrolled above or below it stay out (#293)
+  const t = $('tree').getBoundingClientRect(), x0 = Math.max(x, t.left), y0 = Math.max(y, t.top), x1 = Math.min(x + w, t.right), y1 = Math.min(y + h, t.bottom);
+  document.querySelectorAll('#tree .row').forEach(r => { const b = r.getBoundingClientRect(); r.classList.toggle('mqhit', b.bottom > y0 && b.top < y1 && b.right > x0 && b.left < x1); });
 });
 document.addEventListener('pointerup', () => {
   const m = MQ.st; MQ.st = null; if (!m || !m.on) return;
