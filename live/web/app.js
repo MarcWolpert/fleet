@@ -81,6 +81,8 @@ const TF = {q:'', open:false}, FIND = {q:'', i:0, n:0};
 let PANEL = null;
 // where you've scrolled (#221): pending positions from before a reload of the page, restored once their panes are long enough
 const KEEP = {pending:null, t:0};
+// the first launch's welcome (#284), looked at once per page load: nothing saved yet, on the server or in this browser
+const FIRST = {checked:false, fresh:(() => { try { return localStorage.getItem('fleet-live-ui') === null; } catch (e) { return false; } })()};
 try { const k = JSON.parse(sessionStorage.getItem('fleet-scroll') || 'null'); if (k && k.pos) Object.assign(KEEP, {pending:k, t:Date.now()}); } catch (e) {}   // the panel you're in: 'tree', 'main' or 'details'
 // the process open in the Details drop-down (see "One process, up close")
 const INSP = {mid:null, pid:0, name:'', order:null, gorder:null, data:null, good:null, acc:{}, samples:0, secs:0, looks:0, busy:false, cacheLooks:[]};
@@ -1547,6 +1549,13 @@ async function refreshNow(){
     INTERVAL = DATA.interval || 3; WINDOW = DATA.window_s || INTERVAL * H; if (pinsAt === pinsSeq) PINS = DATA.pins || []; if (!prefsBusy && pg === prefsGen){ PREFS = DATA.prefs || {}; applyTheme(currentTheme()); } if (!tpinBusy) TPINS = DATA.tilepins || {};
     build(DATA);
     renderAutoConn();
+    // the first launch (no UI settings saved yet): the tutorial, as a welcome, once (#284)
+    if (!FIRST.checked){
+      FIRST.checked = true;
+      const p = DATA.prefs;
+      if (FIRST.fresh && (!p || !Object.keys(p).length) && !$('tutorial'))
+        setTimeout(() => openTutorial(0, {welcome:true, onClose:() => { PREFS = Object.assign({}, PREFS, {seenTutorial:true}); savePrefs('the welcome'); }}), 0);
+    }
     if (S.sel !== 'fleet' && !nodes[S.sel]) { /* keep selection; it may come back */ }
     const n = S.sel === 'fleet' ? null : nodes[S.sel];
     const jobs = [];

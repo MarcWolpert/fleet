@@ -33,3 +33,27 @@ test('the Tutorial pill beside Settings opens a modal: getting started, Fleet te
   } finally { await p.close(); }
 });
 
+test('on the first launch the tutorial opens as a welcome, once; people already using Fleet never see it (#284)', async () => {
+  const fx = fixture(); delete fx.fleet.prefs;   // nothing saved yet, on the server or in this browser: a first launch
+  let p = await browser.page(fx, {});
+  try {
+    await p.waitFor(`document.querySelector('#tutorial[role=dialog]')`);
+    assert.equal(await p.eval(TEXT('#tutorial h2')), 'Welcome to Fleet');
+    assert.equal(await p.eval(`document.querySelector('#tutorial [role=tab][aria-selected=true]').textContent.trim()`), 'Getting started');
+    await p.eval(`([...document.querySelectorAll('#tutorial [data-tutclose]')].find(b => /Get started/.test(b.textContent)).click(), true)`);
+    await p.waitFor(`!document.getElementById('tutorial')`);
+    await p.waitFor(`(window.__n = (window.__n || 0) + 1) > 2`);
+    const posted = (fx.posts || []).filter(x => x.path === '/api/prefs').map(x => JSON.parse(x.body));
+    assert.equal(posted.pop().seenTutorial, true, 'remembered in ui.json');
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+  for (const prefs of [{seenTutorial: true}, {theme: 'fleet'}, undefined]){   // seen it; already using Fleet; or this browser has used it
+    const fx2 = fixture(); if (prefs) fx2.fleet.prefs = prefs;
+    p = await browser.page(fx2, prefs ? {} : {ui: ui({sel: 'fleet'})});
+    try {
+      await p.waitFor(`document.querySelector('#tree .row')`);
+      await new Promise(ok => setTimeout(ok, 600));
+      assert.equal(await p.eval(`!!document.getElementById('tutorial')`), false, JSON.stringify(prefs));
+    } finally { await p.close(); }
+  }
+});
