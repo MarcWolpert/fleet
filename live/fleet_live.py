@@ -1493,6 +1493,8 @@ class MacCollector:
             except Exception:
                 continue
             labels = dict(kv.split("=", 1) for kv in c.get("Labels", "").split(",") if "=" in kv)
+            if "fleet.helper" in labels:   # Fleet's own throwaway helper (docker_vm_inspect_cmd), not one of yours
+                continue
             cid = c.get("ID", "")[:12]
             s = stats.get(cid, {})
             nrx, ntx = netio(s.get("NetIO"))
