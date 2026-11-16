@@ -459,7 +459,13 @@ def snapshot():
             continue
         labels = dict(kv.split("=", 1) for kv in c.get("Labels", "").split(",") if "=" in kv)
         cid = c.get("ID", "")[:12]
-        net = netdev(rd("/proc/%s/net/dev" % first_pid_of[cid])) if cid in first_pid_of else {}
+        host_ns = os.readlink("/proc/1/ns/net") if os.path.exists("/proc/1/ns/net") else ""
+        try:
+            own_ns = os.readlink("/proc/%s/ns/net" % first_pid_of[cid]) if cid in first_pid_of else ""
+        except Exception:
+            own_ns = ""
+        # network_mode: host shares the host's namespace; its traffic is the host's, so don't count it again here
+        net = netdev(rd("/proc/%s/net/dev" % first_pid_of[cid])) if cid in first_pid_of and own_ns and own_ns != host_ns else {}
         rx = sum(v[0] for k, v in net.items() if k != "lo")
         tx = sum(v[1] for k, v in net.items() if k != "lo")
         containers.append({"id": cid, "name": c.get("Names", ""), "image": c.get("Image", ""), "status": c.get("Status", ""),
