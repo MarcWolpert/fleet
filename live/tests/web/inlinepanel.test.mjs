@@ -121,6 +121,41 @@ test('+ opens Go to anything with just what can have a terminal; picking one ope
   } finally { await p.close(); }
 });
 
+// #412: in Go to anything, terminal: and a name opens a terminal there, in the terminals below the page
+test('⌘K: terminal: lists what can have a terminal, filtered by what follows; Enter opens one there', async () => {
+  const fx = fx1();
+  const p = await browser.page(fx, {ui: ui({sel: 'lx'})});
+  const type = v => p.eval(`(() => { const q = document.getElementById('gotoq'); q.value = ${JSON.stringify(v)}; q.dispatchEvent(new Event('input', {bubbles: true})); return true; })()`);
+  const enter = () => p.eval(`(document.getElementById('gotoq').dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', bubbles: true})), true)`);
+  try {
+    await p.waitFor(`document.querySelectorAll('#tdrawer [role=tab]').length === 4`);
+    await p.eval(`(openGoto(), true)`);
+    await p.waitFor(`document.getElementById('gotoq')`);
+    assert.match(await p.eval(`document.getElementById('gotoq').placeholder`), /terminal:/);
+    // the prefix alone: just what can have a terminal, as the terminals' + lists them
+    await type('terminal:');
+    const all = await p.eval(`GOTO.items.map(x => x.n.id)`);
+    assert.deepEqual(await p.eval(`[...new Set(GOTO.items.map(x => x.n ? x.n.kind : 'command'))].sort()`), ['container', 'machine']);
+    assert.deepEqual(all, await p.eval(`(GOTO.mode = 'term', GOTO.q = '', (() => { const ids = gotoItems().map(x => x.n.id); GOTO.mode = ''; GOTO.q = 'terminal:'; return ids; })())`));
+    // any case, no space: what follows filters
+    await type('Terminal:web');
+    await p.waitFor(`GOTO.items.length && GOTO.items.every(x => x.n && /web/.test(x.n.name))`);
+    await enter();
+    await p.waitFor(`!document.getElementById('goto')`);
+    await p.waitFor(`document.querySelectorAll('#tdrawer [role=tab]').length === 5`);
+    assert.match(posts(fx, '/api/inline-terminal').pop().node, /\/containers\/web$/);
+    assert.equal(await p.eval(`S.sel`), 'lx', 'the page stays where it is');
+    // without the prefix, a name goes there, as before
+    await p.eval(`(openGoto(), true)`);
+    await type('web');
+    await p.waitFor(`GOTO.items.length && GOTO.items[0].n && /web/.test(GOTO.items[0].n.name)`);
+    await enter();
+    await p.waitFor(`/\\/containers\\/web$/.test(S.sel)`);
+    assert.equal(await p.eval(`document.querySelectorAll('#tdrawer [role=tab]').length`), 5, 'no new terminal');
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
 // #395: t shows or hides the terminals, r goes into the one you're on; not while typing in a field
 test('t shows or hides the terminals; r puts you in the one you’re on; neither while typing', async () => {
   const fx = fx1();
