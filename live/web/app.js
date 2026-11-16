@@ -468,11 +468,12 @@ function renderTree(){
       + `<span class="tdrag" draggable="true" title="Drag into a group" aria-hidden="true">${icon('grip')}</span>`
       + `<button type="button" class="chev${open?' open':''}${kids?'':' leaf'}" ${kids?`data-toggle="${esc(n.id)}" aria-label="${open?'Collapse':'Expand'} ${esc(n.name)}"`:'tabindex="-1" aria-hidden="true"'}>${icon('chev', 2.4)}</button>`
       + `${machineOS(n) ? treeMachineIcon(n) : `<span class="ico" style="color:${n.kind==='cronfolder'||n.kind==='cron'?'var(--ink-3)':colOf(n)}">${icon(iconOf(n))}</span>`}`
-      + `<button type="button" class="nm" data-select="${esc(n.id)}">${esc(n.name)}</button>${count}${gtag}${dot}${pin}`
+      + `<button type="button" class="nm" data-select="${esc(n.id)}">${esc(n.name)}</button>${tdet(count + gtag)}${dot}${pin}`
       + `<svg class="spark" data-spark="${esc(n.id)}" viewBox="0 0 60 16" preserveAspectRatio="none" aria-hidden="true"><polyline points="${sparkPts(n.series[S.metric], 60, 16)}" fill="none" stroke="${n.kind==='machine'&&!n.parent?'var(--accent)':colOf(n)}" stroke-width="1.5" vector-effect="non-scaling-stroke" stroke-linejoin="round"/></svg>`
       + `<span class="val${n.kind === 'machine' && !isLive(n) ? ' dim' : ''}" data-val="${esc(n.id)}" title="share of host ${mlabel(S.metric)}">${rowVal(n)}</span></div>`;
   }
   if (S.pinsOnly && !rows.length) $('tree').innerHTML = `<div class="empty-pins">${icon('pin')}<b>Nothing pinned yet</b><span>Pin a machine, VM, project or container with the pin on its row, or with <b>+</b> in the top bar.</span></div>`;
+  fitTree();
   treeHeader();
 }
 function treeHeader(){
@@ -521,7 +522,7 @@ function renderGroupsTree(){
   }); })(tops, 0);
   const memberRow = (m, d) => `<div class="row ${m.kind} gonlymember${S.sel === m.id ? ' sel' : ''}" style="--d:${d}" role="treeitem" aria-level="${d + 1}" aria-selected="${S.sel === m.id}" data-select="${esc(m.id)}">`
     + `<button type="button" class="chev leaf" tabindex="-1" aria-hidden="true">${icon('chev', 2.4)}</button><span class="ico" style="color:${colOf(m)}">${icon(m.kind === 'machine' ? m.tile || 'vm' : iconOf(m))}</span>`
-    + `<button type="button" class="nm" data-select="${esc(m.id)}">${esc(m.name)}</button><span class="tgk">${esc(kindLabel(m))}</span>`
+    + `<button type="button" class="nm" data-select="${esc(m.id)}">${esc(m.name)}</button>${tdet(`<span class="tgk">${esc(kindLabel(m))}</span>`)}`
     + `<svg class="spark" data-spark="${esc(m.id)}" viewBox="0 0 60 16" preserveAspectRatio="none" aria-hidden="true"><polyline points="${sparkPts(m.series[S.metric], 60, 16)}" fill="none" stroke="${colOf(m)}" stroke-width="1.5" vector-effect="non-scaling-stroke"/></svg>`
     + `<span class="val" data-val="${esc(m.id)}">${rowVal(m)}</span></div>`;
   $('tree').innerHTML = rows.length ? rows.map(({x, m, d, ks, folded}) => {
@@ -531,11 +532,12 @@ function renderGroupsTree(){
     const where = d === 0 && n.parent ? `<span class="tgw">on ${esc(hostOf(n).name)}</span>` : '';
     return `<div class="row division gonlyrow${sel ? ' sel' : ''}" style="--d:${d}" role="treeitem" aria-level="${d + 1}" ${ks.length ? `aria-expanded="${!folded}"` : ''} aria-selected="${sel}" data-select="${esc(n.id)}">`
       + chev + `<span class="ico" style="color:${n.color}">${icon(iconOf(n))}</span>`
-      + `<button type="button" class="nm" data-select="${esc(n.id)}">${esc(x.g.name)}</button><span class="tgk">${GKIND[n.gkind][0]}</span>${where}<span class="count">${n.children.length}</span>${pinBtn(n.id)}`
+      + `<button type="button" class="nm" data-select="${esc(n.id)}">${esc(x.g.name)}</button>${tdet(`<span class="tgk">${GKIND[n.gkind][0]}</span>${where}<span class="count">${n.children.length}</span>`)}${pinBtn(n.id)}`
       + `<svg class="spark" data-spark="${esc(n.id)}" viewBox="0 0 60 16" preserveAspectRatio="none" aria-hidden="true"><polyline points="${sparkPts(n.series[S.metric], 60, 16)}" fill="none" stroke="${n.color}" stroke-width="1.5" vector-effect="non-scaling-stroke" stroke-linejoin="round"/></svg>`
       + `<span class="val" data-val="${esc(n.id)}" title="share of ${n.parent ? 'host' : 'all machines'} ${mlabel(S.metric)}">${rowVal(n)}</span></div>`;
   }).join('') : q ? `<div class="tempty">Nothing in the tree matches “${esc(TF.q)}”.</div>`
     : `<div class="tempty">No groups ${S.pinsOnly ? 'in Pins only ' : ''}yet. Draw a box over two or more items at the same level (or drag one onto another) to group them; turn off <b>Groups only</b> to see the items.</div>`;
+  fitTree();
   treeHeader();
 }
 function updateTree(){
@@ -548,6 +550,32 @@ function updateTree(){
   document.querySelectorAll('[data-sdot]').forEach(e => { const n = nodes[e.dataset.sdot]; if (n){ const c = statusClass(n), r = e.closest('.row.machine'); e.className = 'sdot ' + c; e.title = e.dataset.conn ? connTitle(n) : statusText(n); if (e.dataset.conn){ e.setAttribute('aria-pressed', String(n.on)); e.setAttribute('aria-label', (n.on ? 'Disconnect ' : 'Connect ') + n.name); } if (r) STATUSES.forEach(k => r.classList.toggle(k, k === c)); } });
   document.querySelectorAll('[data-val]').forEach(e => { const n = nodes[e.dataset.val]; if (n && n.kind === 'machine') e.classList.toggle('dim', !isLive(n)); });
 }
+
+// #332: a row's details (its kind, host, count, GPU tag) sit in .tdet, beside the name as they always have. A row
+// that can't show its name and all of them in full on one line takes two (.two): the name with its icon, sparkline
+// and value, then the details smaller under the name. Each row is measured on one line, after every drawing of the
+// tree and whenever its width changes; while the tree is drawn anew the rows that had two lines keep them, so its
+// height, and where it's scrolled, doesn't jump on the way.
+function tdet(html){ return html ? `<span class="tdet">${html}</span>` : ''; }
+const TWO = new Set();
+const twoKey = r => r.classList.contains('tg-h') ? 'tg:' + r.parentElement.dataset.tgroup : r.dataset.select || r.dataset.netsel || '';
+function fitTree(){
+  const t = $('tree'), rows = [...t.querySelectorAll('.row, .tg-h')].filter(r => r.querySelector(':scope > .tdet'));
+  rows.forEach(r => r.classList.toggle('two', TWO.has(twoKey(r))));
+  if (!t.clientWidth) return;   // not on screen: the ResizeObserver below measures it when it is
+  const top = t.scrollTop, bar = t.scrollHeight > t.clientHeight, cut = e => e.scrollWidth > e.clientWidth;
+  if (bar) t.style.overflowY = 'scroll';   // measured at the width it has now, scroll bar and all
+  rows.forEach(r => r.classList.remove('two'));
+  const two = rows.filter(r => { const nm = r.querySelector(':scope > .nm, :scope > .tg-n'); return (nm && cut(nm)) || [...r.querySelector(':scope > .tdet').children].some(cut); });
+  TWO.clear(); two.forEach(r => { r.classList.add('two'); TWO.add(twoKey(r)); });
+  if (bar) t.style.overflowY = '';
+  t.scrollTop = top;
+}
+if (typeof ResizeObserver === 'function'){
+  let w = -1;   // its width only: the tree grows taller and shorter with its rows all the time
+  new ResizeObserver(() => { const t = $('tree'); if (t.clientWidth !== w){ w = t.clientWidth; requestAnimationFrame(fitTree); } }).observe($('tree'));
+}
+if (document.fonts && document.fonts.addEventListener) document.fonts.addEventListener('loadingdone', () => fitTree());
 
 /* ---------- network tree ---------- */
 let netNodes = {};
@@ -597,7 +625,7 @@ function netTreeHTML(){
   function netRow({n, d, pk}){
     const kids = n.children.length > 0, open = kids && netOpen(n);
     const ic = n.kind === 'tailnet' ? 'net' : n.kind === 'nmachine' ? 'desktop' : n.kind === 'ncontainer' ? 'cube' : n.ifkind === 'bridge' ? 'bridge' : n.vm ? 'vm' : 'nic';
-    const sub = n.kind === 'nmachine' ? `<i class="sdot ${n.status}" title="${esc(n.status)}"></i>` : n.vm ? `<span class="count">${esc(n.vm)}</span>` : n.dnet && n.kind === 'if' ? `<span class="count">${esc(n.dnet)}</span>` : '';
+    const sub = n.kind === 'nmachine' ? `<i class="sdot ${n.status}" title="${esc(n.status)}"></i>` : tdet(n.vm ? `<span class="count">${esc(n.vm)}</span>` : n.dnet && n.kind === 'if' ? `<span class="count">${esc(n.dnet)}</span>` : '');
     return `<div class="row${S.netSel===n.id?' sel':''}" style="--d:${d}" role="treeitem" aria-level="${d+1}" ${kids?`aria-expanded="${open}"`:''} data-netsel="${esc(n.id)}" data-pk="${esc(pk)}">`
       + `<span class="tdrag" draggable="true" title="Drag into a group" aria-hidden="true">${icon('grip')}</span>`
       + `<button type="button" class="chev${open?' open':''}${kids?'':' leaf'}" ${kids?`data-toggle="${esc(n.id)}" aria-label="${open?'Collapse':'Expand'} ${esc(n.name)}"`:'tabindex="-1" aria-hidden="true"'}>${icon('chev', 2.4)}</button>`
@@ -607,7 +635,7 @@ function netTreeHTML(){
 function renderNetTree(html = netTreeHTML()){
   if (renaming()) return;
   $('tree').innerHTML = html; netDrawn = {html, first:$('tree').firstElementChild};
-  netRates();
+  netRates(); fitTree();
   $('tree-title').innerHTML = 'Network';
   $('tree-col').textContent = '↓ in · ↑ out';
   $('side-note').innerHTML = '';
@@ -2809,7 +2837,7 @@ function tgroupOpen({open:g, key, d, kind, folded, count}){
   const label = GKIND[kind][1], dup = g.name.toLowerCase().startsWith(label);
   const fold = `<button type="button" class="tg-fold${folded ? '' : ' open'}" data-tgfold="${esc(g.id)}" aria-expanded="${!folded}" aria-label="${folded ? 'Unfold' : 'Fold'} ${esc(g.name)}">${icon('chev', 2.4)}</button>`;
   return `<div class="tgroup${S.tree !== 'network' && S.sel === 'div:' + g.id ? ' sel' : ''}" data-tgroup="${esc(g.id)}" data-tgkey="${esc(key)}" data-kind="${kind}" role="group" aria-label="${esc(g.name)}, ${label}" style="--gc:var(--g-${kind});--d:${d}">`
-    + `<div class="tg-h" title="Click to see this group; double-click to rename; right-click for more">${fold}<span class="tg-ic">${icon('g' + kind, 2)}</span><span class="tg-n">${esc(g.name)}</span>${dup ? '' : `<span class="tg-k">${label}</span>`}${folded ? `<span class="count">${count}</span>` : ''}${key.startsWith('network|') ? '' : `<span class="tg-pin">${pinBtn('div:' + g.id)}</span>`}</div>`;
+    + `<div class="tg-h" title="Click to see this group; double-click to rename; right-click for more">${fold}<span class="tg-ic">${icon('g' + kind, 2)}</span><span class="tg-n">${esc(g.name)}</span>${tdet((dup ? '' : `<span class="tg-k">${label}</span>`) + (folded ? `<span class="count">${count}</span>` : ''))}${key.startsWith('network|') ? '' : `<span class="tg-pin">${pinBtn('div:' + g.id)}</span>`}</div>`;
 }
 function updGroup(key, id, f){
   const all = Object.assign({}, PREFS.tgroups || {});
