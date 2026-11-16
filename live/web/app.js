@@ -68,7 +68,8 @@ if (S.tree === 'pins'){ S.tree = 'machines'; S.pinsOnly = true; }  // pins-only 
 function save(){ try { const {hover, mx, my, ...keep} = S; localStorage.setItem('fleet-live-ui', JSON.stringify(keep)); } catch (e) {} }
 
 /* ---------- model ---------- */
-let DATA = null, PINS = [], WINDOW = 180, INTERVAL = 3, PROCS = {machine:null, list:[]}, NET = null;
+let TPINS = {};
+let DATA = null, PINS = [], WINDOW = 180, INTERVAL = 3, CPUS = {}, PROCS = {machine:null, list:[]}, NET = null;
 const nodes = {}, roots = [];
 const zero = () => new Array(H).fill(0);
 function mk(id, p){ const n = Object.assign({id, children:[], parent:null}, p); nodes[id] = n; return n; }
@@ -495,6 +496,100 @@ function gpuCard(m){
   return `<section class="card"><div class="card-h"><h2>${m.gpus.length > 1 ? 'GPUs: what runs on which' : 'GPU: what runs on it'}</h2><span class="sub">% of each GPU</span></div><div class="gpus">${blocks}</div></section>`;
 }
 
+/* ---------- logical processors ---------- */
+function cpuSel(m){ return S.cpuSel && S.cpuSel.mid === m.id ? S.cpuSel.cpus : []; }
+function cpuRanges(ns){
+  const a = ns.slice().sort((x, y) => x - y), out = [];
+  for (let i = 0; i < a.length; i++){ let j = i; while (j + 1 < a.length && a[j + 1] === a[j] + 1) j++; out.push(j > i ? a[i] + '–' + a[j] : String(a[i])); i = j; }
+  return out.join(', ');
+}
+function cpuSelCard(m){
+  const d = CPUS[m.id], sel = cpuSel(m);
+  if (!d || !d.cpus) return '';
+  if (!sel.length) return `<p class="lhint">Click a processor or a group name to see it on its own; ⌘/Ctrl- or Shift-click to add more.</p>`;
+  const cs = d.cpus.filter(c => sel.includes(c.n));
+  if (!cs.length) return '';
+  const group = (d.groups || []).find(g => g.cpus.length === sel.length && g.cpus.every(n => sel.includes(n)));
+  const title = (group ? group.name + ' · ' : '') + (cs.length === 1 ? 'CPU ' : 'CPUs ') + cpuRanges(sel);
+  const avg = Array.from({length:H}, (_, i) => cs.reduce((s, c) => s + c.h[i], 0) / cs.length);
+  const now = avg[H-1], peak = Math.max(...cs.map(c => Math.max(...c.h))), withMhz = cs.filter(c => c.mhz);
+  const mhz = withMhz.length ? withMhz.reduce((s, c) => s + c.mhz, 0) / withMhz.length : 0;
+  const W = 600, GH = 200, x = i => (i / (H-1) * W).toFixed(1), y = v => (GH - Math.min(v, 100) / 100 * GH).toFixed(1);
+  const lines = cs.length <= 32 ? cs.map(c => `<polyline points="${c.h.map((v, i) => x(i) + ',' + y(v)).join(' ')}" fill="none" stroke="var(--accent)" stroke-opacity=".35" stroke-width="1" vector-effect="non-scaling-stroke"/>`).join('') : '';
+  const area = `<path d="M0,${GH}L${avg.map((v, i) => x(i) + ',' + y(v)).join('L')}L${W},${GH}Z" fill="var(--accent-bg)" fill-opacity=".35"/><polyline points="${avg.map((v, i) => x(i) + ',' + y(v)).join(' ')}" fill="none" stroke="var(--accent)" stroke-width="2.4" vector-effect="non-scaling-stroke"/>`;
+  const grid = [100, 75, 50, 25].map(f => `<div class="gl" style="top:${100 - f}%"><span>${f}%</span></div>`).join('') + `<div class="gl" style="top:100%"><span>0</span></div>`;
+  // Processes that last ran on these CPUs (Linux reports it per process; macOS and Windows don't).
+  const machineProcs = PROCS.machine === m.id ? PROCS.list : null;
+  const reports = machineProcs && machineProcs.some(p => p[12] >= 0);
+  let procs = '';
+  if (!machineProcs) procs = `<div class="sub">Loading processes…</div>`;
+  else if (!reports) procs = noteHTML(`${esc(m.os.split(' ')[0] || 'This OS')} doesn’t report which processor a process last ran on, so Fleet can’t list processes per CPU here. <b>Details</b> lists every process.`);
+  else {
+    const on = machineProcs.filter(p => sel.includes(p[12])).sort((a, b) => b[4] - a[4]);
+    const ncpu = m.ncpu || capOf(m, 'cpu');
+    procs = on.length ? `<div class="scroll-x"><table class="tbl"><thead><tr><th>Process</th><th>PID</th><th style="text-align:left">Runs in</th><th>CPU (machine)</th><th>Memory</th><th>Last ran on</th></tr></thead><tbody>${on.slice(0, 15).map(p => `<tr><td>${esc(p[1])}</td><td>${p[0]}</td><td class="l"><button type="button" class="namebtn" data-select="${esc(p[10])}" style="font-weight:400">${esc(nodes[p[10]] ? nodes[p[10]].name : '')}</button></td><td>${pct(p[4] / ncpu * 100)}</td><td>${memText(p[5])}</td><td>CPU ${p[12]}</td></tr>`).join('')}</tbody></table></div>${on.length > 15 ? `<div class="more">${on.length - 15} more on these processors.</div>` : ''}` : `<div class="sub">Nothing ran on these processors in the last reading.</div>`;
+  }
+  return `<section class="card"><div class="card-h"><h2>${esc(title)}</h2><span class="sub">${cs.length} of ${d.cpus.length} processors</span><span class="grow"></span><button type="button" class="btn" data-cpuclear="1">${icon('x', 2.2)}Clear selection</button></div>`
+    + `<div class="cpustats">${heroStats([{k:'Now', v:pct(now), s:'average'}, {k:'Peak', v:pct(peak), s:'any one, last ' + ago(WINDOW).replace(' ago', '')}].concat(mhz ? [{k:'Clock', v:(mhz / 1000).toFixed(2) + ' GHz', s:'average'}] : []))}</div>`
+    + `<div class="graph" role="img" aria-label="Utilization of ${esc(title)}">${grid}<svg viewBox="0 0 ${W} ${GH}" preserveAspectRatio="none" aria-hidden="true">${lines}${area}</svg></div><div class="gx"><span>${ago(WINDOW)}</span><span>now</span></div>`
+    + `<h3 class="cpuproc">On these processors</h3>${procs}</section>`;
+}
+// Pinned tiles (CPUs, CPU groups, GPUs, disks, interfaces) go first; stored by the server so they survive restarts.
+let tpinBusy = false;
+function tpinned(kind, mid, key){ return (TPINS[kind + '|' + mid] || []).includes(String(key)); }
+function tpinBtn(kind, mid, key, label){ const on = tpinned(kind, mid, key); return `<button type="button" class="tpin${on ? ' on' : ''}" data-tpin="${esc(kind + '|' + mid + '|' + key)}" aria-pressed="${on}" aria-label="${on ? 'Unpin' : 'Pin'} ${esc(label || key)} to the top" title="${on ? 'Unpin' : 'Pin to the top'}">${icon('pin')}</button>`; }
+const TILE_SORTS = {
+  net:[['kind', 'Kind'], ['name', 'Name'], ['traffic', 'Total traffic'], ['down', 'Download'], ['up', 'Upload'], ['speed', 'Speed']],
+  disk:[['name', 'Name'], ['busy', 'Busy'], ['read', 'Read'], ['write', 'Write'], ['total', 'Total'], ['size', 'Size']],
+  gpu:[['index', 'Index'], ['usage', 'Usage']],
+  cpu:[['number', 'Number'], ['usage', 'Usage'], ['clock', 'Clock']]
+};
+function tileSort(kind){ const v = (S.tileSort || {})[kind]; return TILE_SORTS[kind].some(o => o[0] === v) ? v : TILE_SORTS[kind][0][0]; }
+function sortMenu(kind){ const v = tileSort(kind); return `<label class="sortsel">Sort <select data-tilesort="${kind}" aria-label="Sort tiles by">${TILE_SORTS[kind].map(([k, l]) => `<option value="${k}"${k === v ? ' selected' : ''}>${l}</option>`).join('')}</select></label>`; }
+function bySort(kind){
+  const by = tileSort(kind), num = x => +x || 0, name = (a, b) => COLL.compare(String(a.name), String(b.name));
+  const order = {physical:0, bridge:1, virtual:2};
+  const f = {
+    net:{kind:(a, b) => (order[a.kind] ?? 3) - (order[b.kind] ?? 3) || name(a, b), name, traffic:(a, b) => (b.rx + b.tx) - (a.rx + a.tx) || name(a, b),
+         down:(a, b) => b.rx - a.rx || name(a, b), up:(a, b) => b.tx - a.tx || name(a, b), speed:(a, b) => num(b.speed) - num(a.speed) || name(a, b)},
+    disk:{name, busy:(a, b) => b.busy - a.busy || name(a, b), read:(a, b) => b.read - a.read || name(a, b), write:(a, b) => b.write - a.write || name(a, b),
+          total:(a, b) => (b.read + b.write) - (a.read + a.write) || name(a, b), size:(a, b) => b.size - a.size || name(a, b)},
+    gpu:{index:(a, b) => a[1] - b[1], usage:(a, b) => b[2] - a[2] || a[1] - b[1]},
+    cpu:{number:(a, b) => a.n - b.n, usage:(a, b) => b.pct - a.pct || a.n - b.n, clock:(a, b) => (b.mhz || 0) - (a.mhz || 0) || a.n - b.n}
+  };
+  return f[kind][by];
+}
+function pinFirst(kind, mid, keyOf){ return (a, b) => (tpinned(kind, mid, keyOf(b)) ? 1 : 0) - (tpinned(kind, mid, keyOf(a)) ? 1 : 0); }
+async function toggleTilePin(spec){
+  const [kind, mid, ...rest] = spec.split('|'), key = rest.join('|'), k = kind + '|' + mid;
+  const list = (TPINS[k] || []).slice(), i = list.indexOf(key);
+  if (i >= 0) list.splice(i, 1); else list.push(key);
+  TPINS = Object.assign({}, TPINS, {[k]:list}); tpinBusy = true; lastMainHTML = ''; renderMain();
+  try { const d = await api('/api/tilepins', TPINS); TPINS = d.tilepins || TPINS; } catch (e) { toast('Couldn’t save that pin'); }
+  tpinBusy = false;
+}
+function cpuToggle(){ return `<div class="seg" role="group" aria-label="CPU graph"><button type="button" data-cpuview="type" aria-pressed="${S.cpuView==='type'}">By type</button><button type="button" data-cpuview="logical" aria-pressed="${S.cpuView==='logical'}">Logical processors</button></div>`; }
+function logicalCard(m){
+  const d = CPUS[m.id];
+  const head = `<div class="card-h"><h2>Logical processors</h2><span class="sub">${esc(m.cpu_model || '')}${d ? ' · ' + d.cpus.length + ' processors' : ''}</span><span class="grow"></span>${sortMenu('cpu')}${cpuToggle()}</div>`;
+  if (!d || !d.cpus) return `<section class="card">${head}<div class="sub">Loading…</div></section>`;
+  const byN = {}; d.cpus.forEach(c => { byN[c.n] = c; });
+  const sel = cpuSel(m);
+  const groups = (d.groups && d.groups.length ? d.groups : [{name:'All processors', cpus:d.cpus.map(c => c.n)}]).map((g, i) => [g, i]).sort((a, b) => pinFirst('cpugroup', m.id, x => x[0].name)(a, b) || a[1] - b[1]).map(x => x[0]);
+  const html = groups.map(g => {
+    const cs = g.cpus.map(n => byN[n]).filter(Boolean);
+    const avg = cs.reduce((s, c) => s + c.pct, 0) / (cs.length || 1);
+    const cells = cs.slice().sort((a, b) => pinFirst('cpu', m.id, c => c.n)(a, b) || bySort('cpu')(a, b)).map(c => {
+      const max = 100, pts = c.h.map((v, i) => `${(i/(H-1)*100).toFixed(1)},${(56 - Math.min(v, max)/max*52).toFixed(1)}`);
+      const on = sel.includes(c.n);
+      return `<div class="lcell${on ? ' sel' : ''}${tpinned('cpu', m.id, c.n) ? ' pinned' : ''}"><button type="button" class="tsel" data-lcpu="${c.n}" aria-pressed="${on}" aria-label="CPU ${c.n}, ${Math.round(c.pct)}%" data-tip="lcpu|${esc(m.id)}|${c.n}"></button><span class="trow"><span class="lt">CPU ${c.n}${tpinBtn('cpu', m.id, c.n, 'CPU ' + c.n)}</span><span class="lv">${Math.round(c.pct)}%</span></span><span class="lm">${c.mhz ? (c.mhz/1000).toFixed(2) + ' GHz' : '&nbsp;'}</span><svg viewBox="0 0 100 56" preserveAspectRatio="none" aria-hidden="true"><path d="M0,56L${pts.join('L')}L100,56Z" fill="var(--accent-bg)" fill-opacity=".35"/><polyline points="${pts.join(' ')}" fill="none" stroke="var(--accent)" stroke-width="1.4" vector-effect="non-scaling-stroke"/></svg></div>`;
+    }).join('');
+    const gsel = cs.length && cs.every(c => sel.includes(c.n));
+    return `<div><div class="lgh"><button type="button" class="lgbtn${gsel ? ' sel' : ''}" data-lgroup="${esc(g.cpus.join(','))}" aria-pressed="${gsel}" title="Show this group on its own">${esc(g.name)}</button>${tpinBtn('cpugroup', m.id, g.name)}<span>${cs.length} processors</span><span>average ${pct(avg)}</span></div><div class="lgrid">${cells}</div></div>`;
+  }).join('');
+  return `<section class="card">${head}<div class="lgroups">${html}</div></section>`;
+}
+
 /* ---------- views ---------- */
 function typeSeries(getBt){ return TYPES.map(t => ({label:t.label, color:TCOL[t.id], data:Array.from({length:H}, (_, i) => getBt(i)[t.id])})).filter(s => s.data.some(v => v > 0)); }
 function heroMachineTile(m){ return `<span class="tile ${m.tile}">${icon(m.tile)}</span>`; }
@@ -534,8 +629,12 @@ function machineView(m){
   let out = head;
   if (m.status === 'hostonly') out += noteHTML(`<b>Seen from its host.</b> ${esc(m.name)} can’t be reached directly, so this is what ${esc(host ? host.name : 'its host')} sees of it. <button type="button" class="linkbtn" data-retry="${esc(m.id)}">Retry</button>`);
   if (m.note) out += noteHTML(`<b>${esc(m.note.label)}</b> ${esc(m.note.text)}`);
-  const graph = graphCard(mlabel(S.metric), S.metric === 'gpu' && m.gpus.length > 1 ? `all ${m.gpus.length} GPUs, by type` : 'by type, stacked', series, graphMax(capOf(m, S.metric), series, S.metric), S.metric);
-  out += `<div class="grid2">${whereCard(m.id, m.parent ? 'Where this VM’s usage goes' : 'Where this machine’s usage goes')}${graph}</div>`;
+  const cpuHead = S.metric === 'cpu' ? cpuToggle() : '';
+  const graph = (S.metric === 'cpu' && S.cpuView === 'logical') ? '' : graphCard(mlabel(S.metric), S.metric === 'gpu' && m.gpus.length > 1 ? `all ${m.gpus.length} GPUs, by type` : 'by type, stacked', series, graphMax(capOf(m, S.metric), series, S.metric), S.metric, cpuHead);
+  const alt = logicalCard(m);
+  out += `<div class="grid2">${whereCard(m.id, m.parent ? 'Where this VM’s usage goes' : 'Where this machine’s usage goes')}${graph || alt}</div>`;
+  if (!graph) out += cpuSelCard(m);
+  if (graph === '' ) {} // logical shown inline
   return out + gpuCard(m) + tableCard('Inside ' + esc(m.name), 'live', list);
 }
 
@@ -639,9 +738,26 @@ function cpuGroupNames(mid){
 }
 const STATE = {R:'running', S:'sleeping', D:'disk wait', Z:'zombie', T:'stopped', t:'traced', I:'idle', U:'waiting', X:'dead'};
 function stateLabel(s){ return s ? (STATE[s[0]] || s) : ''; }
+// Details follows what is selected on its machine: processors (CPU → Logical processors), whichever
+// pill is active.
+// Each part names itself; a host that can't attribute one says why and isn't filtered by it.
+function cpuSelLabel(m, cpus){
+  const whole = (m.groups || []).filter(g => g.cpus.length && g.cpus.every(c => cpus.includes(c)));
+  const inWhole = new Set(whole.flatMap(g => g.cpus));
+  if (whole.length && cpus.every(c => inWhole.has(c))) return whole.map(g => g.name).join(' + ');
+  return (cpus.length === 1 ? 'CPU ' : 'CPUs ') + cpuRanges(cpus);
+}
 function selectionFilters(m, all, gpuProcs){
   if (!m) return [];
   const os = (m.os || 'This OS').replace(/^Microsoft /, '').split(' ')[0], out = [];
+  const cpus = cpuSel(m);
+  if (cpus.length){
+    const short = cpuSelLabel(m, cpus), label = /^CPUs? /.test(short) ? short : `${short} (${cpus.length === 1 ? 'CPU ' : 'CPUs '}${cpuRanges(cpus)})`;
+    out.push({kind:'cpu', short, label, chip:'Last ran on ' + short,
+      tip:`Details lists only the processes that last ran on ${label} at the latest reading. Processes move between processors, so this is where each one ran last, not where it always runs.`,
+      apply:!all || all.some(p => p[12] >= 0) ? (p => cpus.includes(p[12])) : null,
+      why:`${os} doesn’t report which processor a process last ran on, so Details isn’t filtered by ${short}.`});
+  }
   return out;
 }
 // The node whose processes a Details view shows right now (full or docked), or null.
@@ -746,7 +862,7 @@ function detailsView(n, docked){
     if (list.length > shown) more = `Showing ${shown} of ${list.length}. Sort or filter to see others.`;
   }
   const hasGroups = (m && m.groups || []).length > 1;
-  const groupNote = Object.keys(gnames).length && all && !all.some(p => p[12] >= 0) && S.group === 'cpugroup' && !FS.some(f => f.kind === 'cpu') ? noteHTML('This OS doesn’t report which processor a process last ran on, so CPU groups can’t be assigned per process here.') : '';
+  const groupNote = Object.keys(gnames).length && all && !all.some(p => p[12] >= 0) && S.group === 'cpugroup' && !FS.some(f => f.kind === 'cpu') ? noteHTML('This OS doesn’t report which processor a process last ran on, so CPU groups can’t be assigned per process here. The <b>Logical processors</b> view under CPU still shows each group.') : '';
   const head = docked
     ? `<div class="dhead"><div class="dtitle"><b>Details · ${esc(n.name)}${FS.length ? ' · ' + esc(FS.map(f => f.label).join(' · ')) : ''}</b><span>${all ? list.length + ' processes' : 'loading…'} on ${esc(m ? m.name : '')}</span></div><button type="button" class="iconbtn" data-undock="1" title="Pop out to the full Details view" aria-label="Pop out Details">${icon('layers')}</button><button type="button" class="iconbtn" data-closedock="1" title="Close the Details panel" aria-label="Close the Details panel">${icon('x', 2.2)}</button></div>`
     : `<div class="hero"><span class="tile" style="background:var(--track);color:var(--ink-2)">${icon('chip')}</span><div><h1>Details · ${esc(n.name)}${FS.length ? ' · ' + esc(FS.map(f => f.label).join(' · ')) : ''}</h1><div class="facts"><span>${all ? list.length + ' processes' : 'loading…'}</span><span>on ${esc(m ? m.name : '')}</span>${hasGroups ? `<span>CPU groups: ${esc(m.groups.map(g => g.name).join(', '))}</span>` : ''}</div></div><button type="button" class="btn" data-dock="1" style="margin-left:auto" title="Or drag the Details pill onto the right side">${icon('layers')}Dock to the right</button></div>`;
@@ -783,7 +899,7 @@ function renderMain(){
   let refocus = null, selStart = null;
   if (a && main.contains(a)){
     if (a.id) { refocus = '#' + a.id; selStart = a.selectionStart; }
-    else if (a.dataset) for (const k of ['select', 'mode', 'sort', 'pin', 'netsel', 'gtoggle', 'gall']) if (a.dataset[k] != null){ refocus = `[data-${k}="${CSS.escape(a.dataset[k])}"]`; break; }
+    else if (a.dataset) for (const k of ['select', 'mode', 'sort', 'pin', 'cpuview', 'netsel', 'gtoggle', 'gall']) if (a.dataset[k] != null){ refocus = `[data-${k}="${CSS.escape(a.dataset[k])}"]`; break; }
   }
   let html;
   let panel = '';
@@ -829,6 +945,12 @@ function tipHTML(h){
     const m = nodes[p[1]], n = nodes[p[3]]; if (!m || !n) return null;
     const gi = m.gpus.findIndex(g => g.key === p[2]), c = gpuConsumers(m, p[2]).find(x => x.n === n);
     return `<div class="t">${esc(n.name)}</div><div class="u">GPU ${gi} · ${esc(m.gpus[gi].name)}</div><div class="r"><span>of this GPU</span><b>${pct(c ? c.v : 0)}</b></div>`;
+  }
+  if (p[0] === 'lcpu'){
+    const d = CPUS[p[1]]; if (!d) return null;
+    const c = d.cpus.find(x => String(x.n) === p[2]); if (!c) return null;
+    const g = (d.groups || []).find(g => g.cpus.includes(c.n));
+    return `<div class="t">CPU ${c.n}</div><div class="u">${esc(g ? g.name : '')}${c.core !== '' && c.core != null ? ' · core ' + esc(c.core) : ''}</div><div class="r"><span>Utilization</span><b>${pct(c.pct)}</b></div>${c.mhz ? `<div class="r"><span>Frequency</span><b>${(c.mhz/1000).toFixed(2)} GHz</b></div>` : ''}`;
   }
   if (p[0] === 'child'){
     const n = nodes[p[1]]; if (!n) return null;
@@ -890,6 +1012,7 @@ function select(id){
   save(); renderAll(); refreshNow();
 }
 document.addEventListener('click', e => {
+  const tp = e.target.closest('[data-tpin]'); if (tp){ e.stopPropagation(); toggleTilePin(tp.dataset.tpin); return; }
   const ap = e.target.closest('[data-addpin]'); if (ap){ PICK.open ? closePicker(false) : openPicker(); return; }
   const st = e.target.closest('[data-settings]'); if (st){ openSettings(); return; }
   const tm = e.target.closest('[data-terminal]'); if (tm){ const n = nodes[tm.dataset.terminal]; api('/api/terminal', {node:tm.dataset.terminal}).then(r => toast(r.ok ? `Opened ${r.title} in ${r.terminal}` : (r.error || 'Couldn’t open a terminal'))).catch(() => toast('Couldn’t reach Fleet')); return; }
@@ -909,11 +1032,24 @@ document.addEventListener('click', e => {
   if (e.target.closest('[data-dock]')){ dockDetails(); return; }
   if (e.target.closest('[data-undock]')){ S.detailsDocked = false; S.view = 'details'; save(); renderAll(); return; }
   if (e.target.closest('[data-closedock]')){ S.detailsDocked = false; save(); renderAll(); return; }
+  const dc = e.target.closest('[data-dfclear]'); if (dc){ const k = dc.dataset.dfclear; if (k === 'cpu' || k === 'all') S.cpuSel = null; save(); renderMain(); return; }
   const gt = e.target.closest('[data-gtoggle]');
   if (gt){ const g = gt.dataset.gtoggle, cur = (S.groupOpen && S.groupOpen[S.group]) || []; setGroupsOpen(S.group, cur.includes(g) ? cur.filter(x => x !== g) : cur.concat([g])); return; }
   const ga = e.target.closest('[data-gall]');
   if (ga){ setGroupsOpen(S.group, ga.dataset.gall === 'open' ? [...document.querySelectorAll('[data-gtoggle]')].map(b => b.dataset.gtoggle) : []); return; }
   const so = e.target.closest('[data-sort]'); if (so){ const k = so.dataset.sort, cur0 = detailSort(); S.sorts = Object.assign({}, S.sorts, {[S.metric]:{k, dir:cur0.k === k ? -cur0.dir : (['name','owner','user','state','cpugroup','cmd','gpus','disks','ifaces'].includes(k) ? 1 : -1)}}); save(); lastMainHTML = ''; renderMain(); return; }
+  const lc = e.target.closest('[data-lcpu]'), lg = e.target.closest('[data-lgroup]');
+  if (lc || lg){
+    const m = nodes[S.sel]; if (!m) return;
+    const pick = lc ? [+lc.dataset.lcpu] : lg.dataset.lgroup.split(',').map(Number);
+    const curSel = cpuSel(m), add = e.metaKey || e.ctrlKey || e.shiftKey;
+    let next;
+    if (add){ const all = pick.every(n => curSel.includes(n)); next = all ? curSel.filter(n => !pick.includes(n)) : [...new Set(curSel.concat(pick))]; }
+    else next = (curSel.length === pick.length && pick.every(n => curSel.includes(n))) ? [] : pick;
+    S.cpuSel = {mid:m.id, cpus:next}; save(); renderMain(); refreshNow(); return;
+  }
+  if (e.target.closest('[data-cpuclear]')){ S.cpuSel = null; save(); renderMain(); return; }
+  const cv = e.target.closest('[data-cpuview]'); if (cv){ S.cpuView = cv.dataset.cpuview; save(); renderMain(); refreshNow(); return; }
   const mo = e.target.closest('[data-mode]'); if (mo){ S.mode = mo.dataset.mode; save(); renderMain(); return; }
 });
 document.addEventListener('input', e => {
@@ -926,6 +1062,7 @@ $('picker').addEventListener('keydown', e => {
 });
 document.addEventListener('change', e => {
   if (e.target.id === 'pgroup'){ S.group = e.target.value; save(); renderMain(); }
+  if (e.target.dataset && e.target.dataset.tilesort){ S.tileSort = Object.assign({}, S.tileSort, {[e.target.dataset.tilesort]:e.target.value}); save(); lastMainHTML = ''; renderMain(); }
 });
 document.addEventListener('toggle', e => { if (e.target.classList && e.target.classList.contains('state-raw')){ S.rawOpen = e.target.open; } }, true);
 
@@ -937,12 +1074,14 @@ async function refreshNow(){
   try {
     const r = await fetch('/api/fleet', {cache:'no-store'});
     DATA = await r.json();
-    INTERVAL = DATA.interval || 3; WINDOW = DATA.window_s || INTERVAL * H; PINS = DATA.pins || [];
+    INTERVAL = DATA.interval || 3; WINDOW = DATA.window_s || INTERVAL * H; PINS = DATA.pins || []; if (!tpinBusy) TPINS = DATA.tilepins || {};
     build(DATA);
     if (S.sel !== 'fleet' && !nodes[S.sel]) { /* keep selection; it may come back */ }
     const n = S.sel === 'fleet' ? null : nodes[S.sel];
     const jobs = [];
     if ((S.view === 'details' || (S.detailsDocked && n && S.tree !== 'network')) && (n || roots[0])){ const mid = procMachineFor(n || roots[0]); if (mid) jobs.push(fetch('/api/procs?machine=' + encodeURIComponent(mid), {cache:'no-store'}).then(r => r.json()).then(d => { PROCS = {machine:mid, list:d.procs || [], gpuProcs:!!d.gpu_procs}; })); }
+    if (S.view !== 'details' && n && n.kind === 'machine' && S.metric === 'cpu' && S.cpuView === 'logical' && cpuSel(n).length && n.status === 'ok') jobs.push(fetch('/api/procs?machine=' + encodeURIComponent(n.id), {cache:'no-store'}).then(r => r.json()).then(d => { PROCS = {machine:n.id, list:d.procs || [], gpuProcs:!!d.gpu_procs}; }));
+    if (S.view !== 'details' && n && n.kind === 'machine' && S.metric === 'cpu' && S.cpuView === 'logical') jobs.push(fetch('/api/cpus?machine=' + encodeURIComponent(n.id), {cache:'no-store'}).then(r => r.json()).then(d => { CPUS[n.id] = d; }));
     if (S.tree === 'network') jobs.push(fetch('/api/net', {cache:'no-store'}).then(r => r.json()).then(d => { NET = d; }));
     await Promise.all(jobs.map(p => p.catch(() => null)));
     fails = 0; $('conn').hidden = true; $('live').hidden = false;
