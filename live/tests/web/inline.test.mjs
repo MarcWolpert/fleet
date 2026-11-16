@@ -107,7 +107,7 @@ test('Settings pick what the inline terminal starts', async () => {
 // window.term (its fit() reports the size it was given) and the very script Fleet adds to ttyd's page.
 test('its own text size: smaller or larger live, kept, and Fleet’s zoom divided out', async () => {
   const src = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'fleet_live.py'), 'utf8');
-  const js = src.match(/TTYD_SIZE_JS = r"""([\s\S]*?)"""/)[1];
+  const js = src.match(/TTYD_BRIDGE_JS = r"""([\s\S]*?)"""/)[1];
   const page = `<html><body><script>window.term={options:{fontSize:13},fit(){parent.postMessage({fleet:'ack',size:this.options.fontSize},'*')}}</script><script>${js}</script></body></html>`;
   const fx = fx1();
   let n = 0;
@@ -130,6 +130,51 @@ test('its own text size: smaller or larger live, kept, and Fleet’s zoom divide
     await p.eval(`(openInline('lx'), true)`);
     await p.waitFor(`document.querySelectorAll('#tdrawer [role=tab]').length === 2`);
     assert.equal(posts(fx, '/api/inline-terminal')[1].fontSize, 8.8, 'a new session starts at that size');
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
+// #336: inline as the default terminal; ⌘T in the terminal (or on its bar) opens another tab on the same machine; the
+// terminal shows it's the panel you're in, with the same faint outline as the tree, the page and docked Details.
+test('inline as the default; ⌘T from the terminal opens another; it shows it has focus', async () => {
+  const src = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'fleet_live.py'), 'utf8');
+  const js = src.match(/TTYD_BRIDGE_JS = r"""([\s\S]*?)"""/)[1];
+  const page = `<html><body tabindex="0"><script>window.term={options:{fontSize:13},fit(){}}</script><script>${js}</script></body></html>`;
+  const fx = fx1();
+  fx.config.terminal = 'inline';
+  let n = 0;
+  fx.onPost = p => p === '/api/inline-terminal' ? {ok: true, id: 's' + (++n), url: 'data:text/html,' + encodeURIComponent(page), title: 'lab-linux'} : p === '/api/inline-terminal/close' ? {ok: true} : null;
+  const p = await browser.page(fx, {ui: ui({sel: 'lx'})});
+  const cmdT = async () => { for (const type of ['keyDown', 'keyUp']) await p.send('Input.dispatchKeyEvent', {type, key: 't', code: 'KeyT', modifiers: 4, windowsVirtualKeyCode: 84}); };
+  try {
+    await p.waitFor(`document.querySelector('.hero [data-terminal="lx"]')`);
+    await p.eval(`(openSettings(), true)`);
+    await p.waitFor(`document.querySelector('#sheet [data-field="-1:terminal"]')`);
+    assert.equal(await p.eval(`document.querySelector('#sheet [data-field="-1:terminal"]').value`), 'inline');
+    assert.match(await p.eval(`document.querySelector('#sheet [data-field="-1:terminal"] option[value=inline]').textContent`), /Inline, below the page/);
+    await p.eval(`(closeSettings(), true)`);
+    await p.waitFor(`document.getElementById('sheet').hidden`);
+    await p.eval(`(document.querySelector('.hero [data-terminal="lx"]').click(), true)`);
+    await p.waitFor(`document.querySelector('#tdrawer iframe')`);
+    assert.equal(posts(fx, '/api/terminal').length, 0, 'not a terminal app');
+    await p.eval(`(document.querySelector('.hero [data-termchoose="lx"]').click(), true)`);
+    await p.waitFor(`document.querySelector('#ctxmenu [role=menuitem]')`);
+    assert.deepEqual(await p.eval(MENU), ['Ghostty', 'Terminal', '—', '✓ Open inline, below the page', 'Change the default…']);
+    await p.key('Escape');
+    // into the terminal: its outline, and nobody else's
+    await p.eval(`(document.querySelector('#tdrawer iframe').focus(), true)`);
+    await p.waitFor(`document.getElementById('tdrawer').classList.contains('pactive')`);
+    assert.equal(await p.eval(`document.querySelector('.pactive:not(#tdrawer)')`), null);
+    await cmdT();
+    await p.waitFor(`document.querySelectorAll('#tdrawer [role=tab]').length === 2`);
+    assert.deepEqual(posts(fx, '/api/inline-terminal').map(x => x.node), ['lx', 'lx']);
+    // on the terminal's bar too
+    await p.eval(`(document.querySelector('#tdrawer [role=tab]').focus(), true)`);
+    await cmdT();
+    await p.waitFor(`document.querySelectorAll('#tdrawer [role=tab]').length === 3`);
+    // back in the tree, the outline moves there
+    await p.eval(`(() => { const r = document.querySelector('#tree .row'); r.dispatchEvent(new PointerEvent('pointerdown', {bubbles: true})); r.focus(); return true; })()`);
+    await p.waitFor(`!document.getElementById('tdrawer').classList.contains('pactive')`);
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
 });

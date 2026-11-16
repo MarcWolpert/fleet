@@ -38,6 +38,11 @@ class Command(unittest.TestCase):
         self.assertEqual(o["titleFixed"], "nas")
         self.assertEqual(fl.json.loads(o["theme"]), {"background": "#1d1d20"})
 
+    def test_inline_can_be_the_default(self):
+        cfg, errors = fl.validate_config({"interval": 3, "terminal": "inline", "machine": [{"id": "here", "name": "here", "kind": "local"}]})
+        self.assertEqual(errors, [])
+        self.assertEqual(cfg["terminal"], "inline")
+
     def test_what_it_runs(self):
         f = fl.Fleet.__new__(fl.Fleet)
         f.machines = {"nas": fl.Machine({"id": "nas", "name": "nas", "ssh": "admin@nas", "os": "linux"}, 3),
@@ -79,7 +84,7 @@ class OwnPage(unittest.TestCase):
     def test_the_script_goes_into_ttyds_page(self):
         page = "<html><body><script>window.term=t</script></body></html>"
         out = fl.inject_index(page)
-        self.assertIn(fl.TTYD_SIZE_JS.strip()[:40], out)
+        self.assertIn(fl.TTYD_BRIDGE_JS.strip()[:40], out)
         self.assertLess(out.index("window.term=t"), out.index("termFont"))
         self.assertTrue(out.rstrip().endswith("</body></html>"))
         self.assertIsNone(fl.inject_index("<html><body>another page</body></html>"), "not a ttyd page Fleet knows")

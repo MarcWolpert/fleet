@@ -1448,7 +1448,7 @@ document.addEventListener('click', e => {
   const st = e.target.closest('[data-settings]'); if (st){ openSettings(); return; }
   if (e.target.closest('[data-addmachinedlg]')){ openAddMachine(); return; }
   const tc = e.target.closest('[data-termchoose]'); if (tc){ loadTerms().then(() => { const r = tc.getBoundingClientRect(); openCtx(termMenu(tc.dataset.termchoose), r.left, r.bottom + 4, tc); }); return; }
-  const tm = e.target.closest('[data-terminal]'); if (tm){ const n = nodes[tm.dataset.terminal]; api('/api/terminal', {node:tm.dataset.terminal}).then(r => toast(r.ok ? `Opened ${r.title} in ${r.terminal}` : (r.error || 'Couldn’t open a terminal'))).catch(() => toast('Couldn’t reach Fleet')); return; }
+  const tm = e.target.closest('[data-terminal]'); if (tm){ const id = tm.dataset.terminal; openDefaultTerminal(id); return; }
   const rt = e.target.closest('[data-retry]'); if (rt){ rt.disabled = true; rt.innerHTML = icon('refresh') + 'Retrying…'; api('/api/retry', {machine:rt.dataset.retry}).catch(() => null); setTimeout(() => { lastMainHTML = ''; refreshNow(); }, 2500); return; }   // a fast failure reads the same as before: redraw anyway, so Retry comes back
   if (PICK.open && !$('picker').contains(e.target)) closePicker(false);
   const up = e.target.closest('[data-unpin]'); if (up){ e.stopPropagation(); togglePin(up.dataset.unpin); if (S.space === up.dataset.unpin) goSpace('fleet'); return; }
@@ -1655,7 +1655,7 @@ function renderSettings(){
         <div class="mcards">${d.machines.map(machineCard).join('')}</div>
         <button type="button" class="btn" data-addmachine="1">${icon('plus', 2)}Add a machine</button></section>
       ${appearanceSection()}
-      <section><h3>Terminal</h3><p class="sub">Used by <b>Open terminal</b> on a machine or container.</p><label class="inline">Open in <select data-field="-1:terminal" aria-label="Terminal app"><option value="auto"${d.terminal === 'auto' ? ' selected' : ''}>Automatic${SET.termAuto ? ' (' + esc(SET.termAuto) + ')' : ''}</option>${SET.terminals.map(([k, l]) => `<option value="${esc(k)}"${d.terminal === k ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select></label>${inlineCmdField()}</section>
+      <section><h3>Terminal</h3><p class="sub">Used by <b>Open terminal</b> on a machine or container.</p><label class="inline">Open in <select data-field="-1:terminal" aria-label="Terminal app"><option value="auto"${d.terminal === 'auto' ? ' selected' : ''}>Automatic${SET.termAuto ? ' (' + esc(SET.termAuto) + ')' : ''}</option>${SET.terminals.map(([k, l]) => `<option value="${esc(k)}"${d.terminal === k ? ' selected' : ''}>${esc(l)}</option>`).join('')}<option value="inline"${d.terminal === 'inline' ? ' selected' : ''}>Inline, below the page</option></select></label>${inlineCmdField()}</section>
       <section><h3>Keyboard</h3><p class="sub">Press <kbd>?</kbd> anywhere for the list: find, spaces, metrics, the tree, text size and more.</p><button type="button" class="btn" data-showkeys="1">Show keyboard shortcuts</button></section>
       <section><h3>Refresh</h3><label class="inline">Read every machine every <input type="number" min="1" max="60" step="1" data-field="-1:interval" value="${esc(d.interval)}" aria-label="Seconds between readings"> seconds</label></section>
       <p class="sub">Saved to <code>${esc(SET.path)}</code>; the previous version is kept beside it as <code>machines.toml.bak</code>.</p>
@@ -1672,6 +1672,7 @@ async function saveSettings(){
   try {
     const r = await api('/api/config', {interval:Number(d.interval), terminal:d.terminal || 'auto', machines:d.machines});
     if (!r.ok){ SET.saving = false; SET.errors = r.errors || ['Couldn’t save.']; renderSettings(); return; }
+    TERMS.list = null; TERMS.busy = null;   // the default may have changed
     closeSettings(); toast('Saved. Reconnecting to your machines…');
     setTimeout(refreshNow, 2500);
   } catch (e) { SET.saving = false; SET.errors = ['Couldn’t reach Fleet to save.']; renderSettings(); }
@@ -1971,6 +1972,7 @@ const SHORTCUTS = [
   ['New space: pick a grouping to pin', [IS_MAC ? MODK + 'N' : 'Alt+N']],
   ['Pin or unpin the selection as a space', ['P']],
   ['Open a terminal on the selection', [IS_MAC ? MODK + 'T' : 'Alt+T']],
+  ['In an inline terminal: another one on the same machine', [IS_MAC ? MODK + 'T' : 'Ctrl+Shift+T']],
   ['Bigger, smaller, actual size', IS_MAC ? [MODK + '+', MODK + '−', MODK + '0'] : ['Ctrl+Plus', 'Ctrl+Minus', 'Ctrl+0']],
   ['Settings', [MODK + ',']],
   ['Refresh now', [MODK + 'R']],
@@ -2009,7 +2011,7 @@ function fleetCommand(name, arg){
     case 'space-step': { const ks = spaceKeys(), i = Math.max(0, ks.indexOf(S.space)); goSpace(ks[(i + arg + ks.length) % ks.length]); return true; }
     case 'pin': { const n = nodes[S.sel]; if (!n || S.sel === 'fleet') return false; const was = PINS.includes(S.sel); togglePin(S.sel); toast(was ? `Unpinned ${n.name}` : `Pinned ${n.name} as a space`); return true; }
     case 'newspace': if (overlayOpen() && !PICK.open) return false; if (!PICK.open) openPicker(); return true;
-    case 'terminal': { const b = document.querySelector('[data-terminal]'); if (!b){ toast('Select a machine or container to open a terminal on it'); return true; } b.click(); return true; }
+    case 'terminal': { if (inlineNewTab()) return true; const b = document.querySelector('[data-terminal]'); if (!b){ toast('Select a machine or container to open a terminal on it'); return true; } b.click(); return true; }
     case 'settings': if (!SET.open) openSettings(); return true;
     case 'refresh': refreshNow(); return true;
     case 'keys': $('keys') ? closeKeys() : openKeys(); return true;
@@ -2333,8 +2335,8 @@ function inspectPanel(p){
 
 
 /* ---------- Panels, find, back and forward ---------- */
-// The panel you're in (tree, page, docked Details) has a soft outline; ⌘F searches that panel.
-function panelOf(t){ if (!t || !t.closest) return null; if (t.closest('.dpanel')) return 'details'; if (t.closest('aside.side')) return 'tree'; if (t.closest('#main')) return 'main'; return null; }
+// The panel you're in (tree, page, docked Details, inline terminals) has a soft outline; ⌘F searches that panel.
+function panelOf(t){ if (!t || !t.closest) return null; if (t.closest('#tdrawer')) return 'term'; if (t.closest('.dpanel')) return 'details'; if (t.closest('aside.side')) return 'tree'; if (t.closest('#main')) return 'main'; return null; }
 function markPanel(){
   const side = document.querySelector('aside.side'), main = $('main'); if (!side || !main) return;
   const wrap = main.querySelector(':scope > .split > .wrap'), dp = main.querySelector('.dpanel');
@@ -2342,6 +2344,7 @@ function markPanel(){
   main.classList.toggle('pactive', PANEL === 'main' && !wrap);
   if (wrap) wrap.classList.toggle('pactive', PANEL === 'main');
   if (dp) dp.classList.toggle('pactive', PANEL === 'details');
+  const td = $('tdrawer'); if (td) td.classList.toggle('pactive', PANEL === 'term');
 }
 function notePanel(e){ const p = panelOf(e.target); if (p && p !== PANEL){ PANEL = p; markPanel(); } }
 document.addEventListener('pointerdown', notePanel, true);
@@ -2436,6 +2439,7 @@ function copyText(text, what){
   legacy(); done();
 }
 const termOk = n => n.kind === 'machine' ? (n.agent === 'local' || !!n.ssh) : (n.kind === 'service' || n.kind === 'container');
+function openDefaultTerminal(id){ loadTerms().then(t => t.def === 'inline' ? openInline(id) : openTerminal(id)); }   // inline may be the default (#336)
 function openTerminal(id, terminal){ api('/api/terminal', terminal ? {node:id, terminal} : {node:id}).then(r => toast(r.ok ? `Opened ${r.title} in ${r.terminal}` : (r.error || 'Couldn’t open a terminal'))).catch(() => toast('Couldn’t reach Fleet')); }
 function goNode(id, view){ S.view = view; select(id); if (view === 'details'){ S.detailsDocked = false; save(); lastMainHTML = ''; renderAll(); } }
 // a tile's own pin button, as a menu item
@@ -2477,7 +2481,7 @@ function ctxFor(t){
     return {title:n.name, items:[
       {label:'Open', run:() => goNode(n.id, 'overview')}, {label:'Show its processes', run:() => goNode(n.id, 'details')},
       pinnable && {label:pinned ? 'Unpin' : 'Pin as a space', run:() => togglePin(n.id)},
-      termOk(n) && {label:'Open a terminal', run:() => openTerminal(n.id)},
+      termOk(n) && {label:'Open a terminal', run:() => openDefaultTerminal(n.id)},
       switchable(n) && {label:n.on ? 'Disconnect' : 'Connect', run:() => setConnected(n.id, !n.on)},
       ...groupMoveItems(n.id, tr.dataset.pk),
       ...(n.kind === 'division' ? groupEditItems(n) : []),
@@ -2974,7 +2978,7 @@ function termMenu(id){
   if (!TERMS.list) loadTerms();
   return {title:'Open in', items:[...list.map(([k, l]) => ({label:(k === TERMS.def ? '✓ ' : '') + l, run:() => openTerminal(id, k)})),
     ...(list.length ? [] : [{label:n && n.kind !== 'machine' ? 'Open shell' : 'Open terminal', run:() => openTerminal(id)}]),
-    '—', {label:'Open inline, below the page', run:() => openInline(id)}, {label:'Change the default…', run:() => openSettings()}]};
+    '—', {label:(TERMS.def === 'inline' ? '✓ ' : '') + 'Open inline, below the page', run:() => openInline(id)}, {label:'Change the default…', run:() => openSettings()}]};
 }
 
 // Settings › Terminal: what an inline terminal starts (#329), kept in ui.json; a login shell when empty
@@ -3013,10 +3017,21 @@ function frameOrigin(f){ try { const u = new URL(f.src); return /^https?:$/.test
 function sendTermFont(f){
   (f ? [f] : [...document.querySelectorAll('#tdrawer iframe')]).forEach(x => { try { x.contentWindow.postMessage({fleet:'termFont', size:termFontPx()}, frameOrigin(x)); } catch (e) {} });
 }
+// what the terminal says (TTYD_BRIDGE_JS): ready for its size, it has focus (#336), or one of Fleet's keys typed in it
 window.addEventListener('message', e => {
-  if (!e.data || e.data.fleet !== 'termReady') return;
-  const f = [...document.querySelectorAll('#tdrawer iframe')].find(x => x.contentWindow === e.source); if (f) sendTermFont(f);
+  const k = e.data && e.data.fleet; if (!k) return;
+  const f = [...document.querySelectorAll('#tdrawer iframe')].find(x => x.contentWindow === e.source); if (!f) return;
+  const s = TD.list.find(x => x.key === f.closest('[data-tdpane]').dataset.tdpane);
+  if (k === 'termReady') sendTermFont(f);
+  else if (k === 'termFocus'){ if (PANEL !== 'term'){ PANEL = 'term'; markPanel(); } }
+  else if (k === 'termKey' && e.data.act === 'newTab' && s) openInline(s.node);
 });
+// ⌘T in the terminal's panel (its bar, or the terminal itself above) opens another on the same machine (#336)
+function inlineNewTab(){
+  if (PANEL !== 'term') return false;
+  const s = TD.list.find(x => x.key === TD.active); if (!s) return false;
+  openInline(s.node); return true;
+}
 function setTermFont(n){
   const v = Math.min(TERM_FONT.max, Math.max(TERM_FONT.min, n));
   if (v === termFont()) return;
@@ -3039,7 +3054,7 @@ function termTheme(){
 }
 function openInline(id){
   const n = nodes[id], key = 'k' + (++TD.seq);
-  const s = {key, id:key, title:n ? n.name : String(id), pending:true};
+  const s = {key, id:key, node:id, title:n ? n.name : String(id), pending:true};
   TD.list.push(s); TD.active = key; renderDrawer();
   api('/api/inline-terminal', {node:id, then:PREFS.inlineCmd || '', theme:termTheme(), fontSize:termFontPx()}).then(r => {
     if (!TD.list.includes(s)){ if (r.ok) api('/api/inline-terminal/close', {id:r.id}).catch(() => {}); return; }  // closed while it opened

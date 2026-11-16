@@ -2036,7 +2036,7 @@ def validate_config(data):
     if sum(1 for mm in machines if mm.get("kind") == "local") > 1:
         errors.append("Only one machine can be this computer.")
     term = str(data.get("terminal", "auto"))
-    if term != "auto" and term not in [k for k, _ in terminal_choices()[0]]:
+    if term not in ("auto", "inline") and term not in [k for k, _ in terminal_choices()[0]]:   # inline: below the page (#336)
         term = "auto"
     return {"interval": interval, "terminal": term, "machine": machines}, errors
 
@@ -2478,12 +2478,22 @@ def inline_opts(d, title):
     return opts
 
 
-# #335: added to ttyd's own page (ttyd --index), so Fleet, the page framing it, can set the terminal's text size live,
-# without reconnecting. ttyd's page keeps its terminal in window.term (with fit()); this takes messages only from the
-# frame's parent and only this one kind.
-TTYD_SIZE_JS = r"""
+# Added to ttyd's own page (ttyd --index): the terminal and Fleet, the page framing it, talk. Fleet sets its text size
+# live, without reconnecting (#335; ttyd's page keeps its terminal in window.term, with fit()); the terminal tells Fleet
+# when it has focus and passes on Fleet's own keys typed in it, which the shell has no use for (#336). It takes
+# messages only from the frame's parent, and only these kinds.
+TTYD_BRIDGE_JS = r"""
 (function(){
   var P = window.parent; if (!P || P === window) return;
+  var MAC = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+  window.addEventListener('keydown', function(e){
+    var k = (e.key || '').toLowerCase(), act = null;
+    if (k === 't' && (MAC ? e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey : e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey)) act = 'newTab';
+    if (!act) return;
+    e.preventDefault(); e.stopPropagation();
+    P.postMessage({fleet: 'termKey', act: act}, '*');
+  }, true);
+  window.addEventListener('focus', function(){ P.postMessage({fleet: 'termFocus'}, '*'); });
   function apply(n, tries){
     var t = window.term;
     if (!t || !t.options){ if (tries < 100) setTimeout(function(){ apply(n, tries + 1); }, 100); return; }
@@ -2501,10 +2511,10 @@ TTYD_INDEX = {}   # ttyd's path -> the page made from it for this run (None: it 
 
 
 def inject_index(page):
-    """ttyd's page with TTYD_SIZE_JS added, or None when it isn't a ttyd page that keeps window.term."""
+    """ttyd's page with TTYD_BRIDGE_JS added, or None when it isn't a ttyd page that keeps window.term."""
     if "window.term" not in page:
         return None
-    tag = "<script>" + TTYD_SIZE_JS + "</script>"
+    tag = "<script>" + TTYD_BRIDGE_JS + "</script>"
     i = page.rfind("</body>")
     return page[:i] + tag + page[i:] if i >= 0 else page + tag
 

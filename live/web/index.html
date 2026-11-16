@@ -656,6 +656,9 @@ kbd{display:inline-block;min-width:22px;padding:2px 7px;border-radius:6px;border
 
 /* The panel you're in, find, back and forward */
 .side,#main,.split>.wrap,.dpanel{transition:box-shadow .15s}
+/* the terminal fills its frame edge to edge, so its outline is drawn over it */
+.tdrawer::after{content:"";position:absolute;inset:0;pointer-events:none;z-index:2;border-radius:inherit;transition:box-shadow .15s}
+.tdrawer.pactive::after{box-shadow:inset 0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent),inset 0 0 0 4px color-mix(in srgb, var(--accent) 7%, transparent)}
 .pactive{box-shadow:inset 0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent),inset 0 0 0 4px color-mix(in srgb, var(--accent) 7%, transparent)}
 .navbtns{display:flex;gap:2px;flex:none;margin-right:6px}
 .navbtns button{width:28px;height:28px;border-radius:7px;display:grid;place-items:center;color:var(--ink-2)}

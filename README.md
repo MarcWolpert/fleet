@@ -73,7 +73,7 @@ on a machine's row turns its connection off and on; **Auto** picks which machine
 it starts (none until you choose, all, or a set you tick), so a start at login asks for no key you didn't
 want. **Open terminal** sshes to a machine, or opens a shell in a container, in the terminal you pick, or
 **inline**, split below the page, each scrolling on its own, with its own text size (A− A+) apart from Fleet's zoom (with [ttyd](https://github.com/tsl0922/ttyd): `brew install ttyd`
-or `sudo apt install ttyd`; Settings › Terminal picks a login shell, tmux or your own command).
+or `sudo apt install ttyd`; Settings › Terminal picks a login shell, tmux or your own command, and can make inline the default).
 
 **Spaces and groups.** Pin any machine, VM, project, container or group to the space bar. Drag a box over
 items at the same level (or drag a row by its handle) to group them: a **fleet** of machines, a
@@ -262,7 +262,7 @@ and `connect.json` (which machines connect when Fleet starts, and your saved set
 | ⌘N | New space: pick a grouping to pin |
 | P | Pin or unpin the selection as a space |
 | ↑ ↓ ← → | Move through the tree; collapse, expand, go to the parent |
-| ⌘T | Open a terminal on the selection |
+| ⌘T | Open a terminal on the selection; in an inline terminal, another one on the same machine (Ctrl+Shift+T inside it elsewhere) |
 | ⌘+ ⌘− ⌘0 | Bigger, smaller, actual size (the zoom shows by Settings when it isn't 100%) |
 | ⌘, | Settings |
 | ⇧F10 | The right-click menu, from the keyboard |
