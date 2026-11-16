@@ -76,6 +76,9 @@ want. **Open terminal** sshes to a machine, or opens a shell in a container, in 
 **inline**, split below the page, each scrolling on its own, with its own text size (A− A+) apart from Fleet's zoom; each keeps running through a reload, Fleet restarting
 or quitting (its shell lives in tmux), and reconnects when the connection drops (with [ttyd](https://github.com/tsl0922/ttyd): `brew install ttyd`
 or `sudo apt install ttyd`; Settings › Terminal picks a login shell, tmux or your own command, and can make inline the default).
+The terminals are there from the start: a tab for each connected computer, each starting when you first go to it. **+**
+opens one on any machine or container; the button left of the tabs minimizes them (they keep running), and the one at
+the bottom left of the pane, or ⌘J, brings them back.
 
 **Spaces and groups.** Pin any machine, VM, project, container or group to the space bar. Drag a box over
 items at the same level (or drag a row by its handle) to group them: a **fleet** of machines, a
@@ -264,7 +267,9 @@ and `connect.json` (which machines connect when Fleet starts, and your saved set
 | ⌘N | New space: pick a grouping to pin |
 | P | Pin or unpin the selection as a space |
 | ↑ ↓ ← → | Move through the tree; collapse, expand, go to the parent |
-| ⌘T | Open a terminal on the selection; in an inline terminal, another one on the same machine (Ctrl+Shift+T inside it elsewhere) |
+| ⌘T | Open a terminal on the selection; in the terminals below the page, pick where to open another (that one's machine first; Ctrl+Shift+T inside one elsewhere) |
+| ⌘J | Show or minimize the terminals below the page |
+| ⌃⇥, ⌃⇧⇥ in the terminals | The next or previous terminal |
 | ⌘+ ⌘− ⌘0 | Bigger, smaller, actual size (the zoom shows by Settings when it isn't 100%) |
 | ⌘, | Settings |
 | ⇧F10 | The right-click menu, from the keyboard |

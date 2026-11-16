@@ -19,7 +19,7 @@ function fx1(terms){
   fx.config = {path: '/dev/null', interval: 3, machines: [], status: {}, terminal: 'auto', terminal_auto: 'Ghostty', terminals: [['ghostty', 'Ghostty']]};
   fx.terms = terms;
   fx.fleet.boot = 'b1';
-  fx.fleet.prefs = Object.assign({}, fx.fleet.prefs, {termActive: 'r2'});
+  fx.fleet.prefs = Object.assign({}, fx.fleet.prefs, {termActive: 'r2', termClosed: ['lx2', 'win', 'mac']});   // just the kept ones here (#338 adds the others)
   let n = 0;
   fx.gone = new Set();
   fx.onPost = (path, body) => {

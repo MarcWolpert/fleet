@@ -165,16 +165,45 @@ test('inline as the default; ⌘T from the terminal opens another; it shows it h
     await p.eval(`(document.querySelector('#tdrawer iframe').focus(), true)`);
     await p.waitFor(`document.getElementById('tdrawer').classList.contains('pactive')`);
     assert.equal(await p.eval(`document.querySelector('.pactive:not(#tdrawer)')`), null);
+    // ⌘T in a terminal asks which to open (#338): just what can have one, this terminal's machine first
+    const pick = async () => {
+      await p.waitFor(`document.getElementById('goto') && GOTO.mode === 'term'`);
+      assert.equal(await p.eval(`GOTO.items[0].n.id`), 'lx');
+      assert.equal(await p.eval(`GOTO.items.every(x => x.n && termOk(x.n))`), true);
+      await p.waitFor(`document.hasFocus() && document.activeElement && document.activeElement.id === 'gotoq'`);   // focus back from the terminal's frame (its own process)
+      await p.key('Enter');
+      await p.waitFor(`!document.getElementById('goto')`);
+    };
     await cmdT();
+    await pick();
     await p.waitFor(`document.querySelectorAll('#tdrawer [role=tab]').length === 2`);
     assert.deepEqual(posts(fx, '/api/inline-terminal').map(x => x.node), ['lx', 'lx']);
     // on the terminal's bar too
     await p.eval(`(document.querySelector('#tdrawer [role=tab]').focus(), true)`);
     await cmdT();
+    await pick();
     await p.waitFor(`document.querySelectorAll('#tdrawer [role=tab]').length === 3`);
+    // Ctrl+Tab and Ctrl+Shift+Tab go round the terminals, from the bar and from inside one
+    const ACTIVE = `[...document.querySelectorAll('#tdrawer [role=tab]')].findIndex(t => t.getAttribute('aria-selected') === 'true')`;
+    const ctrlTab = async shift => { for (const type of ['keyDown', 'keyUp']) await p.send('Input.dispatchKeyEvent', {type, key: 'Tab', code: 'Tab', modifiers: 2 | (shift ? 8 : 0), windowsVirtualKeyCode: 9}); };
+    await p.waitFor(`${ACTIVE} === 2`);
+    await p.eval(`(document.querySelector('#tdrawer [role=tab][aria-selected=true]').focus(), true)`);
+    await ctrlTab(false);
+    await p.waitFor(`${ACTIVE} === 0`);
+    await ctrlTab(true);
+    await p.waitFor(`${ACTIVE} === 2`);
+    const space = await p.eval(`S.space`);
+    await p.eval(`(document.querySelector('#tdrawer .td-pane:not([hidden]) iframe').focus(), true)`);
+    await ctrlTab(true);
+    await p.waitFor(`${ACTIVE} === 1`);
+    assert.equal(await p.eval(`S.space`), space, 'the spaces stay put');
     // back in the tree, the outline moves there
     await p.eval(`(() => { const r = document.querySelector('#tree .row'); r.dispatchEvent(new PointerEvent('pointerdown', {bubbles: true})); r.focus(); return true; })()`);
     await p.waitFor(`!document.getElementById('tdrawer').classList.contains('pactive')`);
+    // ⌘J typed in a terminal minimizes the terminals (#338)
+    await p.eval(`(document.querySelector('#tdrawer .td-pane:not([hidden]) iframe').focus(), true)`);
+    for (const type of ['keyDown', 'keyUp']) await p.send('Input.dispatchKeyEvent', {type, key: 'j', code: 'KeyJ', modifiers: 4, windowsVirtualKeyCode: 74});
+    await p.waitFor(`document.getElementById('tdrawer').hidden && PREFS.termMin === true`);
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
 });

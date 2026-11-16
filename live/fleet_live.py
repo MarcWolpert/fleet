@@ -2883,6 +2883,8 @@ TTYD_BRIDGE_JS = r"""
   window.addEventListener('keydown', function(e){
     var k = (e.key || '').toLowerCase(), act = null;
     if (k === 't' && (MAC ? e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey : e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey)) act = 'newTab';
+    if (k === 'j' && MAC && e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) act = 'minimize';
+    if (e.key === 'Tab' && e.ctrlKey && !e.metaKey && !e.altKey) act = e.shiftKey ? 'prevTab' : 'nextTab';
     if (!act) return;
     e.preventDefault(); e.stopPropagation();
     P.postMessage({fleet: 'termKey', act: act}, '*');

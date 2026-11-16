@@ -1628,6 +1628,7 @@ async function refreshNow(){
     build(DATA);
     renderAutoConn();
     noteBoot(DATA.boot);
+    syncAutoTerms();
     // the first launch (no UI settings saved yet): the tutorial, as a welcome, once (#284)
     if (!FIRST.checked){
       FIRST.checked = true;
@@ -2050,7 +2051,9 @@ const SHORTCUTS = [
   ['New space: pick a grouping to pin', [IS_MAC ? MODK + 'N' : 'Alt+N']],
   ['Pin or unpin the selection as a space', ['P']],
   ['Open a terminal on the selection', [IS_MAC ? MODK + 'T' : 'Alt+T']],
-  ['In an inline terminal: another one on the same machine', [IS_MAC ? MODK + 'T' : 'Ctrl+Shift+T']],
+  ['In the terminals: open another (pick where; this one’s machine first)', [IS_MAC ? MODK + 'T' : 'Ctrl+Shift+T']],
+  ['In the terminals: the next or previous one', IS_MAC ? [CTRLK + TABK, CTRLK + SHIFTK + TABK] : ['Ctrl+Tab', 'Ctrl+Shift+Tab']],
+  ['Show or minimize the terminals below the page', [IS_MAC ? MODK + 'J' : 'Alt+J']],
   ['Bigger, smaller, actual size', IS_MAC ? [MODK + '+', MODK + '−', MODK + '0'] : ['Ctrl+Plus', 'Ctrl+Minus', 'Ctrl+0']],
   ['Settings', [MODK + ',']],
   ['Refresh now', [MODK + 'R']],
@@ -2086,9 +2089,10 @@ function fleetCommand(name, arg){
     case 'dock': S.detailsDocked ? (S.detailsDocked = false, save(), renderAll()) : dockDetails(); return true;
     case 'metric': if (!METRIC_KEYS.includes(arg)) return false; S.metric = arg; if (S.view !== 'details') S.view = 'overview'; save(); lastMainHTML = ''; renderAll(); refreshNow(); return true;
     case 'space': { const ks = spaceKeys(); if (arg >= 0 && arg < ks.length){ goSpace(ks[arg]); return true; } return false; }
-    case 'space-step': { const ks = spaceKeys(), i = Math.max(0, ks.indexOf(S.space)); goSpace(ks[(i + arg + ks.length) % ks.length]); return true; }
+    case 'space-step': { if (PANEL === 'term' && cycleTerm(arg)) return true; const ks = spaceKeys(), i = Math.max(0, ks.indexOf(S.space)); goSpace(ks[(i + arg + ks.length) % ks.length]); return true; }
     case 'pin': { const n = nodes[S.sel]; if (!n || S.sel === 'fleet') return false; const was = PINS.includes(S.sel); togglePin(S.sel); toast(was ? `Unpinned ${n.name}` : `Pinned ${n.name} as a space`); return true; }
     case 'newspace': if (overlayOpen() && !PICK.open) return false; if (!PICK.open) openPicker(); return true;
+    case 'terminals': { if (!TD.list.length){ toast(TD.avail ? 'No terminals yet: open one with Open terminal ▾ › Open inline' : 'Inline terminals need ttyd on this computer'); return true; } setTermMin(!PREFS.termMin); return true; }
     case 'terminal': { if (inlineNewTab()) return true; const b = document.querySelector('[data-terminal]'); if (!b){ toast('Select a machine or container to open a terminal on it'); return true; } b.click(); return true; }
     case 'settings': if (!SET.open) openSettings(); return true;
     case 'refresh': refreshNow(); return true;
@@ -2164,6 +2168,7 @@ document.addEventListener('keydown', e => {
     if (k === '/') return run('keys');
     if (k === 'r' && !e.shiftKey) return run('refresh');
     if (k === 't' && !e.shiftKey) return run('terminal');
+    if (k === 'j' && !e.shiftKey) return run('terminals');
     if (k === 'n' && !e.shiftKey) return run('newspace');
     if (e.code === 'BracketLeft' || e.code === 'BracketRight' || e.key === '[' || e.key === ']'){
       const fwd = e.code === 'BracketRight' || e.key === ']';
@@ -2178,6 +2183,7 @@ document.addEventListener('keydown', e => {
   if (e.altKey && !mod && !IS_MAC && !typing && !e.shiftKey){
     if (e.code === 'KeyN') return run('newspace');
     if (e.code === 'KeyT') return run('terminal');
+    if (e.code === 'KeyJ') return run('terminals');
     if (e.key === 'PageDown' || e.key === 'PageUp') return run('space-step', e.key === 'PageDown' ? 1 : -1);
   }
   if (typing || e.metaKey || e.ctrlKey || e.altKey || overlayOpen()) return;
@@ -2230,6 +2236,13 @@ function gotoRank(q, name, rest){
 }
 function gotoItems(){
   const q = GOTO.q.trim().toLowerCase();
+  if (GOTO.mode === 'term'){   // + on the terminals' bar (#338): just what can have a terminal; picking one opens it there
+    const list = gotoNodes().filter(({n}) => termOk(n)).map(({n, path}) => ({n, path, label:n.name, kind:kindLabel(n), run:() => openInline(n.id)}));
+    const rank = x => x.n.id === GOTO.first ? -1 : x.n.kind === 'machine' ? 0 : 1;
+    if (!q) return list.sort((a, b) => rank(a) - rank(b)).slice(0, 60);
+    const sc = []; for (const x of list){ const r = gotoRank(q, x.label, [x.kind, x.path.join(' '), x.n.os || '', (x.n.meta && x.n.meta.image) || ''].join(' ')); if (r >= 0) sc.push([r, x]); }
+    return sc.sort((a, b) => b[0] - a[0]).map(x => x[1]).slice(0, 60);
+  }
   const nodesList = gotoNodes().map(({n, path}) => ({n, path, label:n.name, kind:kindLabel(n), run:() => select(n.id)}));
   const cmds = gotoCommands().map(c => Object.assign({kind:'Command'}, c));
   if (!q) return nodesList.filter(x => x.n.kind === 'machine').concat(cmds.slice(0, 8));
@@ -2253,12 +2266,12 @@ function renderGoto(keep){
   $('gotoq').setAttribute('aria-activedescendant', GOTO.items.length ? 'go-' + GOTO.i : '');
   const on = box.querySelector('.gorow.on'); if (on) on.scrollIntoView({block:'nearest'});
 }
-function openGoto(){
+function openGoto(opts){
   if ($('goto')) return;
   if (PICK.open) closePicker(false);
-  GOTO.q = ''; GOTO.i = 0;
+  GOTO.q = ''; GOTO.i = 0; GOTO.mode = (opts && opts.mode) || ''; GOTO.first = (opts && opts.first) || '';
   const el = document.createElement('div'); el.id = 'goto'; el.className = 'sheet-bg goto-bg';
-  el.innerHTML = `<div class="goto" role="dialog" aria-modal="true" aria-label="Go to"><div class="pick-h">${icon('search')}<input type="search" id="gotoq" role="combobox" aria-expanded="true" aria-controls="gotolist" aria-autocomplete="list" placeholder="Go to a machine, VM, project, container or job, or type a command" autocomplete="off" spellcheck="false"></div><div class="picklist" id="gotolist" role="listbox"></div><div class="pick-f"><kbd>↑</kbd> <kbd>↓</kbd> to choose · <kbd>Enter</kbd> to go · <kbd>Esc</kbd> to close</div></div>`;
+  el.innerHTML = `<div class="goto" role="dialog" aria-modal="true" aria-label="${GOTO.mode === 'term' ? 'Open a terminal' : 'Go to'}"><div class="pick-h">${icon('search')}<input type="search" id="gotoq" role="combobox" aria-expanded="true" aria-controls="gotolist" aria-autocomplete="list" placeholder="${GOTO.mode === 'term' ? 'Open a terminal on a machine or container' : 'Go to a machine, VM, project, container or job, or type a command'}" autocomplete="off" spellcheck="false"></div><div class="picklist" id="gotolist" role="listbox"></div><div class="pick-f"><kbd>↑</kbd> <kbd>↓</kbd> to choose · <kbd>Enter</kbd> to go · <kbd>Esc</kbd> to close</div></div>`;
   el.addEventListener('click', e => {
     if (e.target === el){ closeGoto(); return; }
     const gp = e.target.closest('[data-gopin]'); if (gp){ e.stopPropagation(); gotoPin(gp.dataset.gopin); return; }
@@ -2276,7 +2289,7 @@ function openGoto(){
   renderGoto();
   $('gotoq').focus();
 }
-function closeGoto(){ const el = $('goto'); if (el) el.remove(); }
+function closeGoto(){ const el = $('goto'); if (el) el.remove(); GOTO.mode = ''; }
 // A pin from the list leaves the list as it is while it's open (#296): sorting it again (pinned items go first) would
 // move another item under the highlight and the pointer, so the next ⇧Enter or click would act on that one. A new
 // query sorts it again.
@@ -3178,13 +3191,26 @@ window.addEventListener('message', e => {
   const s = TD.list.find(x => x.key === f.closest('[data-tdpane]').dataset.tdpane);
   if (k === 'termReady') sendTermFont(f);
   else if (k === 'termFocus'){ if (PANEL !== 'term'){ PANEL = 'term'; markPanel(); } }
-  else if (k === 'termKey' && e.data.act === 'newTab' && s) openInline(s.node);
+  else if (k === 'termKey' && e.data.act === 'newTab') openGoto({mode:'term', first:s && s.node});
+  else if (k === 'termKey' && (e.data.act === 'nextTab' || e.data.act === 'prevTab')) cycleTerm(e.data.act === 'nextTab' ? 1 : -1);
+  else if (k === 'termKey' && e.data.act === 'minimize') setTermMin(true);
 });
-// ⌘T in the terminal's panel (its bar, or the terminal itself above) opens another on the same machine (#336)
+// ⌘T in the terminals' panel (its bar, or a terminal) asks which to open: what can have a terminal, this one's machine
+// first, so Enter opens another there (#336, #338)
 function inlineNewTab(){
-  if (PANEL !== 'term') return false;
-  const s = TD.list.find(x => x.key === TD.active); if (!s) return false;
-  openInline(s.node); return true;
+  if (PANEL !== 'term' || PREFS.termMin) return false;
+  const s = TD.list.find(x => x.key === TD.active);
+  openGoto({mode:'term', first:s && s.node}); return true;
+}
+// Ctrl+Tab, Ctrl+Shift+Tab (and the other keys that step through spaces) go round the terminals while you're in them
+function cycleTerm(d){
+  if (!TD.list.length || PREFS.termMin) return false;
+  const i = Math.max(0, TD.list.findIndex(x => x.key === TD.active)), s = TD.list[(i + d + TD.list.length) % TD.list.length];
+  TD.active = s.key; keepActive(s); renderDrawer();
+  const f = document.querySelector(`#tdrawer [data-tdpane="${s.key}"] iframe`);
+  if (f) f.focus(); else { const t = document.getElementById('tdt-' + s.key); if (t) t.focus(); }
+  if (PANEL !== 'term'){ PANEL = 'term'; markPanel(); }
+  return true;
 }
 function setTermFont(n){
   const v = Math.min(TERM_FONT.max, Math.max(TERM_FONT.min, n));
@@ -3208,8 +3234,17 @@ function termTheme(){
 }
 function openInline(id){
   const n = nodes[id], key = 'k' + (++TD.seq);
-  const s = {key, id:key, node:id, title:n ? n.name : String(id), pending:true};
-  TD.list.push(s); TD.active = key; renderDrawer();
+  const s = {key, id:'', node:id, title:n ? n.name : String(id)};
+  if ((PREFS.termClosed || []).includes(id) || PREFS.termMin){   // asked for again: it may come back, and the panel shows (#338)
+    PREFS = Object.assign({}, PREFS, {termClosed:(PREFS.termClosed || []).filter(x => x !== id), termMin:false}); savePrefs('the terminals');
+  }
+  TD.list.push(s); TD.active = key; startInline(s);
+}
+// a tab's terminal starts: one you asked for now, or a computer's tab you went to for the first time (#338)
+function startInline(s){
+  if (s.pending || s.live) return;
+  s.pending = true; renderDrawer();
+  const id = s.node;
   api('/api/inline-terminal', {node:id, then:PREFS.inlineCmd || '', theme:termTheme(), fontSize:termFontPx()}).then(r => {
     if (!TD.list.includes(s)){ if (r.ok) api('/api/inline-terminal/close', {id:r.id}).catch(() => {}); return; }  // closed while it opened
     if (r.ok){ Object.assign(s, {id:r.id, url:r.url, title:r.title || s.title, pending:false, live:true}); if (TD.active === s.key) keepActive(s); }
@@ -3220,8 +3255,8 @@ function openInline(id){
 // Kept terminals (#337): the server keeps them, their shells in tmux. The page shows the kept ones when it loads, attaches
 // the one you're on (the rest when you go to them), and attaches them again when Fleet restarts (a new boot).
 function noteBoot(boot){
-  if (!boot || boot === TD.boot) return;
-  const again = !!TD.boot; TD.boot = boot;
+  if (TD.synced && (!boot || boot === TD.boot)) return;   // the first answer always asks what's kept
+  const again = TD.synced && !!TD.boot; TD.boot = boot; TD.synced = true;
   if (again) TD.list.forEach(s => { if (s.live) s.url = null; });   // their ttyd ended with the old Fleet
   syncTerms();
 }
@@ -3231,7 +3266,8 @@ async function syncTerms(){
   const kept = d.terminals || [], ids = new Set(kept.map(t => t.id));
   TD.list = TD.list.filter(s => !s.live || ids.has(s.id));   // closed elsewhere
   kept.forEach(t => { if (!TD.list.some(s => s.id === t.id)) TD.list.push({key:'k' + (++TD.seq), id:t.id, node:t.node, title:t.title, live:true, url:null}); });
-  if (!TD.list.some(s => s.key === TD.active)){ const a = TD.list.find(s => s.id === PREFS.termActive) || TD.list[TD.list.length - 1]; TD.active = a ? a.key : ''; }
+  syncAutoTerms();
+  if (!TD.list.some(s => s.key === TD.active)){ const a = TD.list.find(s => s.id === PREFS.termActive) || TD.list[0]; TD.active = a ? a.key : ''; }
   renderDrawer();
 }
 function attachInline(s){
@@ -3247,9 +3283,13 @@ function attachInline(s){
 }
 function keepActive(s){ if (s && s.live && PREFS.termActive !== s.id){ PREFS = Object.assign({}, PREFS, {termActive:s.id}); savePrefs('the terminal you’re on'); } }
 function closeInline(id){
-  const s = TD.list.find(x => x.id === id); if (!s) return;
+  const s = TD.list.find(x => x.id === id) || TD.list.find(x => x.key === id); if (!s) return;
   TD.list = TD.list.filter(x => x !== s);
   if (s.live) api('/api/inline-terminal/close', {id:s.id}).catch(() => {});
+  const n = nodes[s.node];   // a computer's own tab doesn't come back by itself once you close it (#338)
+  if (n && n.kind === 'machine' && !TD.list.some(x => x.node === s.node) && !(PREFS.termClosed || []).includes(s.node)){
+    PREFS = Object.assign({}, PREFS, {termClosed:(PREFS.termClosed || []).concat([s.node])}); savePrefs('the terminals');
+  }
   if (TD.active === s.key) TD.active = TD.list.length ? TD.list[TD.list.length - 1].key : '';
   renderDrawer();
 }
@@ -3261,19 +3301,47 @@ function placeDrawer(){
   d.style.height = termH() + 'px';
   m.style.setProperty('--paneh', m.clientHeight + 'px');   // docked Details fills the page's part
 }
+// A tab for each connected computer (#338), once the server has said what it keeps: added as computers connect, kept
+// when they drop (their terminals reconnect), and not again once you close one. Each starts when you first go to it.
+function syncAutoTerms(){
+  if (!TD.avail) return;
+  const closed = new Set(PREFS.termClosed || []);
+  let added = false;
+  Object.values(nodes).forEach(n => {
+    if (n.kind !== 'machine' || n.status !== 'ok' || !termOk(n) || closed.has(n.id) || TD.list.some(s => s.node === n.id)) return;
+    TD.list.push({key:'k' + (++TD.seq), id:'', node:n.id, title:n.name, auto:true}); added = true;
+  });
+  if (added) renderDrawer();
+}
+function setTermMin(v){
+  PREFS = Object.assign({}, PREFS, {termMin:!!v}); savePrefs('the terminals');
+  renderDrawer();
+  if (!v){ const f = document.querySelector('#tdrawer .td-pane:not([hidden]) iframe'); if (f) f.focus(); }
+  else if (PANEL === 'term'){ PANEL = 'main'; markPanel(); }
+}
+function renderRestore(){
+  let b = document.querySelector('[data-tdrestore]');
+  const show = !!PREFS.termMin && TD.list.length > 0;
+  if (!b && !show) return;
+  if (!b){ b = document.createElement('button'); b.type = 'button'; b.className = 'td-restore'; b.dataset.tdrestore = '1'; $('mcol').appendChild(b); }
+  b.innerHTML = `${icon('terminal')}<span>${TD.list.length}</span>`;
+  b.setAttribute('aria-label', `Show the terminals (${TD.list.length}), ${IS_MAC ? '⌘J' : 'Alt+J'}`); b.title = `Terminals (${IS_MAC ? '⌘J' : 'Alt+J'})`;
+  b.hidden = !show;
+}
 function renderDrawer(){
   let d = $('tdrawer');
-  if (!TD.list.length){ if (d){ d.hidden = true; placeDrawer(); } return; }
+  renderRestore();
+  if (!TD.list.length || PREFS.termMin){ if (d){ d.hidden = true; placeDrawer(); } return; }
   if (!d){
     d = document.createElement('section'); d.id = 'tdrawer'; d.className = 'tdrawer'; d.setAttribute('aria-label', 'Inline terminals');
-    d.innerHTML = `<div class="td-grip" role="separator" aria-orientation="horizontal" aria-label="Resize the terminal" tabindex="0"></div><div class="td-bar"><div class="td-tabs" role="tablist" aria-label="Inline terminals"></div><span class="td-note" hidden title="tmux keeps each terminal's shell running through a reload, and through Fleet restarting or quitting">A reload starts a new shell: install tmux to keep them (brew install tmux, sudo apt install tmux)</span><div class="td-size" role="group" aria-label="Terminal text size"><button type="button" data-tdfont="-1" aria-label="Smaller terminal text" title="Smaller text (its own size, apart from Fleet’s zoom)">A−</button><span data-tdfontnow aria-live="polite"></span><button type="button" data-tdfont="1" aria-label="Larger terminal text" title="Larger text">A+</button></div></div><div class="td-frames"></div>`;
+    d.innerHTML = `<div class="td-grip" role="separator" aria-orientation="horizontal" aria-label="Resize the terminal" tabindex="0"></div><div class="td-bar"><button type="button" class="td-btn" data-tdmin aria-label="Minimize the terminals" title="Minimize (${IS_MAC ? '⌘J' : 'Alt+J'}); they keep running">${icon('chev', 2.2)}</button><div class="td-tabs" role="tablist" aria-label="Inline terminals"></div><button type="button" class="td-btn" data-tdadd aria-label="New terminal" title="New terminal: a machine or container">${icon('plus', 2.2)}</button><span class="td-note" hidden title="tmux keeps each terminal's shell running through a reload, and through Fleet restarting or quitting">A reload starts a new shell: install tmux to keep them (brew install tmux, sudo apt install tmux)</span><div class="td-size" role="group" aria-label="Terminal text size"><button type="button" data-tdfont="-1" aria-label="Smaller terminal text" title="Smaller text (its own size, apart from Fleet’s zoom)">A−</button><span data-tdfontnow aria-live="polite"></span><button type="button" data-tdfont="1" aria-label="Larger terminal text" title="Larger text">A+</button></div></div><div class="td-frames"></div>`;
     $('mcol').appendChild(d);
     if (typeof ResizeObserver === 'function'){ TD.ro = new ResizeObserver(() => placeDrawer()); TD.ro.observe($('mcol')); }
   }
   d.hidden = false;
   d.querySelector('[data-tdfontnow]').textContent = termFont();
-  if (!TD.list.some(x => x.key === TD.active)) TD.active = TD.list[TD.list.length - 1].key;
-  d.querySelector('.td-tabs').innerHTML = TD.list.map(s => `<span class="td-tab${s.key === TD.active ? ' on' : ''}"><button type="button" role="tab" id="tdt-${esc(s.key)}" aria-controls="tdp-${esc(s.key)}" aria-selected="${s.key === TD.active}" tabindex="${s.key === TD.active ? 0 : -1}" data-tdtab="${esc(s.key)}">${icon('terminal')}${esc(s.title)}${s.pending ? ' <span class="sub">opening…</span>' : ''}</button><button type="button" class="td-x" data-tdclose="${esc(s.id)}" aria-label="Close ${esc(s.title)}" title="Close (ends this session)">${icon('x', 2.2)}</button></span>`).join('');
+  if (!TD.list.some(x => x.key === TD.active)) TD.active = (TD.list.find(x => x.live && x.id === PREFS.termActive) || TD.list[0]).key;   // the one you were on, or the first
+  d.querySelector('.td-tabs').innerHTML = TD.list.map(s => `<span class="td-tab${s.key === TD.active ? ' on' : ''}"><button type="button" role="tab" id="tdt-${esc(s.key)}" aria-controls="tdp-${esc(s.key)}" aria-selected="${s.key === TD.active}" tabindex="${s.key === TD.active ? 0 : -1}" data-tdtab="${esc(s.key)}">${icon('terminal')}${esc(s.title)}${s.pending ? ' <span class="sub">opening…</span>' : ''}</button><button type="button" class="td-x" data-tdclose="${esc(s.id || s.key)}" aria-label="Close ${esc(s.title)}" title="Close (ends this session)">${icon('x', 2.2)}</button></span>`).join('');
   const fr = d.querySelector('.td-frames');
   [...fr.children].forEach(p => { if (!TD.list.some(s => s.key === p.dataset.tdpane)) p.remove(); });
   TD.list.forEach(s => {
@@ -3291,6 +3359,7 @@ function renderDrawer(){
     }
     p.hidden = s.key !== TD.active;
     if (s.key === TD.active && s.live && !s.url && !s.error) attachInline(s);
+    if (s.key === TD.active && !s.live && !s.pending && !s.error && !s.url) startInline(s);
   });
   const note = d.querySelector('.td-note');
   note.hidden = !(TD.avail && !TD.avail.tmux);
@@ -3305,6 +3374,9 @@ function setTermH(h, keep){
 document.addEventListener('click', e => {
   const x = e.target.closest('#tdrawer [data-tdclose]'); if (x){ closeInline(x.dataset.tdclose); return; }
   const fz = e.target.closest('#tdrawer [data-tdfont]'); if (fz){ setTermFont(termFont() + Number(fz.dataset.tdfont)); return; }
+  if (e.target.closest('#tdrawer [data-tdmin]')){ setTermMin(true); return; }
+  if (e.target.closest('[data-tdrestore]')){ setTermMin(false); return; }
+  if (e.target.closest('#tdrawer [data-tdadd]')){ openGoto({mode:'term'}); return; }
   const t = e.target.closest('#tdrawer [data-tdtab]'); if (t){ TD.active = t.dataset.tdtab; keepActive(TD.list.find(x => x.key === TD.active)); renderDrawer(); }
 });
 document.addEventListener('pointerdown', e => {
