@@ -7,7 +7,7 @@
 # nvidia-smi, ip addr). Counters are cumulative; the Mac side turns them into
 # rates by diffing two snapshots. It loops, printing one zlib+base64 JSON line
 # every INTERVAL seconds (prepended by the collector), until SSH closes.
-import base64, json, os, re, subprocess, sys, time, zlib
+import base64, glob, json, os, re, subprocess, sys, time, zlib
 
 PAGE = os.sysconf("SC_PAGE_SIZE")
 HZ = os.sysconf("SC_CLK_TCK")
@@ -87,9 +87,20 @@ def drm_gpus():
             mhz = m.group(1) if m else ""
         busy = rd(dev + "/gpu_busy_percent").strip()  # amdgpu
         vt, vu = rd(dev + "/mem_info_vram_total").strip(), rd(dev + "/mem_info_vram_used").strip()
+        m = re.search(r"(\d+)Mhz \*", rd(dev + "/pp_dpm_mclk"))  # amdgpu: the memory clock now
+        # sensors: temperature (millidegrees), power (amdgpu average, microwatts) or energy (i915/xe, cumulative
+        # microjoules), the power limit and the fan (rpm)
+        hw = {}
+        for h in glob.glob(dev + "/hwmon/hwmon*"):
+            for k, f in (("temp", "temp1_input"), ("power", "power1_average"), ("energy", "energy1_input"), ("power_max", "power1_cap"),
+                         ("power_max", "power1_max"), ("fan", "fan1_input")):
+                v = rd(h + "/" + f).strip()
+                if v.isdigit() and k not in hw and (k != "power_max" or int(v) > 0):
+                    hw[k] = int(v)
         cards.append({"card": c, "pdev": pdev, "driver": drv, "vendor": VENDORS.get(vendor, vendor), "name": gpu_name(pdev, vendor, drv),
                       "mhz": int(mhz) if mhz.isdigit() else 0, "maxmhz": int(maxmhz) if maxmhz.isdigit() else 0,
-                      "busy": int(busy) if busy.isdigit() else -1, "vram": [int(vt) if vt.isdigit() else 0, int(vu) if vu.isdigit() else 0]})
+                      "busy": int(busy) if busy.isdigit() else -1, "vram": [int(vt) if vt.isdigit() else 0, int(vu) if vu.isdigit() else 0],
+                      "memmhz": int(m.group(1)) if m else 0, "hwmon": hw})
     # Display controllers bound to vfio-pci belong to a VM: still a GPU of this host, used by that VM.
     for pdev in sorted(os.listdir("/sys/bus/pci/devices")):
         d = "/sys/bus/pci/devices/" + pdev
@@ -532,12 +543,23 @@ def snapshot():
 
     # NVIDIA GPUs and which processes use them.
     gpus = []
-    for line in run(["nvidia-smi", "--query-gpu=index,name,utilization.gpu,memory.used,memory.total,pci.bus_id", "--format=csv,noheader,nounits"]).splitlines():
+    # the newer fields fail the whole query on old drivers, so fall back to the basic one
+    q = "index,name,utilization.gpu,memory.used,memory.total,pci.bus_id"
+    extra = ",utilization.memory,temperature.gpu,power.draw,power.limit,clocks.gr,clocks.max.gr,clocks.mem,fan.speed,utilization.encoder,utilization.decoder"
+    rows = run(["nvidia-smi", "--query-gpu=" + q + extra, "--format=csv,noheader,nounits"]).splitlines()
+    if not any(line.count(",") >= 15 for line in rows):
+        rows = run(["nvidia-smi", "--query-gpu=" + q, "--format=csv,noheader,nounits"]).splitlines()
+    num = lambda x: float(x) if re.match(r"^-?\d+(\.\d+)?$", x) else None   # "[N/A]", "[Not Supported]" -> None
+    for line in rows:
         f = [x.strip() for x in line.split(",")]
-        if len(f) == 6:
+        if len(f) in (6, 16):
             bus = f[5].lower()
             bus = bus[4:] if re.match(r"^0000[0-9a-f]{4}:", bus) else bus  # 00000000:83:00.0 -> 0000:83:00.0
-            gpus.append({"index": int(f[0]), "name": f[1], "util": float(f[2] or 0), "memUsed": float(f[3] or 0), "memTotal": float(f[4] or 0), "pdev": bus})
+            g = {"index": int(f[0]), "name": f[1], "util": float(f[2] or 0), "memUsed": float(f[3] or 0), "memTotal": float(f[4] or 0), "pdev": bus}
+            if len(f) == 16:
+                for k, x in zip(("memUtil", "temp", "power", "powerLimit", "clock", "clockMax", "memClock", "fan", "enc", "dec"), f[6:]):
+                    g[k] = num(x)
+            gpus.append(g)
     try:
         cards = drm_gpus()
     except Exception:

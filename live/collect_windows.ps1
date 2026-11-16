@@ -40,9 +40,9 @@ $o.mem = @([double]$cs.TotalPhysicalMemory, [double]$os.FreePhysicalMemory * 102
 
 $paths = @('\Processor(*)\% Processor Time', '\Processor Information(*)\Processor Frequency',
   '\PhysicalDisk(*)\Disk Bytes/sec', '\PhysicalDisk(*)\Disk Read Bytes/sec', '\PhysicalDisk(*)\Disk Write Bytes/sec', '\PhysicalDisk(*)\% Idle Time',
-  '\GPU Engine(*)\Utilization Percentage', '\GPU Adapter Memory(*)\Dedicated Usage', '\Memory\Available Bytes')
+  '\GPU Engine(*)\Utilization Percentage', '\GPU Adapter Memory(*)\Dedicated Usage', '\GPU Adapter Memory(*)\Shared Usage', '\Memory\Available Bytes')
 $samples = (Get-Counter -Counter $paths -SampleInterval 1 -MaxSamples 1).CounterSamples
-$lcpu = @{}; $freq = @{}; $procs = @{}; $eng = @{}; $pidGpu = @{}; $adMem = @{}; $pd = @{}
+$lcpu = @{}; $freq = @{}; $procs = @{}; $eng = @{}; $pidGpu = @{}; $adMem = @{}; $adShared = @{}; $pd = @{}
 foreach ($s in $samples) {
   $parts = $s.Path.Split('\'); $counter = $parts[-1]; $set = $parts[-2]; $inst = $s.InstanceName; $v = $s.CookedValue
   if ($set -like 'processor(*') { if ($inst -ne '_total') { $lcpu[[int]$inst] = $v } }
@@ -60,19 +60,27 @@ foreach ($s in $samples) {
   elseif ($set -eq 'memory') { $o.mem[1] = $v }
   elseif ($set -like 'gpu engine(*') {
     if ($inst -match '^pid_(\d+)_luid_(0x[0-9a-f]+_0x[0-9a-f]+)_phys_(\d+)_eng_(\d+)_engtype_(.*)$') {
-      $key = $Matches[2] + '|' + $Matches[4]; $eng[$key] = [double]$eng[$key] + $v
+      $key = $Matches[2] + '|' + $Matches[4] + '|' + $Matches[5]; $eng[$key] = [double]$eng[$key] + $v   # adapter|engine|type
       $pk = $Matches[1] + '|' + $Matches[2]; if ($v -gt [double]$pidGpu[$pk]) { $pidGpu[$pk] = $v }
     }
   }
-  elseif ($set -like 'gpu adapter memory(*') { if ($inst -match 'luid_(0x[0-9a-f]+_0x[0-9a-f]+)_phys') { $adMem[$Matches[1]] = $v } }
+  elseif ($set -like 'gpu adapter memory(*') { if ($inst -match 'luid_(0x[0-9a-f]+_0x[0-9a-f]+)_phys') { if ($counter -like 'shared*') { $adShared[$Matches[1]] = $v } else { $adMem[$Matches[1]] = $v } } }
 }
 $o.lcpus = @($lcpu.Keys | Sort-Object | ForEach-Object { @{ n = $_; pct = $lcpu[$_]; mhz = [int]$freq[$_] } })
 
 # GPUs: real adapters are the ones with dedicated memory; NVIDIA names and totals from nvidia-smi.
 $gpuUtil = @{}
 foreach ($k in $eng.Keys) { $l = $k.Split('|')[0]; if ($eng[$k] -gt [double]$gpuUtil[$l]) { $gpuUtil[$l] = $eng[$k] } }
-$o.gpus = @($adMem.Keys | Where-Object { $adMem[$_] -gt 0 } | Sort-Object { - $adMem[$_] } | ForEach-Object { @{ luid = $_; util = [double]$gpuUtil[$_]; dedicated = $adMem[$_] } })
-$o.nvidia = @(nvidia-smi --query-gpu=index,name,utilization.gpu,memory.used,memory.total --format=csv,noheader,nounits 2>$null)
+# each engine type (3d, copy, videodecode, ...) at its busiest engine, per adapter, like Task Manager
+$engT = @{}
+foreach ($k in $eng.Keys) { $p = $k.Split('|'); $tk = $p[0] + '|' + $p[2]; if ($eng[$k] -gt [double]$engT[$tk]) { $engT[$tk] = $eng[$k] } }
+$o.gpus = @($adMem.Keys | Where-Object { $adMem[$_] -gt 0 } | Sort-Object { - $adMem[$_] } | ForEach-Object {
+  $l = $_; $e = @{}; foreach ($tk in $engT.Keys) { $p = $tk.Split('|', 2); if ($p[0] -eq $l) { $e[$p[1]] = $engT[$tk] } }
+  @{ luid = $l; util = [double]$gpuUtil[$l]; dedicated = $adMem[$l]; shared = [double]$adShared[$l]; eng = $e } })
+# NVIDIA's own numbers; drivers without the newer fields fail the whole query, so fall back to the basic one
+$nv = @(nvidia-smi --query-gpu=index,name,utilization.gpu,memory.used,memory.total,utilization.memory,temperature.gpu,power.draw,power.limit,clocks.gr,clocks.max.gr,clocks.mem,fan.speed,utilization.encoder,utilization.decoder --format=csv,noheader,nounits 2>$null)
+if (-not ($nv | Where-Object { $_ -match ',' })) { $nv = @(nvidia-smi --query-gpu=index,name,utilization.gpu,memory.used,memory.total --format=csv,noheader,nounits 2>$null) }
+$o.nvidia = $nv
 $o.videoNames = @(Get-CimInstance Win32_VideoController | ForEach-Object { $_.Name })
 $o.gproc = @($pidGpu.Keys | ForEach-Object { $gp = $_.Split('|'); ,@([int]$gp[0], $gp[1], $pidGpu[$_]) })
 

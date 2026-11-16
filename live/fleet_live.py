@@ -198,6 +198,51 @@ def stop_collectors(fleet):
 
 
 # ---------------------------------------------------------------- machine
+def ps_compact(script):
+    """A PowerShell script without full-line comments, blank lines or indentation: -EncodedCommand doubles
+    its size (UTF-16) and grows it by a third (base64), and a Windows command line holds 32,767 characters.
+    (The collector's one here-string is C#, where indentation doesn't matter and no line starts with #;
+    its closing '@ must start a line, which stripping keeps true.)"""
+    return "\n".join(l.strip() for l in script.splitlines() if l.strip() and not l.strip().startswith("#"))
+
+
+# ---------------------------------------------------------------- GPU metrics (issue #6)
+# Every GPU reports what it can as g["m"] = {metric: value} and g["lim"] = {metric: its maximum}.
+MIB = 1024 * 1024
+GPU_METRICS = ["util", "3d", "compute", "copy", "video", "encode", "decode", "vpp", "jpeg", "tiler", "memctl", "vram", "shared", "sysmem",
+               "temp", "power", "clock", "memclock", "fan", "fanrpm"]
+DRM_ENGINE = {"render": "3d", "gfx": "3d", "compute": "compute", "copy": "copy", "dma": "copy", "video": "video", "video-enhance": "vpp",
+              "enc": "encode", "dec": "decode", "jpeg": "jpeg"}
+DRIVER_ENGINES = {"i915": ["render", "copy", "video", "video-enhance"], "xe": ["render", "compute", "copy", "video", "video-enhance"],
+                  "amdgpu": ["gfx", "compute", "dma", "enc", "dec"]}
+WIN_ENGINE = {"3d": "3d", "copy": "copy", "videodecode": "decode", "videoencode": "encode", "videoprocessing": "vpp"}
+
+
+def gpu_metric_order(g):
+    """(metric, limit) pairs in Fleet's order: engines, memory, then sensors; unknown ones last."""
+    m, lim = g.get("m") or {}, g.get("lim") or {}
+    known = [k for k in GPU_METRICS if k in m] + [k for k in m if k not in GPU_METRICS]
+    return [(k, lim.get(k)) for k in known]
+
+
+def mac_gpu_stats(ioreg):
+    """`ioreg -c IOAccelerator` → one dict per GPU: device, renderer and tiler utilisation, memory in use."""
+    out = []
+    for block in re.findall(r'"PerformanceStatistics" = \{([^}]*)\}', ioreg):
+        def val(name):
+            m = re.search(r'"%s"=(\d+)' % re.escape(name), block)
+            return float(m.group(1)) if m else None
+        d = {}
+        for k, name in (("util", "Device Utilization %"), ("3d", "Renderer Utilization %"), ("tiler", "Tiler Utilization %"), ("sysmem", "In use system memory")):
+            v = val(name)
+            if v is not None:
+                d[k] = v
+        if d:
+            d.setdefault("util", 0.0)
+            out.append(d)
+    return out
+
+
 class Machine:
     def __init__(self, cfg, interval):
         self.cfg = cfg
@@ -243,7 +288,7 @@ class Machine:
     def ssh_cmd(self):
         base = ["ssh"] + SSH_MARK + [self.cfg["ssh"]]
         if self.cfg.get("os") == "windows":
-            script = "$FleetInterval=%s\n" % self.interval + open(os.path.join(HERE, "collect_windows.ps1"), encoding="utf-8").read()
+            script = "$FleetInterval=%s\n" % self.interval + ps_compact(open(os.path.join(HERE, "collect_windows.ps1"), encoding="utf-8").read())
             enc = base64.b64encode(script.encode("utf-16-le")).decode()
             return base + ["powershell -NoProfile -NonInteractive -EncodedCommand " + enc], None
         script = "INTERVAL=%s\n" % self.interval + open(os.path.join(HERE, "collect_linux.py"), encoding="utf-8").read()
@@ -301,7 +346,7 @@ class Machine:
                 if view:
                     self.got(view)
         elif platform.system() == "Windows":
-            script = "$FleetInterval=%s\n" % self.interval + open(os.path.join(HERE, "collect_windows.ps1"), encoding="utf-8").read()
+            script = "$FleetInterval=%s\n" % self.interval + ps_compact(open(os.path.join(HERE, "collect_windows.ps1"), encoding="utf-8").read())
             enc = base64.b64encode(script.encode("utf-16-le")).decode()
             p = subprocess.Popen(["powershell", "-NoProfile", "-NonInteractive", "-EncodedCommand", enc], stdout=subprocess.PIPE)
             for line in p.stdout:
@@ -500,12 +545,44 @@ class Machine:
                 mem = "up to %.2f GHz" % (c["maxmhz"] / 1000.0)
             else:
                 mem = ""
-            gpus.append({"name": c["name"], "mem": mem, "util": 0.0, "busy": c.get("busy", -1), "mhz": c.get("mhz", 0),
-                         "passthrough": bool(c.get("passthrough"))})
+            g = {"name": c["name"], "mem": mem, "util": 0.0, "busy": c.get("busy", -1), "mhz": c.get("mhz", 0), "driver": c.get("driver", ""),
+                 "passthrough": bool(c.get("passthrough")), "m": {}, "lim": {}}
+            if not c.get("passthrough"):
+                hw = c.get("hwmon") or {}
+                if vram[0]:
+                    g["m"]["vram"], g["lim"]["vram"] = vram[1], vram[0]
+                if "temp" in hw:
+                    g["m"]["temp"] = hw["temp"] / 1000.0
+                if "power" in hw:          # amdgpu: average power, microwatts
+                    g["m"]["power"] = hw["power"] / 1e6
+                elif "energy" in hw:       # i915/xe: cumulative energy, microjoules
+                    g["m"]["power"] = self.rate("gpuenergy." + c["pdev"], hw["energy"], t) / 1e6
+                if hw.get("power_max"):
+                    g["lim"]["power"] = hw["power_max"] / 1e6
+                if c.get("mhz") or c.get("maxmhz"):   # an idle GPU can clock down to 0
+                    g["m"]["clock"] = float(c.get("mhz") or 0)
+                    if c.get("maxmhz"):
+                        g["lim"]["clock"] = float(c["maxmhz"])
+                if c.get("memmhz"):
+                    g["m"]["memclock"] = float(c["memmhz"])
+                if "fan" in hw:
+                    g["m"]["fanrpm"] = float(hw["fan"])
+            gpus.append(g)
         nv_idx = {}
         for g in sorted(r.get("gpus", []), key=lambda g: g["index"]):
             nv_idx[g["index"]] = len(gpus)
-            gpus.append({"name": g["name"], "mem": "%d GB VRAM" % round(g["memTotal"] / 1024) if g["memTotal"] else "", "util": g["util"], "nvidia": True})
+            m, lim = {"util": g["util"]}, {}
+            for k, src in (("memctl", "memUtil"), ("encode", "enc"), ("decode", "dec"), ("temp", "temp"), ("power", "power"),
+                           ("clock", "clock"), ("memclock", "memClock"), ("fan", "fan")):
+                if g.get(src) is not None:
+                    m[k] = g[src]
+            if g.get("memTotal"):
+                m["vram"], lim["vram"] = g["memUsed"] * MIB, g["memTotal"] * MIB
+            for k, src in (("power", "powerLimit"), ("clock", "clockMax")):
+                if g.get(src):
+                    lim[k] = g[src]
+            gpus.append({"name": g["name"], "mem": "%d GB VRAM" % round(g["memTotal"] / 1024) if g["memTotal"] else "", "util": g["util"], "nvidia": True,
+                         "m": m, "lim": lim})
         eng, pid_gpu = {}, {}
         for pid, pdev, cid, engines, cap, _mem in r.get("gclients", []):
             idx = idx_of.get(pdev)
@@ -523,6 +600,13 @@ class Machine:
                 continue
             busiest = max([v for (gi, _e), v in eng.items() if gi == i] or [0.0])  # like nvtop: the busiest engine
             g["util"] = min(100.0, max(busiest, float(g["busy"]) if g.get("busy", -1) >= 0 else 0.0))
+            g["m"]["util"] = g["util"]
+            for e in DRIVER_ENGINES.get(g.get("driver"), []):   # the driver's engines are there even when idle
+                g["m"].setdefault(DRM_ENGINE.get(e, e), 0.0)
+            for (gi, e), v in eng.items():   # each engine, under Fleet's name for it
+                if gi == i:
+                    k = DRM_ENGINE.get(e, e)
+                    g["m"][k] = min(100.0, g["m"].get(k, 0.0) + v)
         for gidx, pid, sm in r.get("gproc", []):
             idx = nv_idx.get(gidx)
             if idx is not None:
@@ -535,6 +619,50 @@ class Machine:
             self.cum = {k: v for k, v in self.cum.items() if v[1] >= cutoff}
 
     # ------------------------------------------------------------ windows
+    def windows_gpus(self, r):
+        """Adapters ordered by dedicated memory, each with its engines by type (the GPU Engine counters),
+        dedicated and shared memory, and NVIDIA's own numbers from nvidia-smi when present."""
+        nv = [[x.strip() for x in line.split(",")] for line in r.get("nvidia", []) if line and line.count(",") >= 4]
+        names = [x[1] for x in nv] + [n for n in r.get("videoNames", []) if not any(n == x[1] for x in nv)]
+        num = lambda x: float(x) if re.match(r"^-?\d+(\.\d+)?$", x or "") else None
+        gpus, luid_idx = [], {}
+        for i, g in enumerate(r.get("gpus", [])):
+            luid_idx[g["luid"]] = i
+            row = nv[i] if i < len(nv) else []
+            total = num(row[4]) if len(row) > 4 else None
+            m = {"util": min(100.0, g.get("util", 0))}
+            for e, v in (g.get("eng") or {}).items():
+                e = e.lower()
+                k = "compute" if e.startswith("compute") or e == "cuda" else WIN_ENGINE.get(e)
+                if k:
+                    m[k] = max(m.get(k, 0.0), min(100.0, float(v)))
+            lim = {}
+            if g.get("dedicated") is not None:
+                m["vram"] = g["dedicated"]
+            if g.get("shared") is not None:
+                m["shared"] = g["shared"]
+            if total:
+                lim["vram"] = total * MIB
+            if len(row) >= 15:   # index,name,util,mem used,total,mem util,temp,power,power limit,clock,max clock,mem clock,fan,enc,dec
+                for k, j in (("memctl", 5), ("temp", 6), ("power", 7), ("clock", 9), ("memclock", 11), ("fan", 12)):
+                    if num(row[j]) is not None:
+                        m[k] = num(row[j])
+                for k, j in (("encode", 13), ("decode", 14)):   # when no process has used the engine, there's no counter for it
+                    if k not in m and num(row[j]) is not None:
+                        m[k] = num(row[j])
+                for k, j in (("power", 8), ("clock", 10)):
+                    if num(row[j]):
+                        lim[k] = num(row[j])
+            for k in ("3d", "copy", "encode", "decode"):   # Task Manager's four, there even when idle
+                m.setdefault(k, 0.0)
+            gpus.append({"name": names[i] if i < len(names) else "GPU %d" % i, "mem": "%d GB VRAM" % round(total / 1024) if total else "",
+                         "util": m["util"], "m": m, "lim": lim})
+        gpu_by_pid = {}
+        for pid, luid, pct in r.get("gproc", []):
+            if luid in luid_idx:
+                gpu_by_pid.setdefault(pid, {})[luid_idx[luid]] = gpu_by_pid.get(pid, {}).get(luid_idx[luid], 0) + pct
+        return gpus, gpu_by_pid
+
     def derive_windows(self, r):
         for k in ("lcpus", "topo", "gpus", "nvidia", "videoNames", "gproc", "procs", "ifs", "wsl", "containers", "dstats", "tasks", "disks"):
             r[k] = aslist(r.get(k))
@@ -571,20 +699,7 @@ class Machine:
                 m = re.match(r"([\d.]+)\s*([GMK])bps", a.get("speed", ""))
                 if m:
                     speed += float(m.group(1)) * {"G": 1000, "M": 1, "K": 0.001}[m.group(2)]
-        # GPUs: adapters ordered by dedicated memory; NVIDIA names from nvidia-smi when present.
-        nv = [x.split(", ") for x in r.get("nvidia", []) if x and x.count(",") >= 4]
-        names = [x[1] for x in nv] + [n for n in r.get("videoNames", []) if not any(n == x[1] for x in nv)]
-        gpus, luid_idx = [], {}
-        for i, g in enumerate(r.get("gpus", [])):
-            luid_idx[g["luid"]] = i
-            mem = ""
-            if i < len(nv) and nv[i][4].strip().isdigit():
-                mem = "%d GB VRAM" % round(int(nv[i][4]) / 1024)
-            gpus.append({"name": names[i] if i < len(names) else "GPU %d" % i, "mem": mem, "util": min(100.0, g.get("util", 0))})
-        gpu_by_pid = {}
-        for pid, luid, pct in r.get("gproc", []):
-            if luid in luid_idx:
-                gpu_by_pid.setdefault(pid, {})[luid_idx[luid]] = gpu_by_pid.get(pid, {}).get(luid_idx[luid], 0) + pct
+        gpus, gpu_by_pid = self.windows_gpus(r)
         procs, vm_u = [], [0.0] * 5
         for p in r.get("procs", []):
             pid, ppid, name, c_secs, ws, threads, io, cmd = p
@@ -857,8 +972,9 @@ class MacCollector:
                 for x in ifs:
                     if x["name"] == cur_if:
                         x["addrs"].append("%s/%d" % (m.group(1), bits))
-        utils = [float(x) for x in re.findall(r'"Device Utilization %"=(\d+)', run(["ioreg", "-r", "-d", "1", "-w", "0", "-c", "IOAccelerator"]))]
-        gpus = [{"name": gi["name"], "mem": gi["mem"], "util": utils[i] if i < len(utils) else 0.0} for i, gi in enumerate(self.gpu_info)]
+        stats = mac_gpu_stats(run(["ioreg", "-r", "-d", "1", "-w", "0", "-c", "IOAccelerator"]))
+        gpus = [{"name": gi["name"], "mem": gi["mem"], "util": stats[i]["util"] if i < len(stats) else 0.0, "m": stats[i] if i < len(stats) else {}, "lim": {}}
+                for i, gi in enumerate(self.gpu_info)]
         gpu = sum(g["util"] for g in gpus)
         # Network per process: nettop has each process's bytes in/out; lsof says which local address
         # (and so which interface) its connections use. (netstat prints nothing when run from Python.)
@@ -1087,7 +1203,9 @@ class Fleet:
             return spec
         spec.update({"os": view["os"] + (" · " + view["arch"] if view.get("arch") else ""), "cpu_model": view.get("cpu_model", ""),
                      "uptime": fmt_uptime(view.get("uptime", 0)), "cap": view["cap"], "cronLabel": view.get("cronLabel", "Cron jobs"),
-                     "gpus": [{"name": g["name"], "mem": g.get("mem", "")} for g in view["gpus"]], "ncpu": view["ncpu"],
+                     "gpus": [{"name": g["name"], "mem": g.get("mem", ""),
+                               "m": [[k, lim, self.leaf("%s/gpu%d/%s" % (mid, gi, k), [(g.get("m") or {}).get(k, 0.0)], record)["cpu"]] for k, lim in gpu_metric_order(g)]}
+                              for gi, g in enumerate(view["gpus"])], "ncpu": view["ncpu"],
                      "groups": view.get("groups", [])})
         if view.get("note"):
             spec["note"] = {"label": "How this is counted.", "text": view["note"]}
@@ -1527,7 +1645,7 @@ def inspect_process(m, pid):
             if cfg.get("kind") == "local":
                 cmd, stdin = [sys.executable, os.path.join(HERE, "inspect_linux.py"), str(pid), str(INSPECT_SECS)], None
             elif cfg.get("os") == "windows":
-                script = "$FleetPid=%d\n$FleetSecs=%s\n" % (pid, INSPECT_SECS) + open(os.path.join(HERE, "inspect_windows.ps1"), encoding="utf-8").read()
+                script = "$FleetPid=%d\n$FleetSecs=%s\n" % (pid, INSPECT_SECS) + ps_compact(open(os.path.join(HERE, "inspect_windows.ps1"), encoding="utf-8").read())
                 enc = base64.b64encode(script.encode("utf-16-le")).decode()
                 cmd, stdin = ["ssh"] + SSH_MARK + [cfg["ssh"], "powershell -NoProfile -NonInteractive -EncodedCommand " + enc], None
             else:
