@@ -2185,6 +2185,11 @@ def mac_inspect_script(pid, secs):
     return MAC_IMPORTS + "INSPECT_SECS = %r\n\n" % secs + own_source("inspect_mac")[0] + "\n\nprint(json.dumps(inspect_mac(%d)))\n" % int(pid)
 
 
+def windows_inspect_script(pid):
+    with open(os.path.join(HERE, "inspect_windows.ps1"), encoding="utf-8") as f:
+        return "$FleetPid=%d\n$FleetSecs=%s\n" % (pid, INSPECT_SECS) + ps_compact(f.read())
+
+
 def inspect_process(m, pid):
     key = (m.id, pid)
     with INSPECT_LOCK:
@@ -2202,20 +2207,25 @@ def inspect_process(m, pid):
         return c[1] if c else {"pid": pid, "error": "no answer"}
     cfg = m.cfg
     try:
-        if cfg.get("kind") == "local" and sys.platform == "darwin":
+        # this computer: the inspector of what it runs on, as local_loop picks its collector (validate_config
+        # drops a local machine's os); a machine over SSH: its configured os
+        local = platform.system() if cfg.get("kind") == "local" else None
+        if local == "Darwin":
             out = inspect_mac(pid)
         else:
-            if cfg.get("kind") == "local":
+            if local == "Windows":   # the short starter the local collector uses, the script on stdin (#269)
+                cmd, stdin = ps_launch(windows_inspect_script(pid))
+            elif local:
                 cmd, stdin = [sys.executable, os.path.join(HERE, "inspect_linux.py"), str(pid), str(INSPECT_SECS)], None
             elif cfg.get("os") == "macos":
                 cmd, stdin = ["ssh"] + SSH_MARK + [cfg["ssh"], "python3 -"], mac_inspect_script(pid, INSPECT_SECS).encode()
             elif cfg.get("os") == "windows":
-                script = "$FleetPid=%d\n$FleetSecs=%s\n" % (pid, INSPECT_SECS) + ps_compact(open(os.path.join(HERE, "inspect_windows.ps1"), encoding="utf-8").read())
-                enc = base64.b64encode(script.encode("utf-16-le")).decode()
+                enc = base64.b64encode(windows_inspect_script(pid).encode("utf-16-le")).decode()
                 cmd, stdin = ["ssh"] + SSH_MARK + [cfg["ssh"], "powershell -NoProfile -NonInteractive -EncodedCommand " + enc], None
             else:
                 cmd = ["ssh"] + SSH_MARK + [cfg["ssh"], "python3 - %d %s" % (pid, INSPECT_SECS)]
-                stdin = open(os.path.join(HERE, "inspect_linux.py"), "rb").read()
+                with open(os.path.join(HERE, "inspect_linux.py"), "rb") as f:
+                    stdin = f.read()
             r = subprocess.run(cmd, input=stdin, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
             lines = [l for l in r.stdout.decode("utf-8", "replace").splitlines() if l.startswith("{")]
             if lines:
