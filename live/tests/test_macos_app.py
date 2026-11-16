@@ -81,7 +81,8 @@ class ServerStops(unittest.TestCase):
 @unittest.skipUnless(SWIFTC, "needs the Swift compiler (Xcode's command line tools) on a Mac")
 class Compiled(unittest.TestCase):
     def test_the_app_compiles(self):
-        r = subprocess.run([SWIFTC, "-typecheck", os.path.join(LIVE, "packaging", "macos", "FleetApp.swift")], capture_output=True, text=True)
+        # what a build compiles: FleetApp.swift (as main.swift) with TitleBar.swift (#203), typechecked by the build script
+        r = subprocess.run(["sh", os.path.join(LIVE, "packaging", "macos", "build_macos.sh"), "--check"], capture_output=True, text=True, timeout=300)
         self.assertEqual(r.returncode, 0, r.stderr[-2000:])
 
     def test_the_alert_shows_the_end_of_the_log(self):
