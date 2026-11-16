@@ -158,6 +158,40 @@ test('Import theme: a light theme without "type" is applied as light (colour sch
   } finally { await p.close(); }
 });
 
+// A stored theme comes from ui.json (edited by hand, or written through /api/prefs), not only from Import theme:
+// only well-formed colours get into the page's CSS, written out as plain hex, as if the rest weren't there.
+const BAD_THEME = {id: 'custom-bad', name: 'Bad', dark: 'yes', c: {chrome: '#fff;}body{display:none', ink: 'url(x)', win: ' #123\n',
+  card: '#12345', accent: 'red', 'accent-bg': '#1234567', run: '#33d17a; background:url(x)', side: 'expression(alert(1))',
+  'ink-3': ['#ffffff'], edge: {toString: '#000000'}, hover: 12, sel: '#3584e4 !important', warn: '#FFA66B', 't-vm': '\t#d95926 '}};
+const BAD_THEME_CLEAN = {c: {win: '#112233', warn: '#ffa66b', 't-vm': '#d95926'}};
+const HEX = /^#[0-9a-f]{6}([0-9a-f]{2})?$/;
+
+test('a stored theme with malformed colours: only well-formed ones get through, as plain hex', () => {
+  const tk = themeTokens(BAD_THEME);
+  assert.deepEqual(tk, themeTokens(BAD_THEME_CLEAN));
+  assert.deepEqual(Object.keys(tk.vars), plain(THEME_KEYS));
+  for (const [k, v] of Object.entries(tk.vars)) assert.match(v, HEX, k);
+  assert.deepEqual([tk.vars.win, tk.vars.warn, tk.vars['t-vm']], ['#112233', '#ffa66b', '#d95926']);
+});
+
+test('a stored theme with malformed colours: the page gets only plain hex, in its CSS and in the swatch', async () => {
+  const fx = fixture();
+  fx.fleet.prefs = {theme: 'custom-bad', themes: [BAD_THEME]};
+  const p = await open(fx);
+  try {
+    await p.waitFor(`document.documentElement.dataset.fleetTheme === 'custom-bad'`);
+    const want = themeTokens(BAD_THEME_CLEAN).vars;
+    // every token on <html>, exactly the clean theme's, and nothing else
+    assert.deepEqual(await p.eval(`(() => { const s = document.documentElement.style, o = {}; for (const k of s) if (k.startsWith('--')) o[k.slice(2)] = s.getPropertyValue(k).trim(); return o; })()`), want);
+    assert.equal(await p.eval(`getComputedStyle(document.body).display`), 'block');
+    assert.deepEqual(JSON.parse(await p.eval(`localStorage.getItem('fleet-theme')`)).vars, want);
+    await settings(p);
+    const styles = await p.eval(`[...document.querySelectorAll('[data-themeid="custom-bad"] [style]')].map(e => e.getAttribute('style'))`);
+    assert.deepEqual(styles, [want.chrome, want['accent-bg'], want.win, want.card, want.ink, want['ink-3'], want['t-base'], want['t-compose'], want['t-container'], want['t-vm']].map(v => 'background:' + v));
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
 test('Fleet is the default; Settings → Appearance picks a theme, applies it at once and saves it', async () => {
   const fx = fixture();
   const p = await open(fx);
