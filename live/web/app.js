@@ -1329,8 +1329,8 @@ document.addEventListener('click', e => {
   const lb = e.target.closest('[data-lookback]'); if (lb){ PREFS = Object.assign({}, PREFS, {cacheLookback:+lb.dataset.lookback}); lastMainHTML = ''; renderMain(); savePrefs('the cache lookback'); return; }
   const prow = e.target.closest('.ptbl tbody tr[data-pid]');
   if (prow && !e.target.closest('button, a, input, select, label')){
-    if (!/^\d+$/.test(prow.dataset.pid)){ toast('This process runs in Docker Desktop’s Linux VM, so Fleet can’t look inside it from macOS.'); return; }
-    toggleInspect(prow.closest('.ptbl').dataset.mid, +prow.dataset.pid, prow); return;
+    const k = prow.dataset.pid;   // a process in Docker Desktop's VM is keyed d:<container>:<pid>
+    toggleInspect(prow.closest('.ptbl').dataset.mid, /^\d+$/.test(k) ? +k : k, prow); return;
   }
   const tp = e.target.closest('[data-tpin]'); if (tp){ e.stopPropagation(); toggleTilePin(tp.dataset.tpin); return; }
   const ap = e.target.closest('[data-addpin]'); if (ap){ PICK.open ? closePicker(false) : openPicker(); return; }
@@ -2042,7 +2042,7 @@ function toggleInspect(mid, pid, row){
 }
 function closeInspect(){ if (!INSP.pid) return; Object.assign(INSP, {mid:null, pid:0, order:null, gorder:null, data:null, good:null, acc:{}, looks:0}); lastMainHTML = ''; renderMain(); }
 async function inspectTick(){
-  if (!INSP.pid || INSP.busy) return;
+  if (!INSP.pid || INSP.busy || typeof INSP.pid === 'string') return;   // Docker's VM: nothing to ask the server
   const mid = INSP.mid, pid = INSP.pid;
   INSP.busy = true;
   let d;
@@ -2103,6 +2103,7 @@ function cacheRows(cache){
 }
 function sinceText(t){ const s = Date.now() / 1000 - t; return s < 90 ? Math.round(s) + ' s ago' : s < 5400 ? Math.round(s / 60) + ' min ago' : s < 172800 ? Math.round(s / 3600) + ' h ago' : Math.round(s / 86400) + ' days ago'; }
 function inspectPanel(p){
+  if (typeof INSP.pid === 'string') return vmInspectPanel(p);
   const d = INSP.data, g = INSP.good, name = (g && g.name) || INSP.name || (p && p[1]) || '';
   const close = `<button type="button" class="iconbtn" data-inspclose="1" aria-label="Close" title="Close (Esc)">${icon('x', 2.2)}</button>`;
   const head = `<div class="insp-h"><div><b>${esc(name)}</b> <span class="mono">PID ${INSP.pid}</span>${g && g.cmdline ? `<div class="insp-cmd mono">${esc(g.cmdline)}</div>` : ''}</div>${close}</div>`;
@@ -2755,4 +2756,19 @@ function openChooseMachines(){
     }
   });
   const first = el.querySelector('[data-chm]'); if (first) first.focus();
+}
+
+// A process in Docker Desktop's Linux VM (#217): what Fleet knows of it from docker top. Looking inside the VM (what it
+// waits on, cache misses, files, sockets) would take a helper container or a command run in its container.
+function vmInspectPanel(p){
+  p = p || PROCS.list.find(x => x[0] === INSP.pid);
+  const close = `<button type="button" class="iconbtn" data-inspclose="1" aria-label="Close" title="Close (Esc)">${icon('x', 2.2)}</button>`;
+  if (!p) return `<div class="insp"><div class="insp-h"><div><b>${esc(INSP.name || 'This process')}</b></div>${close}</div>${noteHTML('<b>It has exited.</b>', 'warn')}</div>`;
+  const node = nodes[p[10]], STATE = {R:'running', S:'sleeping', D:'waiting on I/O', Z:'zombie', T:'stopped', t:'stopped', I:'idle'};
+  const head = `<div class="insp-h"><div><b>${esc(p[1])}</b> <span class="mono">PID ${pidNum(p[0])} in Docker’s VM</span><div class="insp-cmd mono">${esc(p[9])}</div></div>${close}</div>`;
+  const rows = [['Runs in', node ? esc(node.name) : '—'], ['User', esc(p[2])], ['State', esc(STATE[String(p[3])[0]] || p[3])], ['CPU now', fmt(p[4], 'cpu')],
+    ['Memory', fmt(p[5], 'mem')], ['Threads', String(p[8])], ['Parent PID', String(pidNum(p[11]))]];
+  return `<div class="insp">${head}<dl class="dl">${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl>`
+    + noteHTML('<b>Read with docker top, from outside Docker Desktop’s Linux VM,</b> which macOS can’t see into. What it waits on, its cache misses, files and sockets need a look from inside that VM.')
+    + (node && termOk(node) ? `<div class="state-actions">${termBtn(node)}</div>` : '') + `</div>`;
 }

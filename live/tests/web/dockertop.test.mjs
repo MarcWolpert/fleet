@@ -26,10 +26,18 @@ test('a container\'s processes from Docker\'s VM: listed under it, PID with a VM
     assert.ok(rows.includes('1') && rows.includes('d:abc123:1'), 'both PID 1s, apart');
     const pidCell = await p.eval(`document.querySelector('tr[data-pid="d:abc123:7"]').textContent.replace(/\\s+/g, ' ')`);
     assert.match(pidCell, /^node7 VM(web|$)/);   // name, then the VM's PID with its tag, then where it runs
+    // its drop-down opens with what Fleet knows from docker top, without asking the server to inspect a Mac PID (#217)
     await p.eval(`(document.querySelector('tr[data-pid="d:abc123:7"] td').click(), true)`);
-    await p.waitFor(`/Docker Desktop/.test((document.getElementById('toast') || {}).textContent || '')`);
-    assert.equal(await p.eval(`!!document.querySelector('tr.pinsp')`), false, 'no drop-down for a VM process');
-    assert.equal(await p.eval(`INSP.pid`), 0);
+    await p.waitFor(`document.querySelector('tr.pinsp')`);
+    const panel = await p.eval(`document.querySelector('tr.pinsp').textContent.replace(/\\s+/g, ' ')`);
+    assert.match(panel, /node PID 7 in Docker’s VM/);
+    assert.match(panel, /node server\.js/);
+    assert.match(panel, /Runs in\s*web/);
+    assert.match(panel, /Threads\s*1/);
+    assert.match(panel, /inside that VM/);
+    assert.deepEqual(fx.procCalls || [], [], 'no /api/proc for a VM process');
+    await p.eval(`(document.querySelector('tr[data-pid="d:abc123:7"] td').click(), true)`);
+    await p.waitFor(`!document.querySelector('tr.pinsp')`);
     // sorting by PID uses the number
     await p.eval(`(() => { const th = [...document.querySelectorAll('.ptbl thead th')].find(t => /PID/.test(t.textContent)); (th.querySelector('button') || th).click(); return true; })()`);
     await p.waitFor(`${ROWS}.length > 3`);
