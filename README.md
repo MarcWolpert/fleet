@@ -50,7 +50,9 @@ each with a live sparkline. Every machine's tile shows its OS at a glance. A sec
 network: tailnet, machines, interfaces and bridges, VMs and containers, with traffic on each.
 
 **Where the usage goes.** CPU, memory, GPU, disk I/O and network for any machine, group or all of them,
-split by Base system, Compose, containers and VMs, as a share of capacity or of what's in use.
+split by Base system, Compose, containers and VMs, as a share of capacity or of what's in use. Every card on
+a page folds to its title line from the chevron in its header (or a click on the header), and that kind of card
+stays folded on every page, through restarts, until you unfold it.
 
 **Hardware, up close.** Logical processors one graph each, grouped by CCD, P/E cores or Apple core
 clusters. Each GPU as a group of live tiles, like Task Manager: 3D, compute, copy, video encode and decode,

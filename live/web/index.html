@@ -123,6 +123,12 @@ main{flex:1;min-width:0;overflow:auto;background:var(--win)}
 .card-h h2{margin:0;font-size:14.5px;font-weight:600}
 .card-h .sub{font-size:12.5px;color:var(--ink-3)}
 .card-h .grow{flex:1}
+/* a card folded to its title line (#353): the chevron hangs left of the title, in the card's padding, so the
+   header lays out as it would without it (net width 0: 16px wide, margins -18px and -10px against the 12px gap) */
+.cfold{width:16px;height:16px;margin:0 -10px 0 -18px;border-radius:5px}
+.grid2>.card.folded{align-self:start}
+.card.folded>.card-h{margin-bottom:0}
+.card.folded>:not(.card-h),.card.folded .foldhide{display:none}
 .legend{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:12.5px;color:var(--ink-2);margin-bottom:6px}
 .legend span{display:inline-flex;align-items:center;gap:6px}
 .sw{width:10px;height:10px;border-radius:3px;display:inline-block;flex:none}
