@@ -98,7 +98,7 @@ inline, below the page.
 - **Split, kill, rename:** split the one you're on (⌘\\), kill it (⌘⌫ on its tab), rename it, drag a tab onto a
   terminal to split them there (⌘Z undoes it), and Ctrl+Tab between them. With more than one, a list on the right
   shows them all, split ones joined by tree lines: click one to go to it, double-click to rename, drag one onto
-  another to split them, hover to split or kill. **+ ∨** opens a new terminal on any connected computer, or splits
+  another to split them, hover to split or kill. **+ ∨** (or `terminal:` and a name in ⌘K) opens a new terminal on any connected computer, or splits
   the one you're on; **…** has the rest (clear, rename, kill, text size, templates, reset), and right-click works on
   a tab, a row of the list or the bar.
 - **Templates:** save the terminals you have open (which, on what, named what, split how) and launch them again
@@ -300,7 +300,7 @@ and `connect.json` (which machines connect when Fleet starts, and your saved set
 
 | Keys | Does |
 |---|---|
-| ⌘K | Go to anything: machines, VMs, projects, containers, jobs, groups (by name or kind), commands, themes (or click the Fleet logo at the top right) |
+| ⌘K | Go to anything: machines, VMs, projects, containers, jobs, groups (by name or kind), commands, themes (or click the Fleet logo at the top right). Type `terminal:` and a name to open a terminal on that machine, VM or container below the page |
 | ⌘F or `/` | Find in the panel you're in: filter the tree, find on the page, or filter Details |
 | ⌘[ ⌘] | Back, forward (also the ‹ › buttons and the mouse's side buttons) |
 | ⌘D, ⌘⇧D | Details on and off; dock it beside the overview |

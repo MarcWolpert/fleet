@@ -2604,9 +2604,11 @@ function gotoRank(q, name, rest){
   if (!words.every(w => hay.includes(w))) return -1;
   return nm.startsWith(q) ? 3 : nm.includes(q) ? 2 : words.every(w => nm.includes(w)) ? 1 : 0;
 }
+// terminal: before a name (any case) asks for what can have a terminal, as ⌘T and the terminals' + do (#412)
+const TERM_PREFIX = /^\s*terminal:\s*/i;
 function gotoItems(){
-  const q = GOTO.q.trim().toLowerCase();
-  if (GOTO.mode === 'term'){   // + on the terminals' bar (#338): just what can have a terminal; picking one opens it there
+  const tp = !GOTO.mode && TERM_PREFIX.test(GOTO.q), q = (tp ? GOTO.q.replace(TERM_PREFIX, '') : GOTO.q).trim().toLowerCase();
+  if (GOTO.mode === 'term' || tp){   // + on the terminals' bar (#338): just what can have a terminal; picking one opens it there
     const list = gotoNodes().filter(({n}) => termOk(n)).map(({n, path}) => ({n, path, label:n.name, kind:kindLabel(n), run:() => openInline(n.id)}));
     const rank = x => x.n.id === GOTO.first ? -1 : x.n.kind === 'machine' ? 0 : 1;
     if (!q) return list.sort((a, b) => rank(a) - rank(b)).slice(0, 60);
@@ -2641,7 +2643,7 @@ function openGoto(opts){
   if (PICK.open) closePicker(false);
   GOTO.q = ''; GOTO.i = 0; GOTO.mode = (opts && opts.mode) || ''; GOTO.first = (opts && opts.first) || '';
   const el = document.createElement('div'); el.id = 'goto'; el.className = 'sheet-bg goto-bg';
-  el.innerHTML = `<div class="goto" role="dialog" aria-modal="true" aria-label="${GOTO.mode === 'term' ? 'Open a terminal' : 'Go to'}"><div class="pick-h">${icon('search')}<input type="search" id="gotoq" role="combobox" aria-expanded="true" aria-controls="gotolist" aria-autocomplete="list" placeholder="${GOTO.mode === 'term' ? 'Open a terminal on a machine or container' : 'Go to a machine, VM, project, container or job, or type a command'}" autocomplete="off" spellcheck="false"></div><div class="picklist" id="gotolist" role="listbox"></div><div class="pick-f"><kbd>↑</kbd> <kbd>↓</kbd> to choose · <kbd>Enter</kbd> to go · <kbd>Esc</kbd> to close</div></div>`;
+  el.innerHTML = `<div class="goto" role="dialog" aria-modal="true" aria-label="${GOTO.mode === 'term' ? 'Open a terminal' : 'Go to'}"><div class="pick-h">${icon('search')}<input type="search" id="gotoq" role="combobox" aria-expanded="true" aria-controls="gotolist" aria-autocomplete="list" placeholder="${GOTO.mode === 'term' ? 'Open a terminal on a machine or container' : 'Go to a machine, VM, project, container or job, type a command, or terminal: and a name'}" autocomplete="off" spellcheck="false"></div><div class="picklist" id="gotolist" role="listbox"></div><div class="pick-f"><kbd>↑</kbd> <kbd>↓</kbd> to choose · <kbd>Enter</kbd> to go · <kbd>Esc</kbd> to close</div></div>`;
   el.addEventListener('click', e => {
     if (e.target === el){ closeGoto(); return; }
     const gp = e.target.closest('[data-gopin]'); if (gp){ e.stopPropagation(); gotoPin(gp.dataset.gopin); return; }
