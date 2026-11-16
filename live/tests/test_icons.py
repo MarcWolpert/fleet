@@ -116,8 +116,12 @@ class MakeIcons(unittest.TestCase):
                 self.assertEqual((r.returncode, r.stdout, r.stderr),
                                  (0, "icons: %s/png/fleet-{16..1024}.png and %s/Fleet.icns\n" % (icon, icon), ""))
                 files = tree(root)
-                self.assertEqual(sorted(files), sorted(["live/packaging/make_icons.sh", "live/packaging/icon/fleet.svg", "live/packaging/icon/Fleet.icns", "live/web/icon.svg"]
-                                                       + ["live/packaging/icon/png/fleet-%d.png" % s for s in SIZES]))
+                self.assertEqual(sorted(files), sorted(["live/packaging/make_icons.sh", "live/packaging/icon/fleet.svg", "live/packaging/icon/Fleet.icns", "live/web/icon.svg",
+                                                        "live/packaging/icon/png/SOURCE"] + ["live/packaging/icon/png/fleet-%d.png" % s for s in SIZES]))
+                # what they were drawn from: the drawing's hash, comments aside (test_packaging checks it against fleet.svg)
+                import hashlib, re
+                drawing = re.sub(r"<!--.*?-->", "", SVG.decode() if isinstance(SVG, bytes) else SVG, flags=re.S)
+                self.assertEqual(files["live/packaging/icon/png/SOURCE"].decode().strip(), hashlib.sha256(drawing.encode()).hexdigest())
                 self.assertEqual(files["live/web/icon.svg"], SVG)
                 self.assertEqual(files["live/packaging/icon/Fleet.icns"][:4], b"icns")
                 self.assertEqual({s: size(os.path.join(icon, "png", "fleet-%d.png" % s)) for s in SIZES}, {s: (s, s) for s in SIZES})

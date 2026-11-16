@@ -56,8 +56,12 @@ class Icon(unittest.TestCase):
         self.assertNotIn('fill="#fff"', svg)
         self.assertEqual(open(os.path.join(LIVE, "web", "icon.svg"), encoding="utf-8").read(), svg)
         for s in (16, 32, 48, 64, 128, 256, 512, 1024):
-            png = os.path.join(LIVE, "packaging", "icon", "png", "fleet-%d.png" % s)
-            self.assertGreaterEqual(os.path.getmtime(png), os.path.getmtime(os.path.join(LIVE, "packaging", "icon", "fleet.svg")) - 1, png)
+            self.assertTrue(os.path.exists(os.path.join(LIVE, "packaging", "icon", "png", "fleet-%d.png" % s)), s)
+        # the PNGs were drawn from this drawing (make_icons.sh writes its hash, comments aside; git keeps no file times)
+        import hashlib, re
+        with open(os.path.join(LIVE, "packaging", "icon", "png", "SOURCE")) as f:
+            self.assertEqual(f.read().strip(), hashlib.sha256(re.sub(r"<!--.*?-->", "", svg, flags=re.S).encode()).hexdigest(),
+                             "the drawing changed: run live/packaging/make_icons.sh")
 
     def test_the_icon_names_no_local_path(self):
         # the page serves web/icon.svg as its favicon, and fleet.svg ships in the packages: neither may say where on

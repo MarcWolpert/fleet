@@ -33,6 +33,8 @@ for s in 16 32 48 64 128 256 512; do
   sips -z $s $s "$WORK/fleet-1024.png" --out "$ICON/png/fleet-$s.png" >/dev/null
 done
 cp "$WORK/fleet-1024.png" "$ICON/png/fleet-1024.png"
+# what they were drawn from: the drawing's hash (comments aside), which test_packaging checks; file times don't survive git
+python3 -c 'import hashlib, re, sys; print(hashlib.sha256(re.sub(r"<!--.*?-->", "", open(sys.argv[1], encoding="utf-8").read(), flags=re.S).encode()).hexdigest())' "$ICON/fleet.svg" > "$ICON/png/SOURCE"
 
 SET="$WORK/Fleet.iconset"; mkdir -p "$SET"
 for s in 16 32 128 256 512; do
