@@ -311,17 +311,26 @@ function closePicker(refocus){
   const btn = document.querySelector('[data-addpin]');
   if (btn){ btn.setAttribute('aria-expanded', 'false'); if (refocus) btn.focus(); }
 }
+// Fleet.app's title bar: the band (what's visible of the bar; none once a narrow window has scrolled it away)
+// and where its pills and buttons are. Sent again whenever they move: a render, a resize, a poll's new numbers,
+// the pills scrolled sideways, the page scrolled (#188); only what changed goes out.
+let dragSent = '';
 function reportDragRegions(){
   const h = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.fleet;
   if (!h) return;
   const bar = document.querySelector('.spacebar'); if (!bar) return;
   const regions = [...bar.querySelectorAll('button, .space, input, a')].map(e => { const r = e.getBoundingClientRect(); return [r.left, r.top, r.width, r.height]; });
-  h.postMessage({band:bar.getBoundingClientRect().bottom, regions});
+  const band = Math.max(0, bar.getBoundingClientRect().bottom), msg = JSON.stringify([band, regions]);
+  if (msg === dragSent) return;
+  dragSent = msg;
+  h.postMessage({band, regions});
 }
 addEventListener('resize', () => setTimeout(reportDragRegions, 50));
+addEventListener('scroll', e => { if (e.target === document || (e.target.closest && e.target.closest('.spacebar'))) reportDragRegions(); }, {capture:true, passive:true});
 function updateSpaces(){
   document.querySelectorAll('[data-mini]').forEach(e => { if (e.dataset.mini === 'fleet' || nodes[e.dataset.mini]) e.innerHTML = miniBar(e.dataset.mini); });
   document.querySelectorAll('[data-pc]').forEach(e => { if (e.dataset.pc === 'fleet' || nodes[e.dataset.pc]) e.textContent = pillPct(e.dataset.pc); });
+  reportDragRegions();
 }
 
 /* ---------- toolbar ---------- */
