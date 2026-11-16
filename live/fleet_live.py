@@ -493,9 +493,9 @@ class Machine:
             g = gpu_by_pid.get(pid, 0.0)
             if cid and pid in pid_gpu:
                 cont_gk.setdefault(cid, set()).update("gpu%d" % i for i, v in pid_gpu[pid].items() if v > 0)
-            pn = pnet.get(str(pid)) or {}
+            pn = pnet.get(str(pid)) or {}  # a process the collector doesn't list has moved nothing (b counts from 0)
             row = [pid, ppid, comm, user, state, c, rss / GB, d, g, threads, cmd, "", lastcpu, sorted(pid_gpu.get(pid, {})), list(pdisks.get(str(pid), [])),
-                   list(pn.get("ifs", [])), self.rate("pn.%d" % pid, pn.get("b", 0), t) / MB if pn else 0.0]
+                   list(pn.get("ifs", [])), self.rate("pn.%d" % pid, pn.get("b", 0), t) / MB]
             procs.append(row)
             by_pid[pid] = row
             u = [c, rss / GB, g, d, 0.0]
@@ -531,20 +531,39 @@ class Machine:
             seen.add(k)
             jobs.append({"name": job_name(c["cmd"]), "sched": c["sched"], "human": human_cron(c["sched"]), "cmd": c["cmd"],
                          "src": c["src"], "last": "", "running": False, "u": [0.0] * 5})
-        cron_daemons = {p[0] for p in r["procs"] if p[2] in ("cron", "crond")}
+        # The host's cron; a container's own cron runs the container's jobs, which are its usage already.
+        cron_daemons = {p[0] for p in r["procs"] if p[2] in ("cron", "crond") and not p[9]}
+
+        job_at = {}
+
+        def job_of(row):
+            """The job a process cron started runs (by its command), for that process and everything under
+            it, however deep: cron's own per-job child (named cron too) is cron's, Base."""
+            chain, pid = [], row[0]
+            while pid in by_pid and pid not in cron_daemons and pid not in job_at and len(chain) < 64:
+                chain.append(pid)
+                pid = by_pid[pid][1]
+            if pid in job_at:
+                ji = job_at[pid]
+            elif chain and pid in cron_daemons:
+                ji = cron_job(jobs, by_pid[chain[-1]][10])  # chain[-1] is the process cron started
+            else:
+                ji = None
+            for q in chain:
+                job_at[q] = ji
+            return ji
         for row in procs:
-            if row[1] in cron_daemons or by_pid.get(row[1], [0, 0])[1] in cron_daemons:
-                j = match_job(jobs, row[2], row[10])
-                if j is not None:
-                    j["running"] = True
-                    for i, v in enumerate((row[5], row[6], row[8], row[7])):
-                        j["u"][(0, 1, 2, 3)[i]] += v
-                    row[11] = "job:%d" % jobs.index(j)
+            ji = job_of(row)
+            if ji is not None:
+                j = jobs[ji]
+                j["running"] = True
+                for i, v in enumerate((row[5], row[6], row[8], row[7])):
+                    j["u"][(0, 1, 2, 3)[i]] += v
+                row[11] = "job:%d" % ji
         for tm in r.get("timers", []):
             u = unit_u.get(tm["unit"], [0.0] * 5)
-            line = tm["line"].split()
             jobs.append({"name": tm["timer"].replace(".timer", ""), "sched": "systemd timer", "human": "timer",
-                         "cmd": tm["unit"], "src": "systemd", "last": " ".join(line[-6:-4]) if len(line) > 6 else "",
+                         "cmd": tm["unit"], "src": "systemd", "last": timer_last(tm["line"]),
                          "running": tm["unit"] in unit_u, "u": u})
         gpu_total = sum(g["util"] for g in gpus)
         for c in containers:
@@ -577,13 +596,17 @@ class Machine:
             if row[0] in r_vm:
                 row[15] = sorted(set(row[15]) | set(vm_ifs.get(r_vm[row[0]], [])))
         owner = {}
+        timer_of = {}  # a timer's service -> its job, the node /api/procs puts the service's processes under
+        for i, j in enumerate(jobs):
+            if j["src"] == "systemd":
+                timer_of.setdefault(j["cmd"], i)
         for p in r["procs"]:
             if p[9]:
                 owner[p[0]] = "c:" + p[9]
             elif p[10]:
                 owner[p[0]] = "vm:" + p[10]
-            elif p[11] and any(j["cmd"] == p[11] for j in jobs):
-                owner[p[0]] = "unit:" + p[11]
+            elif p[11] in timer_of:
+                owner[p[0]] = "job:%d" % timer_of[p[11]]
         for row in procs:
             if not row[11]:
                 row[11] = owner.get(row[0], "base")
@@ -869,19 +892,69 @@ def aslist(x):
     return x if isinstance(x, list) else [x]
 
 
+JOB_GUARDS = ("cd", "test", "[", "[[", "command", "true", ":", "fi", "done", "}", ")")
+# Wrappers of a job's command, with their options that take a value; flock and timeout take one argument
+# (the lock file, the duration) before the command.
+JOB_WRAPPERS = {"run-parts": (), "nice": ("-n",), "ionice": ("-c", "-n", "-p"), "env": ("-u",), "sudo": ("-u", "-g"), "nohup": (),
+                "flock": ("-w", "-E"), "timeout": ("-s", "-k"), "php": (), "python3": (), "python": (), "sh": (), "bash": ()}
+JOB_ARGS = {"flock": 1, "timeout": 1}
+
+
 def job_name(cmd):
-    toks = [x for x in re.split(r"\s+", cmd) if x and not x.startswith("-") and x not in ("cd", "&&", "test", "-x", "||", "{", "}", "/", "sh", "bash", "-c")]
-    for tok in toks:
-        b = os.path.basename(tok.strip("'\";"))
-        if b and b not in ("run-parts", "nice", "ionice", "env", "flock", "timeout", "sudo", "php", "python3", "python"):
-            return b[:48]
-    return (toks[0] if toks else cmd)[:48]
+    """A short name for a cron job: what it runs (run-parts: the directory), past a guard (test -x X ||,
+    [ -x X ] &&, command -v X &&), cd, variable assignments, and wrappers with their own arguments."""
+    for part in re.split(r"&&|\|\||;", cmd):
+        words = [w.strip("'\";") for w in part.split()]
+        while words and words[0] in ("{", "(", "if", "then", "else", "do", "!", "exec"):
+            words.pop(0)
+        if not words or words[0] in JOB_GUARDS:
+            continue
+        opts, args, i = (), 0, 0
+        while i < len(words):
+            w = words[i]
+            i += 1
+            if w.startswith("-"):
+                i += w in opts  # its value
+            elif re.match(r"[A-Za-z_]\w*=", w):
+                continue
+            elif args:
+                args -= 1
+            elif os.path.basename(w) in JOB_WRAPPERS:
+                opts, args = JOB_WRAPPERS[os.path.basename(w)], JOB_ARGS.get(os.path.basename(w), 0)
+            elif os.path.basename(w):
+                return os.path.basename(w)[:48]
+    return (cmd.split() or [cmd])[0][:48]
 
 
-def match_job(jobs, comm, cmd):
-    for j in jobs:
-        if comm and (comm in j["cmd"] or (cmd and cmd.split()[0] in j["cmd"])):
-            return j
+TIMER_LINE = re.compile(r"(?:\w{3} \S+ \S+ \S+|-|n/a) (?:-|n/a|.+? (?:left|ago)) (?:\w{3} (\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}):\d{2} \S+|-|n/a)(?: |$)")
+
+
+def timer_last(line):
+    """When a timer last ran, from its `systemctl list-timers` line (NEXT LEFT LAST PASSED; LEFT and PASSED
+    take any number of words, a time never reached is "-" or "n/a"), as Windows tasks show it
+    (2026-11-15 14:47), or "" if it never ran."""
+    m = TIMER_LINE.match(" ".join(line.split()))
+    return "%s %s" % m.groups() if m and m.group(1) else ""
+
+
+SHELLS = ("sh", "bash", "dash", "ash", "zsh", "ksh", "mksh", "busybox")
+
+
+def cron_job(jobs, cmd):
+    """Index of the crontab job a process cron started runs, from its command line (cmd), or None. Cron
+    hands the job's line (up to an unescaped %, with \\% as %) to `sh -c`; a shell may exec a lone command
+    in its place, and a script then runs as `<interpreter> <script>`."""
+    words = cmd.split()
+    shell = len(words) > 2 and os.path.basename(words[0]) in SHELLS and words[1] == "-c"
+    got = " ".join(words[2:] if shell else words)
+    cut = len(cmd) >= 300  # the collector keeps 300 characters of a command line
+    for exact in (True, False):
+        for i, j in enumerate(jobs):
+            line = " ".join(re.split(r"(?<!\\)%", j["cmd"])[0].replace("\\%", "%").split())
+            if not line:
+                continue
+            if got == line or (cut and line.startswith(got)) or (not exact and not shell and got.endswith(" " + line)):
+                return i
     return None
 
 

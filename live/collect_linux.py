@@ -404,11 +404,17 @@ def disk_info(procs, containers):
 
 
 # ---- Network: which interface each process talks through, and its TCP bytes (from ss -ti) ----
-CONNS, PNET_B = {}, {}  # each connection's bytes at the last reading; each process's TCP bytes, added up over readings
+# Each connection's bytes at the last reading ss answered, and each process's TCP bytes, added up over readings.
+NET = {"conns": {}, "pids": {}}
 OWNERS, NETSCAN = {}, {"n": 0, "cost": 0.0}  # each connection's processes, from the last ss -p
 
 
-def net_users(ifaddr):
+def net_users(ifaddr, procs):
+    """Each process's interfaces and its TCP bytes so far, a counter that only grows: ss knows the bytes of
+    connections still open, so each one's growth since the last reading is added to its processes (what's open
+    at the first reading counts once, as the baseline; a new connection counts in full, one that closed keeps
+    what it moved). A live process keeps its count, with no interfaces while nothing is open; the count goes
+    when the process does."""
     # ss -p finds each socket's process by reading every open file of every process: only as often as it's cheap
     NETSCAN["n"] += 1
     walk = NETSCAN["cost"] < 0.15 or NETSCAN["n"] % 10 == 1
@@ -417,7 +423,8 @@ def net_users(ifaddr):
     if walk:
         NETSCAN["cost"] = time.time() - began
         OWNERS.clear()
-    users, cur, seen = {}, None, {}
+    prev, conns, total = NET["conns"], {}, NET["pids"]
+    users, cur, key = {}, None, ""
     for line in text.splitlines():
         if line[:1] not in (" ", "\t"):
             addrs = [x for x in line.split() if ":" in x and not x.startswith("users:")]
@@ -434,7 +441,7 @@ def net_users(ifaddr):
                 pids = OWNERS.get(key, [])
             cur = pids
             for pid in pids:
-                u = users.setdefault(pid, {"ifs": [], "b": PNET_B.get(pid, 0)})
+                u = users.setdefault(pid, {"ifs": [], "b": 0})
                 if ifn and ifn not in u["ifs"]:
                     u["ifs"].append(ifn)
         elif cur:
@@ -443,15 +450,18 @@ def net_users(ifaddr):
             b = (int(sent.group(1)) if sent else 0) + (int(got.group(1)) if got else 0)
             # Add what this connection moved since the last reading (all of it if it's new), so a process's total only
             # grows: a connection that closes doesn't take its bytes back out, and Fleet Live can diff it as a counter.
-            prev, seen[key] = CONNS.get(key, 0), b
+            conns[key] = b
+            grew = b - prev[key] if key in prev and b >= prev[key] else b
             for pid in cur:
-                PNET_B[pid] = users[pid]["b"] = PNET_B.get(pid, 0) + (b - prev if b >= prev else b)
+                total[pid] = total.get(pid, 0) + grew
             cur = None
-    CONNS.clear()
-    CONNS.update(seen)
-    if len(PNET_B) > 20000:
-        for pid in [p for p in PNET_B if p not in users and not os.path.isdir(ROOT + "/proc/" + p)]:
-            del PNET_B[pid]
+    if text.strip():  # no output: ss failed (or nothing is open), and the last baseline still holds
+        NET["conns"] = conns
+    live = {str(p[0]) for p in procs}
+    for pid in [pid for pid in total if pid not in live and pid not in users]:
+        del total[pid]
+    for pid, b in total.items():
+        users.setdefault(pid, {"ifs": [], "b": 0})["b"] = b
     return users
 
 
@@ -680,7 +690,7 @@ def snapshot():
     containers = docker_containers(first_pid_of, started)
     out["containers"] = containers
     try:
-        out["pnet"] = net_users(ifaddr)
+        out["pnet"] = net_users(ifaddr, procs)
     except Exception:
         out["pnet"] = {}
     try:
