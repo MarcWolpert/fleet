@@ -20,6 +20,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 H = 60
 METRICS = ("cpu", "mem", "gpu", "disk", "net")
 CONFIG_PATH = os.path.expanduser("~/.config/fleet/machines.toml")
+LAST_CLIENT = [0.0]   # when a Fleet window last asked for data
 
 
 # ---------------------------------------------------------------- history
@@ -1131,6 +1132,120 @@ class Fleet:
     def find_machine(self, mid):
         return self.machines.get(mid)
 
+    def api_procs(self, mid):
+        m = self.machines.get(mid)
+        if not m:
+            return {"procs": []}
+        with m.lock:
+            view = m.view
+        with self.lock:
+            spec = find_spec(self.specs, mid)
+        if not view or not spec:
+            return {"procs": []}
+        own = spec.get("procs_owner", {"cont": {}, "vm": {}})
+        out = []
+        for p in view["procs"]:
+            o = p[11]
+            if o.startswith("c:"):
+                node = own["cont"].get(o[2:], mid + "/base")
+            elif o.startswith("vm:"):
+                node = own["vm"].get(o[3:], mid + "/base")
+            elif o.startswith("job:"):
+                node = "%s/base/cron/%s" % (mid, o[4:])
+            elif o == "dockervm":
+                node = mid + "/base"
+            else:
+                node = mid + "/base"
+            out.append([p[0], p[2], p[3], p[4], round(p[5], 4), round(p[6], 5), round(p[7], 4), round(p[8], 2), p[9], p[10], node, p[1],
+                        p[12] if len(p) > 12 else -1, p[13] if len(p) > 13 else [], p[14] if len(p) > 14 else [],
+                        p[15] if len(p) > 15 else [], round(p[16], 4) if len(p) > 16 else -1])
+        # p[13]: the GPUs the process uses (positions in this machine's gpus); gpu_procs says whether the
+        # host reports that at all (macOS doesn't), so an empty p[13] isn't taken for "on no GPU".
+        return {"procs": out, "t": view["t"], "gpu_procs": bool(view.get("gpu_procs"))}
+
+    def api_cpus(self, mid):
+        m = self.machines.get(mid)
+        if not m:
+            return {}
+        with m.lock:
+            view = m.view
+        if not view:
+            return {}
+        return {"model": view.get("cpu_model", ""), "groups": view.get("groups", []),
+                "cpus": [{"n": c["n"], "mhz": c.get("mhz", 0), "core": c.get("core", ""), "pct": c["pct"],
+                          "h": HIST.get("%s/__cpu/%d" % (mid, c["n"]), 1)[0]} for c in view.get("lcpus", [])]}
+
+    def api_ifs(self, mid):
+        m = self.machines.get(mid)
+        if not m:
+            return {"ifs": []}
+        with m.lock:
+            view = m.view
+        if not view:
+            return {"ifs": []}
+        vms = {}
+        for v in view.get("vms", []):
+            for i in v.get("ifs", []):
+                vms[i["if"]] = v["name"]
+        nets = {("docker0" if n["name"] == "bridge" else "br-" + n.get("id", "")[:12]): n["name"] for n in view.get("dockernets", []) if n.get("driver") == "bridge"}
+        nets.update({n["name"]: n["name"] for n in view.get("dockernets", []) if n.get("driver") in ("macvlan", "ipvlan")})
+        out = []
+        for x in view.get("ifs", []):
+            if x["kind"] == "loopback" or x["name"].startswith("veth") or x["name"] == "lo":
+                continue
+            hrx, htx = HIST.get("%s/__if/%s" % (mid, x["name"]), 2)
+            members = [y["name"] for y in view.get("ifs", []) if y.get("master") == x["name"]]
+            out.append(dict(x, hrx=hrx, htx=htx, vm=vms.get(x["name"], ""), dnet=nets.get(x["name"], ""),
+                            members=len([y for y in members if not y.startswith("veth")]), containers=len([y for y in members if y.startswith("veth")])))
+        return {"ifs": out, "per_process": True}
+
+    def api_disks(self, mid):
+        m = self.machines.get(mid)
+        if not m:
+            return {"disks": []}
+        with m.lock:
+            view = m.view
+        out = []
+        for d in (view or {}).get("disks", []):
+            hr, hw = HIST.get("%s/__disk/%s" % (mid, d["name"]), 2)
+            out.append(dict(d, hr=hr, hw=hw))
+        return {"disks": out, "per_process": bool(view and view.get("os", "").split(" ")[0] not in ("macOS", "Microsoft", "Windows"))}
+
+    def api_net(self):
+        ts = {}
+        try:
+            st = json.loads(run([tailscale_bin(), "status", "--json"], timeout=6) or "{}")
+            for p in list((st.get("Peer") or {}).values()) + [st.get("Self") or {}]:
+                if p:
+                    ts[p.get("HostName", "").lower()] = {"ip": (p.get("TailscaleIPs") or [""])[0], "online": p.get("Online", True),
+                                                         "os": p.get("OS", ""), "rx": p.get("RxBytes", 0), "tx": p.get("TxBytes", 0),
+                                                         "relay": p.get("Relay", ""), "direct": bool(p.get("CurAddr"))}
+            tailnet = (st.get("MagicDNSSuffix") or "tailnet").rstrip(".")
+        except Exception:
+            tailnet = "tailnet"
+        machines = []
+        for m in self.machines.values():
+            with m.lock:
+                view, status, error = m.view, m.status, m.error
+            key = m.cfg.get("tailscale", m.cfg.get("ssh", m.name)).split("@")[-1].split(".")[0].lower()
+            tsinfo = ts.get(key) or next((v for k, v in ts.items() if v["ip"] and v["ip"] in m.cfg.get("ssh", "")), None)
+            if m.cfg.get("kind") == "local" and not tsinfo:
+                tsinfo = next((v for k, v in ts.items() if k == platform.node().split(".")[0].lower()), None)
+            ifs = []
+            if view:
+                for x in view.get("ifs", []):
+                    hrx, htx = HIST.get("%s/__if/%s" % (m.id, x["name"]), 2)
+                    ifs.append(dict(x, hrx=hrx, htx=htx))
+            conts = []
+            if view:
+                for c in view.get("containers", []):
+                    conts.append({"name": c["name"], "networks": c.get("networks", ""), "net": c["u"][4]})
+            vms = [{"name": v["name"], "ifs": v.get("ifs", []), "net": v["u"][4]} for v in (view or {}).get("vms", [])]
+            machines.append({"id": m.id, "name": m.name, "status": status, "error": error, "vm_on": m.cfg.get("vm_on", ""),
+                             "tailscale": tsinfo, "ifs": ifs, "containers": conts, "vms": vms,
+                             "dockernets": (view or {}).get("dockernets", [])})
+        return {"tailnet": tailnet, "machines": machines, "window_s": self.interval * H}
+
 
 # ---------------------------------------------------------------- state that survives restarts
 STATE_PATH = os.path.expanduser("~/.cache/fleet-live/state.json")
@@ -1172,6 +1287,25 @@ def load_state(fleet):
             HIST.d[k] = [collections.deque(q[-H:], maxlen=H) for q in qs]
 
 
+def restart_self(fleet, reason):
+    print("%s; restarting" % reason, flush=True)
+    save_state(fleet)
+    stop_collectors(fleet)
+    args = [x for x in sys.argv[1:] if x not in ("--open", "--open-if-unseen")] + ["--open-if-unseen"]
+    os.execv(sys.executable, [sys.executable, os.path.abspath(__file__)] + args)
+
+
+def find_spec(specs, mid):
+    for s in specs.values():
+        stack = [s]
+        while stack:
+            x = stack.pop()
+            if x.get("id") == mid:
+                return x
+            stack.extend(x.get("vms", []))
+    return None
+
+
 def strip_procs(spec):
     s = {k: v for k, v in spec.items() if k not in ("procs", "procs_owner")}
     s["vms"] = [strip_procs(v) for v in spec.get("vms", [])]
@@ -1185,3 +1319,163 @@ def fmt_uptime(secs):
     if secs >= 3600:
         return "%d h" % (secs // 3600)
     return "%d min" % (secs // 60)
+
+
+def tailscale_bin():
+    for p in ("tailscale", "/Applications/Tailscale.app/Contents/MacOS/Tailscale", r"C:\Program Files\Tailscale\tailscale.exe"):
+        if shutil.which(p) or os.path.exists(p):
+            return p
+    return "tailscale"
+
+
+# ---------------------------------------------------------------- HTTP
+class Handler(http.server.SimpleHTTPRequestHandler):
+    fleet = None
+
+    def __init__(self, *a, **kw):
+        super().__init__(*a, directory=os.path.join(HERE, "web"), **kw)
+
+    def log_message(self, *a):
+        pass
+
+    def end_headers(self):
+        self.send_header("Cache-Control", "no-store")
+        super().end_headers()
+
+    def send_json(self, obj):
+        body = json.dumps(obj, separators=(",", ":")).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def allowed(self, write=False):
+        """Only this computer's own Fleet window: right Host (no DNS rebinding), and for writes the right
+        Origin plus a custom header (a cross-site form or fetch can't send it without a preflight)."""
+        port = self.server.server_address[1]
+        hosts = {"127.0.0.1:%d" % port, "localhost:%d" % port}
+        if self.headers.get("Host", "") not in hosts:
+            return False
+        if write:
+            origin = self.headers.get("Origin")
+            if origin and origin not in {"http://" + h for h in hosts}:
+                return False
+            if self.headers.get("X-Fleet") != "1":
+                return False
+        return True
+
+    def do_GET(self):
+        if not self.allowed():
+            self.send_error(403)
+            return
+        u = urllib.parse.urlparse(self.path)
+        q = urllib.parse.parse_qs(u.query)
+        if u.path == "/api/fleet":
+            LAST_CLIENT[0] = time.time()
+            return self.send_json(self.fleet.api_fleet())
+        if u.path == "/api/procs":
+            return self.send_json(self.fleet.api_procs(q.get("machine", [""])[0]))
+        if u.path == "/api/cpus":
+            return self.send_json(self.fleet.api_cpus(q.get("machine", [""])[0]))
+        if u.path == "/api/net":
+            return self.send_json(self.fleet.api_net())
+        if u.path == "/api/ifs":
+            return self.send_json(self.fleet.api_ifs(q.get("machine", [""])[0]))
+        if u.path == "/api/disks":
+            return self.send_json(self.fleet.api_disks(q.get("machine", [""])[0]))
+        return super().do_GET()
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Fleet Live: every machine you manage, live. Read-only.")
+    ap.add_argument("--port", type=int, default=4518)
+    ap.add_argument("--config", default=CONFIG_PATH)
+    ap.add_argument("--open", action="store_true", help="open the UI in an app window")
+    ap.add_argument("--open-if-unseen", action="store_true", help="open the app window only if no Fleet window connects within a few seconds")
+    ap.add_argument("--no-watch", action="store_true", help="don't restart or reopen the window when Fleet's own files change")
+    a = ap.parse_args()
+    if not os.path.exists(a.config):
+        os.makedirs(os.path.dirname(a.config), exist_ok=True)
+        shutil.copy(os.path.join(HERE, "machines.example.toml"), a.config)
+        print("wrote a starter config to %s; edit it to list your machines" % a.config)
+    with open(a.config, "rb") as f:
+        cfg = tomllib.load(f)
+    cfg["__path"] = a.config
+    n = reap_leftover_collectors()
+    if n:
+        print("stopped %d leftover collector session(s) from an earlier run" % n, flush=True)
+    Handler.fleet = Fleet(cfg)
+    import signal
+    def bye(*_):
+        save_state(Handler.fleet)
+        stop_collectors(Handler.fleet)
+        os._exit(0)
+    signal.signal(signal.SIGTERM, bye)
+    signal.signal(signal.SIGINT, bye)
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", a.port), Handler)
+    url = "http://127.0.0.1:%d/" % a.port
+    print("Fleet Live on %s" % url, flush=True)
+    if a.open:
+        open_app_window(url)
+    elif a.open_if_unseen:
+        threading.Thread(target=reopen_if_unseen, args=(url, time.time()), daemon=True).start()
+    if not a.no_watch:
+        threading.Thread(target=watch_own_files, args=(url,), daemon=True, name="fleet-watch").start()
+    srv.serve_forever()
+
+
+def reopen_if_unseen(url, since, wait=8.0):
+    """Open the app window unless a Fleet window has polled since `since` (the page polls every 2 s)."""
+    time.sleep(wait)
+    if LAST_CLIENT[0] < since:
+        open_app_window(url)
+
+
+def watch_own_files(url):
+    """Fleet updates itself: server or collector changes restart the server (the page reconnects);
+    UI changes reload the open page on their own. Either way, a closed window is reopened."""
+    server_files = [os.path.join(HERE, f) for f in ("fleet_live.py", "collect_linux.py", "collect_windows.ps1")]
+    ui_files = [os.path.join(HERE, "web", f) for f in ("index.html", "app.js", "themes.js")]
+    def stamp(files):
+        out = []
+        for f in files:
+            try:
+                out.append(os.stat(f).st_mtime_ns)
+            except OSError:
+                out.append(0)
+        return out
+    srv, ui = stamp(server_files), stamp(ui_files)
+    while True:
+        time.sleep(1.0)
+        s2, u2 = stamp(server_files), stamp(ui_files)
+        if s2 != srv:
+            time.sleep(0.5)  # let an editor finish writing
+            try:
+                compile(open(server_files[0], encoding="utf-8").read(), server_files[0], "exec")
+            except SyntaxError as e:
+                print("not restarting: %s" % e, flush=True)
+                srv = s2
+                continue
+            restart_self(Handler.fleet, "Fleet changed")
+        if u2 != ui:
+            ui = u2
+            threading.Thread(target=reopen_if_unseen, args=(url, time.time()), daemon=True).start()
+
+
+def open_app_window(url):
+    """A chromeless app window when Chrome or Edge is installed, else the default browser."""
+    cands = ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+             "google-chrome", "chromium", "microsoft-edge", r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+             r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"]
+    for c in cands:
+        if os.path.exists(c) or shutil.which(c):
+            prof = os.path.join(os.path.expanduser("~"), ".cache", "fleet-live", "browser")
+            extra = ["--class=fleet-live"] if platform.system() == "Linux" else []  # groups the window under fleet.desktop
+            subprocess.Popen([c, "--app=" + url, "--user-data-dir=" + prof, "--window-size=1500,950"] + extra, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return
+    webbrowser.open(url)
+
+
+if __name__ == "__main__":
+    main()

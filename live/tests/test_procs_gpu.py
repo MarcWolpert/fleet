@@ -44,6 +44,16 @@ def on(p, i=13):
     return p[i] if len(p) > i else "missing"
 
 
+def api_procs(view):
+    """/api/procs for one machine holding `view`."""
+    m = fleet_live.Machine({"id": "m1", "name": "m1"}, 3)
+    m.view = view
+    f = fleet_live.Fleet.__new__(fleet_live.Fleet)
+    f.machines, f.lock = {"m1": m}, threading.Lock()
+    f.specs = {"m1": {"id": "m1", "procs_owner": {"cont": {}, "vm": {}}, "vms": []}}
+    return f.api_procs("m1")
+
+
 class LinuxGpusPerProcess(unittest.TestCase):
     def derive(self, gpus, gproc):
         return fleet_live.Machine({"id": "lx", "name": "lx"}, 3).derive_linux(linux_reading(gpus, gproc))
@@ -75,6 +85,22 @@ class WindowsGpusPerProcess(unittest.TestCase):
         self.assertEqual({pid: on(p) for pid, p in by_pid(v).items()}, {10: [0], 11: [1], 12: [0, 1], 13: [], 14: []})
         self.assertEqual({pid: p[8] for pid, p in by_pid(v).items()}, {10: 50.0, 11: 0.0, 12: 3.0, 13: 0.0, 14: 0.0}, "GPU % unchanged")
         self.assertIs(v.get("gpu_procs"), True)
+
+
+class ApiProcs(unittest.TestCase):
+    def test_rows_carry_the_gpus_and_the_flag(self):
+        v = fleet_live.Machine({"id": "lx", "name": "lx"}, 3).derive_linux(linux_reading([nv(0, "RTX A4000")], [[0, 104, 40.0], [0, 109, 0.0]]))
+        out = api_procs(v)
+        self.assertIs(out.get("gpu_procs"), True)
+        self.assertEqual({p[0]: (p[12], on(p)) for p in out["procs"]}, {104: (2, [0]), 105: (3, []), 106: (1, []), 109: (0, [0]), 110: (3, [])})
+        self.assertEqual({len(p) for p in out["procs"]}, {17}, "p[14] disks, p[15] interfaces and p[16] network follow p[13]")
+
+    def test_a_host_that_reports_no_gpus_per_process_says_so(self):
+        # macOS readings (derive_generic) have 13-field rows and no flag.
+        row = [500, 1, "WindowServer", "_windowserver", "S", 0.3, 0.2, 0.0, 0.0, 12, "/System/WindowServer", "base", -1]
+        out = api_procs({"t": 1000.0, "gpus": [{"name": "Apple M5 GPU"}], "procs": [row]})
+        self.assertIs(out.get("gpu_procs"), False)
+        self.assertEqual([on(p) for p in out["procs"]], [[]])
 
 
 if __name__ == "__main__":
