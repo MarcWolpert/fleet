@@ -1219,7 +1219,9 @@ function detailsView(n, docked){
   let body = '', shown = 0, more = '';
   const isInsp = p => INSP.pid === p[0] && INSP.mid === mid;
   let inspShown = false;
-  const rowHTML = p => `<tr data-pid="${esc(p[0])}" aria-expanded="${isInsp(p)}" class="drow${isInsp(p) ? ' open' : ''}">${COLS.map(c => `<td class="${c.l ? 'l' : ''} ${c.cls || ''}">${c.show(p)}</td>`).join('')}</tr>`  // data-pid: columns can move or hide
+  // a column with a width of its own (#334) is that wide whatever its cells hold; the rest size to their content
+  const CW = colWidths(), cellW = c => CW[c.k] ? ` style="max-width:${CW[c.k]}px"` : '';
+  const rowHTML = p => `<tr data-pid="${esc(p[0])}" aria-expanded="${isInsp(p)}" class="drow${isInsp(p) ? ' open' : ''}">${COLS.map(c => `<td class="${c.l ? 'l' : ''} ${c.cls || ''}${CW[c.k] ? ' fw' : ''}"${cellW(c)}>${c.show(p)}</td>`).join('')}</tr>`  // data-pid: columns can move or hide
     + (isInsp(p) ? (inspShown = true, `<tr class="pinsp" data-row="insp:${esc(p[0])}"><td colspan="${COLS.length}">${inspectPanel(p)}</td></tr>`) : '');
   if (groupBy){
     // Groups start collapsed, each header a summary; open ones are remembered per Group-by mode (S.groupOpen)
@@ -1261,13 +1263,15 @@ function detailsView(n, docked){
     ? `<div class="dhead"><div class="dtitle"><b>Details · ${esc(n.name)}${FS.length ? ' · ' + esc(FS.map(f => f.label).join(' · ')) : ''}</b><span>${count} on ${esc(m ? m.name : '')}</span></div><button type="button" class="iconbtn" data-undock="1" title="Pop out to the full Details view" aria-label="Pop out Details">${icon('layers')}</button><button type="button" class="iconbtn" data-closedock="1" title="Close the Details panel" aria-label="Close the Details panel">${icon('x', 2.2)}</button></div>`
     : `<div class="hero"><span class="tile" style="background:var(--track);color:var(--ink-2)">${icon('chip')}</span><div><h1>Details · ${esc(n.name)}${FS.length ? ' · ' + esc(FS.map(f => f.label).join(' · ')) : ''}</h1><div class="facts"><span>${count}</span><span>on ${esc(m ? m.name : '')}</span>${hasGroups ? `<span>CPU groups: ${esc(m.groups.map(g => g.name).join(', '))}</span>` : ''}</div></div><button type="button" class="btn" data-dock="1" style="margin-left:auto" title="Or drag the Details pill onto the right side">${icon('layers')}Dock to the right</button></div>`;
   const tools = `<div class="dtools"><input type="search" id="pfilter" placeholder="Filter by name, PID, user or command" value="${esc(S.filter)}" aria-label="Filter processes"><label>Group by <select id="pgroup"><option value="none"${S.group==='none'?' selected':''}>Nothing</option><option value="cpugroup"${S.group==='cpugroup'?' selected':''}>CPU group (CCD, P-/E-cores)</option><option value="owner"${S.group==='owner'?' selected':''}>Where it runs (tree node)</option><option value="user"${S.group==='user'?' selected':''}>User</option><option value="state"${S.group==='state'?' selected':''}>Status</option></select></label>${groupBy ? `<span class="gall"><button type="button" class="btn" data-gall="open">Expand all</button><button type="button" class="btn" data-gall="close">Collapse all</button></span>` : ''}</div>`;
-  const thead = `<tr>${COLS.map(c => `<th class="${c.l ? 'l' : ''}" data-colk="${c.k}" ${c.k === SORT.k ? `aria-sort="${dir < 0 ? 'descending' : 'ascending'}"` : ''}><button type="button" data-sort="${c.k}" title="Sort; right-click to choose and arrange columns">${c.label}${c.k === SORT.k ? (dir < 0 ? ' ↓' : ' ↑') : ''}</button></th>`).join('')}</tr>`;
+  // each header ends in a divider: drag it (or ←/→ on it) to resize the column, double-click it (or Delete) for automatic width
+  const grip = c => `<span class="colgrip" data-colgrip="${c.k}" role="separator" aria-orientation="vertical" tabindex="0" aria-label="Resize the ${esc(c.label)} column" ${CW[c.k] ? `aria-valuenow="${CW[c.k]}" aria-valuemin="${COL_MIN}" aria-valuemax="${COL_MAX}"` : 'aria-valuetext="automatic width"'} title="Drag to resize; double-click for automatic width"></span>`;
+  const thead = `<tr>${COLS.map(c => `<th class="${c.l ? 'l' : ''}${CW[c.k] ? ' fw' : ''}" data-colk="${c.k}" ${CW[c.k] ? `style="width:${CW[c.k]}px;min-width:${CW[c.k]}px;max-width:${CW[c.k]}px" ` : ''}${c.k === SORT.k ? `aria-sort="${dir < 0 ? 'descending' : 'ascending'}"` : ''}><button type="button" data-sort="${c.k}" title="Sort; drag to move (${ALTK}← ${ALTK}→); right-click to choose and arrange columns">${c.label}${c.k === SORT.k ? (dir < 0 ? ' ↓' : ' ↑') : ''}</button>${grip(c)}</th>`).join('')}</tr>`;
   const applied = FS.filter(f => f.apply);
   // the open process isn't in the list any more (it exited, or the filter hides it): its drop-down goes first
   if (INSP.pid && INSP.mid === mid && !inspShown && all) body = `<tr class="pinsp" data-row="insp:${esc(INSP.pid)}"><td colspan="${COLS.length}">${inspectPanel(null)}</td></tr>` + body;
   if (applied.length && all && !list.length && !INSP.pid) body = `<tr class="empty"><td colspan="${COLS.length}" class="l" style="padding:18px 10px;color:var(--ink-3)">No process matches ${esc(applied.map(f => f.short).concat(q ? ['“' + S.filter.trim() + '”'] : []).join(' + '))} right now.</td></tr>`;
   const hold = holding ? `<div class="holdbar">${icon('pin')}<span>Rows hold their places while <b>${esc(INSP.name || 'PID ' + INSP.pid)}</b> is open</span><button type="button" class="btn" data-inspclose="1">Resume live order</button></div>` : '';
-  return head + groupNote + offNote + `<section class="card">${tools}${filterChips(FS)}${hold}<div class="pscroll"><table class="ptbl" data-mid="${esc(mid)}"><thead>${thead}</thead><tbody>${body}</tbody></table>${more ? `<div class="more">${more}</div>` : ''}</div></section>`;
+  return head + groupNote + offNote + `<section class="card">${tools}${filterChips(FS)}${hold}<div class="pscroll"><table class="ptbl${COLS.every(c => CW[c.k]) ? ' allfixed' : ''}" data-mid="${esc(mid)}"><thead>${thead}</thead><tbody>${body}</tbody></table>${more ? `<div class="more">${more}</div>` : ''}</div></section>`;
 }
 
 /* ---------- network detail ---------- */
@@ -1322,15 +1326,16 @@ function selAt(root, e){
 }
 function mainPage(){ return [S.tree, S.tree === 'network' ? S.netSel : '', S.sel, S.view, S.metric, S.cpuView, S.gpuView, S.diskView, S.ifView, S.detailsDocked ? 'dock' : ''].join('|'); }
 let resizing = false;  // the docked panel's edge is being dragged: hold the page still till it's let go
+const COLDRAG = {on:false, move:null};   // so is a Details column's divider or header (see "Details columns by hand")
 function renderMain(){
-  if (resizing) return;  // a rebuild would replace the handle, which drops its pointer capture and strands the drag
+  if (resizing || COLDRAG.on) return;  // a rebuild would replace the handle, which drops its pointer capture and strands the drag
   renderFilterBar();
   const main = $('main');
   const a = document.activeElement;
   let refocus = null, refocusAt = 0, selStart = null, selStop = null, selDir;   // selStop: not selEnd, the selection helper above
   if (a && main.contains(a)){
     if (a.id) { refocus = '#' + a.id; selStart = a.selectionStart; selStop = a.selectionEnd; selDir = a.selectionDirection; }
-    else if (a.dataset) for (const k of ['select', 'mode', 'sort', 'pin', 'cpuview', 'netsel', 'gtoggle', 'gall', 'tilesort', 'lcpu', 'lgroup', 'tpin']) if (a.dataset[k] != null){ refocus = `[data-${k}="${CSS.escape(a.dataset[k])}"]`; break; }
+    else if (a.dataset) for (const k of ['select', 'mode', 'sort', 'colgrip', 'pin', 'cpuview', 'netsel', 'gtoggle', 'gall', 'tilesort', 'lcpu', 'lgroup', 'tpin']) if (a.dataset[k] != null){ refocus = `[data-${k}="${CSS.escape(a.dataset[k])}"]`; break; }
     if (refocus) refocusAt = Math.max(0, [...main.querySelectorAll(refocus)].indexOf(a));   // a view can draw the same button twice (a card and a table)
   }
   let html;
@@ -1865,6 +1870,14 @@ const COL_DEFAULTS = {
   net:['name', 'pid', 'owner', 'net', 'ifaces', 'cpu', 'mem', 'cmd']
 };
 function colType(){ return COL_DEFAULTS[S.metric] ? S.metric : 'cpu'; }
+// Widths you gave columns by hand (#334), per detail type like the layout: {cpu:{name:180}}; the others size to their content.
+const COL_MIN = 40, COL_MAX = 1600;
+const colClamp = w => Math.max(COL_MIN, Math.min(COL_MAX, Math.round(w)));
+function colWidths(){
+  const w = (PREFS.colWidths || {})[colType()], o = {};
+  if (w && typeof w === 'object') for (const [k, v] of Object.entries(w)) if (COL_LABELS[k] && Number.isFinite(v)) o[k] = colClamp(v);
+  return o;
+}
 function colLayout(){ const l = ((PREFS.columns || {})[colType()] || []).filter(k => COL_LABELS[k]); return l.length ? l : COL_DEFAULTS[colType()]; }
 // A header click sorts that detail type; until then every type keeps the usual default (CPU, highest first).
 function detailSort(){ const s0 = (S.sorts || {})[colType()]; return s0 && COL_LABELS[s0.k] ? s0 : (S.sort && COL_LABELS[S.sort.k] ? S.sort : {k:'cpu', dir:-1}); }
@@ -1911,7 +1924,7 @@ document.addEventListener('click', e => {
   const a = e.target.closest('[data-colact]'); if (!a) return;
   const [act, k] = a.dataset.colact.split('|'), vis = colLayout().slice(), i = vis.indexOf(k);
   if (act === 'close') return closeColMenu();
-  if (act === 'reset') return setColLayout(COL_DEFAULTS[colType()].slice());
+  if (act === 'reset'){ PREFS = Object.assign({}, PREFS, {colWidths:Object.assign({}, PREFS.colWidths, {[colType()]:{}})}); return setColLayout(COL_DEFAULTS[colType()].slice()); }   // and automatic widths (#334)
   if (act === 'hide' && vis.length > 1){ vis.splice(i, 1); COLMENU.focus = ''; }
   if (act === 'left' && i > 0) [vis[i - 1], vis[i]] = [vis[i], vis[i - 1]];
   if (act === 'right' && i >= 0 && i < vis.length - 1) [vis[i + 1], vis[i]] = [vis[i], vis[i + 1]];
@@ -1938,6 +1951,122 @@ document.addEventListener('drop', e => {
   vis.splice(to, 0, vis.splice(from, 1)[0]);
   setColLayout(vis);
 });
+
+
+/* ---------- Details columns by hand (#334): resize at the dividers, move by dragging a header ---------- */
+// While either drag lasts the page holds still (COLDRAG.on: renderMain draws nothing), so a poll can't replace the
+// header under the pointer; letting go draws what came in meanwhile. A resize freezes every column at the width it
+// has, so only the one being dragged changes and its divider stays under the pointer.
+function colSay(msg){
+  let el = $('colsay');
+  if (!el){ el = document.createElement('div'); el.id = 'colsay'; el.className = 'sr'; el.setAttribute('role', 'status'); el.setAttribute('aria-live', 'polite'); document.body.appendChild(el); }
+  el.textContent = msg;
+}
+async function setColWidth(k, w){
+  const mine = colWidths();
+  if (w == null) delete mine[k]; else mine[k] = colClamp(w);
+  PREFS = Object.assign({}, PREFS, {colWidths:Object.assign({}, PREFS.colWidths, {[colType()]:mine})});
+  colSay(COL_LABELS[k] + ': ' + (w == null ? 'automatic width' : mine[k] + ' px wide'));
+  lastMainHTML = ''; renderMain();
+  await savePrefs('the column widths');
+}
+function moveCol(k, to){
+  const vis = colLayout().slice(), from = vis.indexOf(k);
+  to = Math.max(0, Math.min(vis.length - 1, to));
+  if (from < 0 || from === to) return false;
+  vis.splice(to, 0, vis.splice(from, 1)[0]);
+  colSay(`${COL_LABELS[k]} moved to column ${to + 1} of ${vis.length}`);
+  setColLayout(vis);
+  return true;
+}
+// a drag that moved something ends in a click on whatever is under the pointer: that click isn't a sort
+function eatClick(){
+  const stop = e => { e.stopPropagation(); e.preventDefault(); };
+  addEventListener('click', stop, {capture:true, once:true});
+  setTimeout(() => removeEventListener('click', stop, {capture:true}), 0);
+}
+document.addEventListener('pointerdown', e => {
+  if (e.button !== 0 || !e.target.closest) return;
+  const g = e.target.closest('.ptbl [data-colgrip]');
+  if (g){
+    e.preventDefault();
+    const th = g.closest('th'), tbl = th.closest('.ptbl'), ths = [...tbl.querySelectorAll('thead th')], i = ths.indexOf(th), k = g.dataset.colgrip;
+    const ws = ths.map(t => t.getBoundingClientRect().width), x0 = e.clientX, total = ws.reduce((a, b) => a + b, 0);
+    const kept = ths.map(t => t.getAttribute('style')), keptTbl = tbl.getAttribute('style');
+    ths.forEach((t, j) => { t.style.minWidth = t.style.maxWidth = ''; t.style.width = ws[j] + 'px'; });
+    tbl.style.width = total + 'px'; tbl.classList.add('colfrozen'); g.classList.add('on');
+    try { g.setPointerCapture(e.pointerId); } catch (x) {}
+    COLDRAG.on = true;
+    let w = ws[i], moved = false;
+    const move = ev => { w = Math.max(COL_MIN, Math.min(COL_MAX, ws[i] + ev.clientX - x0)); moved = moved || ev.clientX !== x0; th.style.width = w + 'px'; tbl.style.width = (total - ws[i] + w) + 'px'; };
+    const up = () => {
+      g.removeEventListener('pointermove', move); RESIZE_ENDS.forEach(t => g.removeEventListener(t, up));
+      COLDRAG.on = false;
+      if (moved){ setColWidth(k, w); return; }
+      // a press without a move (a double-click's first half): put the header back as it was drawn
+      ths.forEach((t, j) => kept[j] == null ? t.removeAttribute('style') : t.setAttribute('style', kept[j]));
+      keptTbl == null ? tbl.removeAttribute('style') : tbl.setAttribute('style', keptTbl);
+      tbl.classList.remove('colfrozen'); g.classList.remove('on');
+      renderMain();
+    };
+    g.addEventListener('pointermove', move); RESIZE_ENDS.forEach(t => g.addEventListener(t, up));
+    return;
+  }
+  const th = e.target.closest('.ptbl thead th[data-colk]');
+  if (th && !COLDRAG.on) COLDRAG.move = {th, k:th.dataset.colk, id:e.pointerId, x0:e.clientX, on:false, gap:-1};
+});
+document.addEventListener('dblclick', e => {
+  const g = e.target.closest && e.target.closest('.ptbl [data-colgrip]'); if (!g) return;
+  e.preventDefault(); setColWidth(g.dataset.colgrip, null);
+});
+// Moving: past a few pixels the press on a header becomes a drag; a bar shows the gap it would go into.
+function colGap(m, x){
+  const ths = [...m.th.closest('tr').children], rs = ths.map(t => t.getBoundingClientRect());
+  const gap = rs.filter(r => r.left + r.width / 2 < x).length;
+  return {gap, x:gap < rs.length ? rs[gap].left : rs[rs.length - 1].right};
+}
+function endColMove(m, apply){
+  COLDRAG.move = null; if (!m.on) return;
+  COLDRAG.on = false; m.th.classList.remove('colmoving');
+  const d = $('coldrop'); if (d) d.hidden = true;
+  try { m.th.releasePointerCapture(m.id); } catch (e) {}
+  eatClick();
+  if (apply){ const from = colLayout().indexOf(m.k), to = m.gap > from ? m.gap - 1 : m.gap; if (moveCol(m.k, to)) return; }
+  renderMain();
+}
+document.addEventListener('pointermove', e => {
+  const m = COLDRAG.move; if (!m || e.pointerId !== m.id) return;
+  if (!m.on){
+    if (!(e.buttons & 1)){ COLDRAG.move = null; return; }
+    if (Math.abs(e.clientX - m.x0) < 6) return;
+    m.on = true; COLDRAG.on = true; m.th.classList.add('colmoving');
+    try { m.th.setPointerCapture(m.id); } catch (x) {}
+  }
+  const {gap, x} = colGap(m, e.clientX); m.gap = gap;
+  let d = $('coldrop');
+  if (!d){ d = document.createElement('div'); d.id = 'coldrop'; d.className = 'coldrop'; d.setAttribute('aria-hidden', 'true'); document.body.appendChild(d); }
+  const tbl = m.th.closest('.ptbl'), head = m.th.getBoundingClientRect(), box = tbl.closest('.pscroll').getBoundingClientRect(), tb = tbl.getBoundingClientRect();
+  Object.assign(d.style, {left:x + 'px', top:head.top + 'px', height:Math.max(head.height, Math.min(box.bottom, tb.bottom) - head.top) + 'px'});
+  d.hidden = false;
+});
+['pointerup', 'pointercancel'].forEach(t => document.addEventListener(t, e => { const m = COLDRAG.move; if (m && e.pointerId === m.id) endColMove(m, t === 'pointerup'); }));
+// The keys: ←/→ on a divider (Shift: by 50), Delete for automatic width; Alt+←/→ on a header moves its column.
+// Captured, ahead of the page's own keys (Alt+← is Back on Linux and Windows); Esc drops a move under way.
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && COLDRAG.move && COLDRAG.move.on){ e.preventDefault(); e.stopPropagation(); endColMove(COLDRAG.move, false); return; }
+  if (!e.target.closest || e.metaKey || e.ctrlKey) return;
+  const side = e.key === 'ArrowLeft' ? -1 : e.key === 'ArrowRight' ? 1 : 0;
+  const g = !e.altKey && e.target.closest('.ptbl [data-colgrip]');
+  if (g && (side || e.key === 'Delete' || e.key === 'Backspace')){
+    e.preventDefault(); e.stopPropagation();
+    const k = g.dataset.colgrip;
+    if (!side){ setColWidth(k, null); return; }
+    setColWidth(k, (colWidths()[k] || Math.round(g.closest('th').getBoundingClientRect().width)) + side * (e.shiftKey ? 50 : 10));
+    return;
+  }
+  const b = e.altKey && !e.shiftKey && side && e.target.closest('.ptbl thead [data-sort]');
+  if (b){ e.preventDefault(); e.stopPropagation(); moveCol(b.dataset.sort, colLayout().indexOf(b.dataset.sort) + side); }
+}, true);
 
 
 /* ---------- Themes (themes.js has the list and the colour maths) ---------- */
@@ -2057,6 +2186,8 @@ const SHORTCUTS = [
   ['Bigger, smaller, actual size', IS_MAC ? [MODK + '+', MODK + '−', MODK + '0'] : ['Ctrl+Plus', 'Ctrl+Minus', 'Ctrl+0']],
   ['Settings', [MODK + ',']],
   ['Refresh now', [MODK + 'R']],
+  ['On a Details column divider: narrower, wider (' + SHIFTK + ' by more); automatic width', ['←', '→', IS_MAC ? '⌫' : 'Delete']],
+  ['On a Details column header: move the column', [ALTK + '←', ALTK + '→']],
   ['Close a menu, sheet or panel; clear the filter', ['Esc']],
   ['These shortcuts', ['?', MODK + '/']]
 ];
