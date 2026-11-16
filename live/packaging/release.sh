@@ -30,12 +30,12 @@ git fetch -q origin
 "$LIVE/tests/run.sh"
 # macOS for Apple silicon; Linux for x64 and arm64 (Python and HTML, the same package under each name)
 if [ "$(uname)" = Darwin ]; then "$HERE/macos/build_macos.sh" --arch arm64; else echo "release: not on a Mac, so no macOS app from here" >&2; fi
-"$HERE/linux/build_linux.sh"
+# Linux, self-contained (#360): each carries its own Python, ttyd and tmux for its architecture
+"$HERE/linux/build_linux.sh" --arch x86_64 && "$HERE/linux/build_linux.sh" --arch aarch64
 MAC="$LIVE/dist/Fleet-$WANT-macos-arm64.zip"
 LINUX_X64="$LIVE/dist/fleet-$WANT-linux-x64.tar.gz"
 LINUX_ARM64="$LIVE/dist/fleet-$WANT-linux-arm64.tar.gz"
-[ -f "$LIVE/dist/fleet-$WANT-linux.tar.gz" ] || die "no Linux package"
-cp "$LIVE/dist/fleet-$WANT-linux.tar.gz" "$LINUX_X64" && cp "$LIVE/dist/fleet-$WANT-linux.tar.gz" "$LINUX_ARM64"
+[ -f "$LINUX_X64" ] && [ -f "$LINUX_ARM64" ] || die "no Linux packages"
 NOTES=$(mktemp)
 awk -v v="## Fleet $WANT" '$0 == v {on = 1; next} /^## / && on {exit} on' "$LIVE/CHANGELOG.md" > "$NOTES"
 

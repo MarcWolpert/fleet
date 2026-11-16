@@ -33,9 +33,47 @@ class Packages(unittest.TestCase):
             prefix = os.path.join(tmp, "prefix")
             env = dict(os.environ, PREFIX=prefix, HOME=tmp)
             subprocess.run(["sh", os.path.join(pkg, "install.sh")], env=env, capture_output=True, check=True)
-            appdir = os.path.join(prefix, "share", "fleet")
+            appdir = os.path.join(prefix, "share", "fleet", "live")
             self.assertEqual([f for f in web if not os.path.exists(os.path.join(appdir, "web", f))], [])
             self.assertEqual([f for f in app if not os.path.exists(os.path.join(appdir, f))], [])
+            with open(os.path.join(prefix, "bin", "fleet")) as f:
+                self.assertIn(os.path.join(appdir, "fleet_live.py"), f.read())
+
+    def test_a_self_contained_linux_package_installs_its_own_python_ttyd_and_tmux(self):
+        # #360: --arch with --deps (stand-ins here for the pinned downloads fetch_linux_deps.sh makes)
+        with tempfile.TemporaryDirectory() as tmp:
+            deps = os.path.join(tmp, "deps")
+            os.makedirs(os.path.join(deps, "pkg", "python", "bin"))
+            py = os.path.join(deps, "pkg", "python", "bin", "python3")
+            with open(py, "w") as f:   # a Python that is this one
+                f.write('#!/bin/sh\nexec "%s" "$@"\n' % sys.executable)
+            os.chmod(py, 0o755)
+            subprocess.run(["tar", "-czf", os.path.join(deps, "python.tar.gz"), "-C", os.path.join(deps, "pkg"), "python"], check=True)
+            for t in ("ttyd", "tmux"):
+                with open(os.path.join(deps, t), "w") as f:
+                    f.write("#!/bin/sh\necho %s\n" % t)
+            os.makedirs(os.path.join(deps, "terminfo", "x"))
+            open(os.path.join(deps, "terminfo", "x", "xterm-256color"), "w").close()
+            out = subprocess.run(["sh", os.path.join(LIVE, "packaging", "linux", "build_linux.sh"), "--arch", "x86_64", "--deps", deps],
+                                 capture_output=True, text=True, check=True).stdout
+            tarball = re.search(r"built (\S+\.tar\.gz)", out).group(1)
+            self.assertTrue(tarball.endswith("-linux-x64.tar.gz"), tarball)
+            subprocess.run(["tar", "-xzf", tarball, "-C", tmp], check=True)
+            pkg = os.path.join(tmp, os.path.basename(tarball)[:-7])
+            with open(os.path.join(pkg, "README.txt")) as f:
+                readme = f.read()
+            self.assertIn("./install.sh", readme)
+            self.assertIn("Everything Fleet runs is inside", readme)
+            prefix = os.path.join(tmp, "prefix")
+            env = dict(os.environ, PREFIX=prefix, HOME=tmp, PATH="/usr/bin:/bin")   # no python3 needed from here on
+            subprocess.run(["sh", os.path.join(pkg, "install.sh")], env=env, capture_output=True, check=True)
+            appdir = os.path.join(prefix, "share", "fleet")
+            for f in ("FLEET_BUNDLE", "bin/ttyd", "bin/tmux", "terminfo/x/xterm-256color", "python/bin/python3", "live/fleet_live.py"):
+                self.assertTrue(os.path.exists(os.path.join(appdir, f)), f)
+            with open(os.path.join(prefix, "bin", "fleet")) as f:
+                self.assertIn('exec "%s"' % os.path.join(appdir, "python", "bin", "python3"), f.read(), "its own Python")
+            build = os.path.join(LIVE, "dist", os.path.basename(tarball)[:-7])
+            shutil.rmtree(build, ignore_errors=True); os.remove(tarball)
 
     def test_the_macos_bundle_copies_every_file(self):
         web, app = needed()
