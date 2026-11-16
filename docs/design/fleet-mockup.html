@@ -359,7 +359,7 @@ const FLEET = [
         svc('worker',[0.5,0.9,0,3,0.3],'fleet-lab-worker',[cj('queue prune','*/5 * * * *','every 5 min','./bin/prune-queue',[0.2,0.1,0,2,0.1],12,3,1,'3 min ago · took 6 s')]),
         svc('db',[0.3,1.2,0,9,0.2],'postgres:16')]}],
       containers:[ctr('redis',[0.1,0.3,0,1,0.2],'redis:7','running · up 6 h')]}]},
-  {id:'win-3090', name:'win-desktop', tile:'desktop', os:'Windows 11 · x86_64', agent:'ssh (OpenSSH) + tailscale', uptime:'5 d', cronLabel:'Scheduled tasks',
+  {id:'win-desktop', name:'win-desktop', tile:'desktop', os:'Windows 11 · x86_64', agent:'ssh (OpenSSH) + tailscale', uptime:'5 d', cronLabel:'Scheduled tasks',
    cap:[16,64,0,5000,1250], gpus:[{name:'NVIDIA GeForce RTX 3090', mem:'24 GB VRAM'}], base:[1.0,8.5,4,20,0.8], procs:WIN_PROCS_HOST, note:WIN_NOTE,
    baseCron:[
      cj('backup to nas','Daily 03:30','daily at 03:30','robocopy D:\\Data \\\\nas\\backup /MIR',[0.5,0.4,0,140,110],36,9,8,'today 03:30 · took 18 m'),
@@ -367,7 +367,7 @@ const FLEET = [
    containers:[ctr('ollama',[1.4,16,42,25,1.5],'ollama/ollama','running · up 5 d')],
    vms:[{slug:'wsl-ubuntu', name:'Ubuntu-24.04 (WSL)', os:'WSL 2 · Ubuntu 24.04', agent:'wsl.exe via host', uptime:'5 d',
      cap:[16,32,0,5000,1250], gpus:[{name:'RTX 3090 via WSL GPU-PV', mem:'shared with host', host:'gpu0'}], base:[0.3,1.2,6,4,0.2], procs:LINUX_PROCS, baseCron:[aptUpdate(22)]}]},
-  {id:'win-5070ti', name:'win-laptop', tile:'desktop', os:'Windows 11 · x86_64', agent:'ssh (OpenSSH) + tailscale', uptime:'2 d', cronLabel:'Scheduled tasks',
+  {id:'win-laptop', name:'win-laptop', tile:'desktop', os:'Windows 11 · x86_64', agent:'ssh (OpenSSH) + tailscale', uptime:'2 d', cronLabel:'Scheduled tasks',
    cap:[24,64,0,7000,1250], gpus:[{name:'NVIDIA GeForce RTX 5070 Ti', mem:'16 GB VRAM'}, {name:'Integrated graphics (guess)', mem:'shared memory'}],
    base:[1.3,10.5,7,30,1.2], baseG:'gpu1', procs:WIN_PROCS_HOST, note:WIN_NOTE,
    baseCron:[defenderScan(12)],
@@ -377,7 +377,7 @@ const FLEET = [
    vms:[{slug:'wsl-ubuntu', name:'Ubuntu-24.04 (WSL)', os:'WSL 2 · Ubuntu 24.04', agent:'wsl.exe via host', uptime:'2 d',
      cap:[24,32,0,7000,1250], gpus:[{name:'RTX 5070 Ti via WSL GPU-PV', mem:'shared with host', host:'gpu0'}], base:[0.5,2.0,9,6,0.4], procs:LINUX_PROCS, baseCron:[aptUpdate(31)]}]}
 ];
-const SPACES = ['nas/vms/dev-vm', 'nas/vms/app-vm', 'nas', 'mac', 'nas/vms/shared-vm', 'win-3090', 'win-5070ti'];
+const SPACES = ['nas/vms/dev-vm', 'nas/vms/app-vm', 'nas', 'mac', 'nas/vms/shared-vm', 'win-desktop', 'win-laptop'];
 
 /* ---------- model ---------- */
 let T = 1000;
