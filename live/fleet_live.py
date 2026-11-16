@@ -783,6 +783,12 @@ def job_name(cmd):
     return (toks[0] if toks else cmd)[:48]
 
 
+def vm_cap(view, v):
+    """What a VM seen from its host can use there: the host CPUs its process may run on (all of them when the host
+    doesn't say), the host's memory, and the host's disk and network."""
+    return [len(cpulist(v.get("cpus", ""))) or max(1, view["ncpu"]), view["cap"][1], 0, view["cap"][3], view["cap"][4]]
+
+
 def job_ids(mid, jobs):
     """Each scheduled job's node id, from what the job is (where it's defined, its schedule, its command, its name), not
     its place in the list: systemd lists timers by when they fire next, so places change all the time, and a job's
@@ -1206,7 +1212,7 @@ class Fleet:
         if view is None:
             if vm_hostside is not None:
                 spec["base"] = {"id": mid + "/base", "h": self.leaf(mid + "/base", vm_hostside["u"], record)}
-                spec["cap"] = [max(1, vm_hostside.get("vcpus", 1)), max(1, vm_hostside.get("mem", 1)), 0, 1, 1]
+                spec["cap"] = vm_hostside["cap"]
                 spec["status"] = "hostonly" if status != "ok" else status
                 spec["error"] = (error or "not reachable") + " · showing what its host sees"
             else:
@@ -1261,7 +1267,7 @@ class Fleet:
             mm = nested.get(v["name"])
             if mm:
                 listed.add(v["name"])
-                sub = self.machine_spec(mm, record, vm_hostside={"u": v["u"], "vcpus": 0, "mem": 0}, vm_parent=m)
+                sub = self.machine_spec(mm, record, vm_hostside={"u": v["u"], "cap": vm_cap(view, v)}, vm_parent=m)
                 sub["hostside"] = v["u"]
                 vm_ids[v["name"]] = sub["id"]
                 spec["vms"].append(sub)
@@ -1270,7 +1276,7 @@ class Fleet:
                 vm_ids[v["name"]] = vid
                 facts = ", ".join("%s (%s)" % (d["name"], d["state"]) for d in v.get("distros", []))
                 spec["vms"].append({"id": vid, "name": v["name"], "tile": "vm", "status": "ok" if v.get("running") else "off",
-                                    "os": facts or "VM", "agent": "seen from the host", "cap": [max(1, view["ncpu"]), view["cap"][1], 0, 1, 1],
+                                    "os": facts or "VM", "agent": "seen from the host", "cap": vm_cap(view, v),
                                     "gpus": [], "cronLabel": "Cron jobs", "base": {"id": vid + "/base", "h": self.leaf(vid + "/base", v["u"], record)},
                                     "baseCron": [], "compose": [], "containers": [], "vms": [], "procs": []})
         for name, mm in nested.items():

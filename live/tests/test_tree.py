@@ -211,5 +211,54 @@ class GpuTags(TreeTest):
         self.assertEqual({k: v[-3:] for k, v in gh.items()}, {"gpu0": [0.0, 50.0, 10.0], "gpu1": [0.0, 100.0, 0.0]})
 
 
+HOST_CFG = {"id": "nas", "name": "nas", "ssh": "nas", "os": "linux"}
+VM_CFG = {"id": "win-vm", "name": "win-vm", "ssh": "win-vm", "os": "windows", "vm_on": "nas"}
+
+
+def host_view(vms, **over):
+    """A 16-CPU, 64 GB Linux host with an 800 MB/s disk and a 1250 MB/s link, running these VMs."""
+    return view(ncpu=16, host=[6.0, 30.0, 0.0, 40.0, 20.0], cap=[16, 64.0, 0.0, 800.0, 1250.0], vms=vms, **over)
+
+
+def vm(name, u, cpus="", running=True):
+    return {"name": name, "u": list(u), "running": running, "ifs": [], "cpus": cpus}
+
+
+class VmCapacity(TreeTest):
+    """#141: a VM seen from its host is measured against what it can use there, not 1 core, 1 GB and 1 MB/s."""
+
+    def one_vm(self, spec):
+        v = spec["vms"][0]
+        return {"id": v["id"], "status": v["status"], "cap": v["cap"], "cpu": v["base"]["h"]["cpu"][-1], "mem": v["base"]["h"]["mem"][-1]}
+
+    def test_a_configured_vm_seen_only_from_its_host_gets_its_pinned_cpus_and_the_hosts_memory_disk_and_network(self):
+        f = make_fleet(HOST_CFG, VM_CFG)
+        give(f, "nas", host_view([vm("win-vm", [3.5, 16.0, 0, 2.0, 1.0], cpus="4-7,12-15")]))
+        f.machines["win-vm"].status = "offline"
+        self.assertEqual(self.one_vm(self.record(f, "nas")),
+                         {"id": "win-vm", "status": "hostonly", "cap": [8, 64.0, 0, 800.0, 1250.0], "cpu": 3.5, "mem": 16.0})
+
+    def test_a_vm_whose_host_does_not_say_its_cpus_may_use_all_of_the_hosts(self):
+        f = make_fleet(HOST_CFG, VM_CFG)
+        give(f, "nas", host_view([vm("win-vm", [3.5, 16.0, 0, 2.0, 1.0])]))
+        f.machines["win-vm"].status = "offline"
+        self.assertEqual(self.one_vm(self.record(f, "nas")),
+                         {"id": "win-vm", "status": "hostonly", "cap": [16, 64.0, 0, 800.0, 1250.0], "cpu": 3.5, "mem": 16.0})
+
+    def test_an_unconfigured_vm_is_measured_against_the_host_the_same_way(self):
+        f = make_fleet(HOST_CFG)
+        give(f, "nas", host_view([vm("lab", [1.0, 4.0, 0, 3.0, 2.0], cpus="0-3"), vm("idle", [0, 0, 0, 0, 0], running=False)]))
+        spec = self.record(f, "nas")
+        self.assertEqual([(v["id"], v["status"], v["cap"]) for v in spec["vms"]],
+                         [("nas/vms/lab", "ok", [4, 64.0, 0, 800.0, 1250.0]), ("nas/vms/idle", "off", [16, 64.0, 0, 800.0, 1250.0])])
+
+    def test_a_vm_reached_directly_keeps_its_own_capacity(self):
+        f = make_fleet(HOST_CFG, VM_CFG)
+        give(f, "nas", host_view([vm("win-vm", [3.5, 16.0, 0, 2.0, 1.0], cpus="4-7")]))
+        give(f, "win-vm", view(ncpu=8, cap=[8, 32.0, 0.0, 300.0, 125.0], os="Windows"))
+        v = self.record(f, "nas")["vms"][0]
+        self.assertEqual((v["id"], v["status"], v["cap"], v["hostside"]), ("win-vm", "ok", [8, 32.0, 0.0, 300.0, 125.0], [3.5, 16.0, 0, 2.0, 1.0]))
+
+
 if __name__ == "__main__":
     unittest.main()
