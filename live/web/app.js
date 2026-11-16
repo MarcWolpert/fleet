@@ -3777,7 +3777,7 @@ function renderDrawer(){
     if (s.url && !fr0){
       p.textContent = '';
       const f = document.createElement('iframe'); f.src = s.url; f.title = 'Terminal: ' + s.title; f.setAttribute('allow', 'clipboard-read; clipboard-write');
-      f.addEventListener('load', () => { if (TD.active === s.key) f.focus(); }, {once:true});
+      f.addEventListener('load', () => { if (TD.active === s.key && termMayTakeFocus()) f.focus(); }, {once:true});
       p.appendChild(f);
     } else if (!s.url && !fr0){
       p.innerHTML = s.error ? `<div class="td-msg" role="alert">${esc(s.error)}</div>` : `<div class="td-msg">Starting ${esc(s.title)}…</div>`;
@@ -3793,6 +3793,13 @@ function renderDrawer(){
 // Tabs and splits (#339): a tab holds one terminal or several side by side (its group: the server keeps it). Split
 // (⌘\), kill (⌘⌫, or Delete on a tab), rename, move one to its own tab, drag a tab onto a terminal to split it there
 // (⌘Z puts it back), and right-click menus for a tab and for the bar.
+// a terminal that finishes loading takes focus only if focus is still in the terminals (or nowhere) and nothing is open
+// over the page: a late one never takes it from Go to anything, a dialog or a menu you've opened since
+function termMayTakeFocus(){
+  if ($('goto') || $('termdlg') || ($('ctxmenu') && !$('ctxmenu').hidden) || (typeof overlayOpen === 'function' && overlayOpen())) return false;
+  const a = document.activeElement;
+  return !a || a === document.body || !!a.closest('#tdrawer');
+}
 function termGroupOf(s){ return s ? (s.group || s.id || s.key) : ''; }
 function termGroups(){ const out = []; TD.list.forEach(s => { const g = termGroupOf(s); let x = out.find(o => o.g === g); if (!x) out.push(x = {g, list:[]}); x.list.push(s); }); return out; }
 function termFracs(list){ const f = list.map(s => TD.frac[s.key] || 1 / list.length), t = f.reduce((a, b) => a + b, 0) || 1; return f.map(x => x / t); }

@@ -215,3 +215,29 @@ test('inline as the default; ⌘T from the terminal opens another; it shows it h
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
 });
+
+// A terminal that finishes loading late never takes focus from what you've opened since: it may take focus only while
+// focus is still in the terminals (or nowhere) and nothing is open over the page.
+test('a terminal that loads late takes focus only if nothing else has it', async () => {
+  const fx = fx1();
+  const p = await browser.page(fx, {ui: ui({sel: 'lx'})});
+  try {
+    await p.waitFor(`document.querySelector('.hero [data-terminal="lx"]')`);
+    await p.eval(`(openInline('lx'), true)`);
+    await p.waitFor(`document.querySelector('#tdrawer iframe')`);
+    await p.eval(`(document.activeElement && document.activeElement.blur(), true)`);
+    assert.equal(await p.eval(`termMayTakeFocus()`), true, 'focus nowhere: it may');
+    await p.eval(`(document.querySelector('#tdrawer [role=tab]').focus(), true)`);
+    assert.equal(await p.eval(`termMayTakeFocus()`), true, 'focus in the terminals: it may');
+    await p.eval(`(document.querySelector('#tree [tabindex], #tree button').focus(), true)`);
+    await p.waitFor(`document.activeElement && !!document.activeElement.closest('#tree')`);
+    assert.equal(await p.eval(`termMayTakeFocus()`), false, 'you moved on to the tree');
+    await p.eval(`(openGoto(), true)`);
+    await p.waitFor(`document.activeElement && document.activeElement.id === 'gotoq'`);
+    assert.equal(await p.eval(`termMayTakeFocus()`), false, 'Go to anything is open');
+    await p.eval(`(closeGoto(), true)`);
+    // the frame's own load goes through the same rule
+    assert.match(await p.eval(`String(renderDrawer)`), /TD\.active === s\.key && termMayTakeFocus\(\)\) f\.focus\(\)/);
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
