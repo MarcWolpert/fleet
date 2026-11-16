@@ -849,8 +849,9 @@ function gpuSelCard(m){
 function cpuToggle(){ return `<div class="seg" role="group" aria-label="CPU graph"><button type="button" data-cpuview="type" aria-pressed="${S.cpuView==='type'}">By type</button><button type="button" data-cpuview="logical" aria-pressed="${S.cpuView==='logical'}">Logical processors</button></div>`; }
 function logicalCard(m){
   const d = CPUS[m.id];
-  const head = `<div class="card-h"><h2>Logical processors</h2><span class="sub">${esc(m.cpu_model || '')}${d ? ' · ' + d.cpus.length + ' processors' : ''}</span><span class="grow"></span>${sortMenu('cpu')}${cpuToggle()}</div>`;
-  if (!d || !d.cpus) return `<section class="card">${head}<div class="sub">Loading…</div></section>`;
+  const head = `<div class="card-h"><h2>Logical processors</h2><span class="sub">${esc(m.cpu_model || '')}${d && d.cpus ? ' · ' + d.cpus.length + ' processors' : ''}</span><span class="grow"></span>${sortMenu('cpu')}${cpuToggle()}</div>`;
+  // The server answers {} for a machine it doesn't read itself (a VM seen only from its host).
+  if (!d || !d.cpus) return `<section class="card">${head}<div class="sub">${d ? `No per-processor readings for ${esc(m.name)}.` : 'Loading…'}</div></section>`;
   const byN = {}; d.cpus.forEach(c => { byN[c.n] = c; });
   const sel = cpuSel(m);
   const groups = (d.groups && d.groups.length ? d.groups : [{name:'All processors', cpus:d.cpus.map(c => c.n)}]).map((g, i) => [g, i]).sort((a, b) => pinFirst('cpugroup', m.id, x => x[0].name)(a, b) || a[1] - b[1]).map(x => x[0]);
@@ -1244,7 +1245,7 @@ function renderMain(){
   let refocus = null, refocusAt = 0, selStart = null;
   if (a && main.contains(a)){
     if (a.id) { refocus = '#' + a.id; selStart = a.selectionStart; }
-    else if (a.dataset) for (const k of ['select', 'mode', 'sort', 'pin', 'cpuview', 'netsel', 'gtoggle', 'gall']) if (a.dataset[k] != null){ refocus = `[data-${k}="${CSS.escape(a.dataset[k])}"]`; break; }
+    else if (a.dataset) for (const k of ['select', 'mode', 'sort', 'pin', 'cpuview', 'netsel', 'gtoggle', 'gall', 'tilesort', 'lcpu', 'lgroup', 'tpin']) if (a.dataset[k] != null){ refocus = `[data-${k}="${CSS.escape(a.dataset[k])}"]`; break; }
     if (refocus) refocusAt = Math.max(0, [...main.querySelectorAll(refocus)].indexOf(a));   // a view can draw the same button twice (a card and a table)
   }
   let html;
@@ -1494,7 +1495,7 @@ async function refreshNow(){
     const n = S.sel === 'fleet' ? null : nodes[S.sel];
     const jobs = [];
     if ((S.view === 'details' || (S.detailsDocked && n && S.tree !== 'network')) && (n || roots[0])){ const mid = procMachineFor(n || roots[0]); if (mid) jobs.push(fetch('/api/procs?machine=' + encodeURIComponent(mid), {cache:'no-store'}).then(r => r.json()).then(d => takeProcs(mid, d))); }
-    if (S.view !== 'details' && n && n.kind === 'machine' && S.metric === 'cpu' && S.cpuView === 'logical' && cpuSel(n).length && n.status === 'ok') jobs.push(fetch('/api/procs?machine=' + encodeURIComponent(n.id), {cache:'no-store'}).then(r => r.json()).then(d => takeProcs(n.id, d)));
+    if (S.view !== 'details' && !S.detailsDocked && n && n.kind === 'machine' && S.metric === 'cpu' && S.cpuView === 'logical' && cpuSel(n).length && n.status === 'ok') jobs.push(fetch('/api/procs?machine=' + encodeURIComponent(n.id), {cache:'no-store'}).then(r => r.json()).then(d => takeProcs(n.id, d)));
     if (S.view !== 'details' && n && n.kind === 'machine' && S.metric === 'cpu' && S.cpuView === 'logical') jobs.push(fetch('/api/cpus?machine=' + encodeURIComponent(n.id), {cache:'no-store'}).then(r => r.json()).then(d => { CPUS[n.id] = d; }));
     const nm = n && n.kind === 'machine' ? n : null;
     if (nm && S.metric === 'net' && S.view !== 'details') jobs.push(fetch('/api/ifs?machine=' + encodeURIComponent(nm.id), {cache:'no-store'}).then(r => r.json()).then(d => { IFS[nm.id] = d; }));
