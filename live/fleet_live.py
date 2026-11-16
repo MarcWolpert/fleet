@@ -269,6 +269,7 @@ class Machine:
         self.lock = threading.Lock()
         self.proc = None
         self.last_ok = 0.0          # when the last good reading arrived
+        self.stall = max(60.0, 10.0 * interval)   # a collector session that brings nothing for this long is ended
         self.wake = threading.Event()  # Retry now
         self.thread = threading.Thread(target=self.loop, daemon=True, name="fleet-" + self.id)
 
@@ -319,7 +320,17 @@ class Machine:
                 p.stdin.close()  # Linux: the script itself; python3 - runs it at EOF
         err_tail = collections.deque(maxlen=5)
         threading.Thread(target=lambda: [err_tail.append(l.decode("utf-8", "replace").strip()) for l in p.stderr], daemon=True).start()
+        heard, stalled = [time.time()], []   # when the stream last brought a line; whether the watchdog ended it
+        def watchdog():   # a hung docker, wsl.exe or nvidia-smi call leaves SSH up (sshd answers keepalives) and the read blocked
+            while p.poll() is None:
+                if time.time() - heard[0] > self.stall:
+                    stalled.append(True)
+                    p.kill()
+                    return
+                time.sleep(min(1.0, self.stall / 4))
+        threading.Thread(target=watchdog, daemon=True).start()
         for line in p.stdout:
+            heard[0] = time.time()
             line = line.strip()
             if not line:
                 continue
@@ -339,7 +350,11 @@ class Machine:
             if view:
                 self.got(view)
         p.wait()
-        msg = " ".join(x for x in err_tail if x) or "connection closed (exit %s)" % p.returncode
+        tail = " ".join(x for x in err_tail if x)
+        if stalled:
+            msg = "timed out: no reading in %g s" % self.stall + ("; " + tail if tail else "")
+        else:
+            msg = tail or "connection closed (exit %s)" % p.returncode
         self.set_status("offline", msg[:300])
 
     def local_loop(self):

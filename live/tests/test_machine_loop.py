@@ -9,6 +9,8 @@ import json
 import os
 import subprocess
 import sys
+import threading
+import time
 import unittest
 import zlib
 from unittest import mock
@@ -140,6 +142,73 @@ class StatusWhileRetrying(unittest.TestCase):
         _, seen = run_loop(m, [REFUSED, ([linux_line(1000.0)], b"", 255), DOWN])
         self.assertEqual(states, [("ok", "")])
         self.assertEqual([s[1] for s in seen], ["", "user@nas: Permission denied (publickey).", "connection closed (exit 255)"])
+
+
+class Silent:
+    """A fake ssh session that prints `lines`, `gap` seconds apart, and then either ends (exit 0) or, with
+    hang=True, stays silent with the connection up (a collector stuck in docker or wsl.exe) until it's killed."""
+
+    def __init__(self, lines, gap=0.0, hang=True):
+        self.killed, self.returncode, self.gone = False, None, threading.Event()
+        self.stdin, self.stderr = mock.Mock(), iter([])
+        def out():
+            for line in lines:
+                time.sleep(gap)
+                yield line
+            if hang:
+                self.gone.wait(10)
+            else:
+                self.returncode = 0
+                self.gone.set()
+        self.stdout = out()
+
+    def poll(self):
+        return self.returncode
+
+    def kill(self):
+        self.killed, self.returncode = True, -9
+        self.gone.set()
+
+    terminate = kill
+
+    def wait(self):
+        self.gone.wait(10)
+        return self.returncode
+
+
+def session(m, fake):
+    with mock.patch.object(fleet_live.subprocess, "Popen", lambda *a, **kw: fake):
+        began = time.time()
+        m.ssh_loop()
+        return time.time() - began
+
+
+class ReadDeadline(unittest.TestCase):
+    """#183: a session that brings nothing for `stall` seconds is ended, so the machine goes offline and reconnects."""
+
+    def test_a_collector_that_stops_sending(self):
+        m, fake = machine(), Silent([linux_line(1000.0)])
+        m.stall = 0.4
+        took = session(m, fake)
+        self.assertTrue(fake.killed)
+        self.assertEqual((m.status, m.error), ("offline", "timed out: no reading in 0.4 s"))
+        self.assertLess(took, 3.0)
+        self.assertIsNotNone(m.view, "the last reading stays, shown as stale")
+
+    def test_a_collector_that_never_sends(self):
+        m, fake = machine(), Silent([])
+        m.stall = 0.4
+        session(m, fake)
+        self.assertEqual((fake.killed, m.status, m.error, m.view), (True, "offline", "timed out: no reading in 0.4 s", None))
+
+    def test_a_collector_that_keeps_sending_is_left_alone(self):
+        m, fake = machine(), Silent([linux_line(1000.0 + i) for i in range(6)], gap=0.15, hang=False)
+        m.stall = 0.4
+        session(m, fake)
+        self.assertEqual((fake.killed, m.status, m.error), (False, "offline", "connection closed (exit 0)"))
+
+    def test_the_deadline_is_a_minute_or_ten_readings(self):
+        self.assertEqual([fleet_live.Machine({"id": "x", "name": "x"}, i).stall for i in (2, 3, 6, 10)], [60.0, 60.0, 60.0, 100.0])
 
 
 if __name__ == "__main__":
