@@ -453,7 +453,8 @@ class Machine:
             seen.add(k)
             jobs.append({"name": job_name(c["cmd"]), "sched": c["sched"], "human": human_cron(c["sched"]), "cmd": c["cmd"],
                          "src": c["src"], "last": "", "running": False, "u": [0.0] * 5})
-        cron_daemons = {p[0] for p in r["procs"] if p[2] in ("cron", "crond")}
+        # The host's cron; a container's own cron runs the container's jobs, which are its usage already.
+        cron_daemons = {p[0] for p in r["procs"] if p[2] in ("cron", "crond") and not p[9]}
         for row in procs:
             if row[1] in cron_daemons or by_pid.get(row[1], [0, 0])[1] in cron_daemons:
                 j = match_job(jobs, row[2], row[10])
