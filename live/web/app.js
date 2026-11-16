@@ -2619,8 +2619,9 @@ function groupedWalk(roots, kidsOf, openFn, shownFn, scope){
     const pinnedFirst = items.filter(it => it.gx && PINS.includes('div:' + it.gx.g.id)).concat(items.filter(it => !(it.gx && PINS.includes('div:' + it.gx.g.id))));
     pinnedFirst.forEach(({n, gx}) => {
       if (n) return one(n);
-      // a folded group is just its header; its members keep their own open state for when it unfolds
-      const folded = !!(S.gfold && S.gfold[gx.g.id]);
+      // a folded group is just its header; its members keep their own open state for when it unfolds. While find in
+      // the tree filters, it shows what in it matches, as a collapsed row opens on the way to a match (#295)
+      const folded = !TF.q && !!(S.gfold && S.gfold[gx.g.id]);
       out.push({open:gx.g, key, d, kind:groupKind(gx.members), folded, count:gx.members.length}); if (!folded) gx.members.forEach(one); out.push({close:true});
     });
   })(roots, 0, 'root');

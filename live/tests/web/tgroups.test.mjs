@@ -295,3 +295,35 @@ test('a double-click sent as a click and a dblclick opens one name field', async
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
 });
+
+// Find in the tree sees inside a folded group (#295): while it filters, a folded group shows what in it matches,
+// as a collapsed row opens on the way to a match; the fold is kept, and comes back when the find closes.
+test('find in the tree shows matches inside a folded group, and the fold comes back after', async () => {
+  const fx = fixture(); fx.fleet.prefs = {tgroups: {'machines|root': [{id: 'g1', name: 'Lab', ids: ['lx', 'lx2']}]}};
+  const p = await browser.page(fx, {ui: ui({sel: 'fleet', open: CLOSED, gfold: {g1: true}}), height: 900});
+  const press = (key, o = {}) => p.eval(`(() => { const t = document.activeElement || document.body; t.dispatchEvent(new KeyboardEvent('keydown', Object.assign({key: ${JSON.stringify(key)}, code: ${JSON.stringify(o.code || '')}, bubbles: true, cancelable: true}, ${JSON.stringify(o.mod ? {metaKey: true, ctrlKey: true} : {})}))); return true; })()`);
+  const type = v => p.eval(`(() => { const i = document.getElementById('tfq'); i.value = ${JSON.stringify(v)}; i.dispatchEvent(new Event('input', {bubbles: true})); return true; })()`);
+  const TREE = `({rows: [...document.querySelectorAll('#tree .row')].map(r => (r.closest('.tgroup') ? 'Lab>' : '') + r.dataset.select), empty: (document.querySelector('#tree .tempty') || {}).textContent || ''})`;
+  try {
+    await p.waitFor(`document.querySelector('#tree .tgroup[data-tgroup="g1"] .tg-h')`);
+    assert.deepEqual(await p.eval(TREE), {rows: ['mac', 'win'], empty: ''});
+    await p.eval(`(() => { document.querySelector('#tree .row').dispatchEvent(new PointerEvent('pointerdown', {bubbles: true})); return true; })()`);
+    await press('f', {mod: true, code: 'KeyF'});
+    await p.waitFor(`document.activeElement && document.activeElement.id === 'tfq'`);
+    await type('lab-linux');
+    await p.waitFor(`TF.q === 'lab-linux'`);
+    assert.deepEqual(await p.eval(TREE), {rows: ['Lab>lx', 'Lab>lx2'], empty: ''});
+    await type('web');
+    await p.waitFor(`TF.q === 'web'`);
+    assert.deepEqual(await p.eval(TREE), {rows: ['Lab>lx', 'Lab>lx/containers', 'Lab>lx/containers/web', 'Lab>lx2', 'Lab>lx2/containers', 'Lab>lx2/containers/web',
+      'mac', 'mac/containers', 'mac/containers/web', 'win', 'win/containers', 'win/containers/web'], empty: ''});
+    await type('nothing-has-this');
+    await p.waitFor(`TF.q === 'nothing-has-this'`);
+    assert.deepEqual(await p.eval(TREE), {rows: [], empty: 'Nothing in the tree matches “nothing-has-this”.'});
+    await press('Escape');
+    await p.waitFor(`!TF.q`);
+    assert.deepEqual(await p.eval(TREE), {rows: ['mac', 'win'], empty: ''});
+    assert.deepEqual(await p.eval(`S.gfold`), {g1: true});
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
