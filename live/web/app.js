@@ -1888,6 +1888,8 @@ document.addEventListener('keydown', e => {
   if (e.key.startsWith('Arrow')){
     const a = document.activeElement;
     if (a && a !== document.body && !a.closest('#tree, .side, .spacebar')) return;
+    // focus on the body: the tree's only if you're in the tree (or no panel yet); after a click in the page or Details they scroll it
+    if ((!a || a === document.body) && PANEL && PANEL !== 'tree') return;
     if (treeStep(e.key)) e.preventDefault();
   }
 });

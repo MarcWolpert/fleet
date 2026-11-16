@@ -233,3 +233,26 @@ test('Go to\'s Import a theme while Settings is open keeps the unsaved Settings 
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
 });
+
+test('after a click in the page or Details, the arrows scroll it and leave the tree alone; after a click in the tree they move through it (regression)', async () => {
+  const p = await open({view: 'details', sel: 'lx'});
+  // a synthetic arrow on whatever has focus: did the page take it?
+  const arrow = key => p.eval(`(() => { const t = document.activeElement || document.body; const e = new KeyboardEvent('keydown', {key: ${JSON.stringify(key)}, bubbles: true, cancelable: true}); t.dispatchEvent(e); return {sel: S.sel, taken: e.defaultPrevented}; })()`);
+  try {
+    await p.waitFor(`${PIDS}.length === 12`);
+    await p.click('.ptbl tbody tr[data-pid="103"] td:last-child');   // a cell in Details for lab-linux
+    await p.waitFor(`!document.activeElement || document.activeElement === document.body || !document.activeElement.closest('#tree')`);
+    assert.deepEqual(await arrow('ArrowDown'), {sel: 'lx', taken: false});
+    assert.deepEqual(await arrow('ArrowUp'), {sel: 'lx', taken: false});
+    // a click on the page's own heading, focus on the body: still the page's
+    await p.click('#main .wrap h1, #main .wrap .dtitle b');
+    assert.equal(await p.eval(`document.activeElement === document.body`), true);
+    assert.deepEqual(await arrow('ArrowDown'), {sel: 'lx', taken: false});
+    // in the tree, the arrows are the tree's
+    const next = await p.eval(`(() => { const rows = [...document.querySelectorAll('#tree .row')], i = rows.findIndex(r => r.dataset.select === 'lx'); return rows[i + 1].dataset.select; })()`);
+    await p.click('#tree .row[data-select="lx"] .nm');
+    await p.eval(`(document.activeElement && document.activeElement.blur(), true)`);   // a redraw can leave the focus on the body
+    assert.deepEqual(await arrow('ArrowDown'), {sel: next, taken: true});
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
