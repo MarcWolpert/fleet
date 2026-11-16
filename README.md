@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="live/web/icon.svg" width="112" height="112" alt="Fleet's logo: a gold East Indiaman under full sail on navy">
+
 # Fleet
 
 **Every machine you manage, live, in one tree, and where each one's usage goes.**
@@ -81,18 +83,35 @@ Look inside one with a throwaway helper container or by running Fleet's inspecto
 ready for SSH and tests it. Offline machines say why, in plain language, with the steps to fix it. The dot
 on a machine's row turns its connection off and on; **Auto** picks which machines Fleet connects to when
 it starts (none until you choose, all, or a set you tick), so a start at login asks for no key you didn't
-want. **Open terminal** sshes to a machine, or opens a shell in a container, in the terminal you pick, or
-**inline**, split below the page, each scrolling on its own, with its own text size (A− A+) apart from Fleet's zoom; each keeps running through a reload, Fleet restarting
-or quitting (its shell lives in tmux), and reconnects when the connection drops (with [ttyd](https://github.com/tsl0922/ttyd): `brew install ttyd`
-or `sudo apt install ttyd`; Settings › Terminal picks a login shell, tmux or your own command, and can make inline the default).
-The terminals are there from the start: a tab for each connected computer, each starting when you first go to it. **+**
-opens one on any machine or container; the button left of the tabs minimizes them (they keep running), and the one at
-the bottom left of the pane, or ⌘J, brings them back. Like VS Code's: split one (⌘\\), kill one (⌘⌫ on its tab),
-rename it, drag a tab onto a terminal to split them there (⌘Z undoes it), and right-click a tab or the bar for the rest:
-save the terminals as a **template** and launch it again later (or from ⌘K), or **reset** them to the default.
+want. **Open terminal** sshes to a machine, or opens a shell in a container, in the terminal app you pick, or
+inline, below the page.
 
-**Folding the tree.** The row above Auto and Add a machine folds the whole tree: **~** collapses everything and keeps
-what was open, and pressed again brings exactly that back; **F~** opens every node at every depth, or closes them all.
+**Terminals below the page.** Like VS Code's terminal panel, built into Fleet:
+
+- **There from the start:** a tab for each connected computer, each starting when you first go to it; **+**
+  (or ⌘T in the terminals) opens one on any machine or container. Make inline the default in Settings › Terminal.
+- **Beside the page, not over it:** the pane splits, the page above and the terminals below, each scrolling on its
+  own; drag the edge between them. Minimize them with the button left of the tabs (they keep running) and bring
+  them back with the one at the bottom left, ⌘J, or **t**; **r** goes into the one you're on.
+- **They last:** each keeps running through a page reload, Fleet restarting or quitting (its shell lives in tmux),
+  and reconnects by itself when the connection drops.
+- **Split, kill, rename:** split the one you're on (⌘\\), kill it (⌘⌫ on its tab), rename it, drag a tab onto a
+  terminal to split them there (⌘Z undoes it), and Ctrl+Tab between them. Right-click a tab or the bar for the
+  rest.
+- **Templates:** save the terminals you have open (which, on what, named what, split how) and launch them again
+  later from the bar's menu or ⌘K; **Reset** goes back to the default.
+- **Its own text:** a text size of its own (A− A+, or ⌘+ ⌘− ⌘0 while you're in the terminals), apart from Fleet's
+  zoom, and a font of your choosing in Settings › Terminal; Powerline and Nerd Font symbols draw even without a
+  Nerd Font installed.
+- **What starts in it:** a login shell, tmux reattaching to a session, or your own command (Settings › Terminal).
+
+The packages carry ttyd and tmux, which the terminals use; running from source, install them
+(`brew install ttyd tmux`, `sudo apt install ttyd tmux`).
+
+**The tree panel.** Drag its right edge to make it wider or narrower (double-click for the default); narrow, it drops
+the rows' graphs so the names get the room, and the toggle at the bottom right turns them off and on. The row
+above Auto and Add a machine folds the whole tree: **~** collapses everything and keeps what was open, and pressed
+again brings exactly that back; **F~** opens every node at every depth, or closes them all.
 
 **Spaces and groups.** Pin any machine, VM, project, container or group to the space bar. Drag a box over
 items at the same level (or drag a row by its handle) to group them: a **fleet** of machines, a
@@ -285,7 +304,8 @@ and `connect.json` (which machines connect when Fleet starts, and your saved set
 | ← → (⇧ for more), ⌫ | On a Details column divider: resize the column; automatic width |
 | ⌥← ⌥→ | On a Details column header: move the column |
 | ⌘T | Open a terminal on the selection; in the terminals below the page, pick where to open another (that one's machine first; Ctrl+Shift+T inside one elsewhere) |
-| ⌘J | Show or minimize the terminals below the page |
+| ⌘J or `t` | Show or minimize the terminals below the page (`t` when you aren't typing in a field) |
+| `r` | Into the terminal you're on |
 | ⌘+ ⌘− ⌘0 in the terminals | Their text size only (Fleet's zoom elsewhere) |
 | ⌘\\, ⌘⌫ in the terminals | Split the one you're on; kill it (Ctrl+Shift+5 and Delete elsewhere) |
 | ⌃⇥, ⌃⇧⇥ in the terminals | The next or previous terminal |
