@@ -108,6 +108,14 @@ class Icon(unittest.TestCase):
         self.assertIn('appendingPathComponent("python/bin/python3")', body)
         self.assertLess(body.index("python/bin/python3"), body.index("/opt/homebrew/bin/python3"))
 
+    def test_fleet_app_zoom_goes_to_the_terminals_while_youre_in_them(self):
+        # #351: the page says when the terminals are the panel you're in; the View menu's zoom then sizes them
+        src = open(os.path.join(LIVE, "packaging", "macos", "FleetApp.swift"), encoding="utf-8").read()
+        self.assertIn('d["termFocus"] as? Bool', src)
+        body = src[src.index("func zoom(_ how: String)"):src.index("@objc func zoomIn")]
+        self.assertIn("termZoom", body)
+        self.assertIn("fleetTermZoom", body)
+
     def test_the_boat_sits_centred_top_to_bottom(self):
         # #355: as much tile above the boat as below it. Its bounds come from its shapes: every rect, and every point of
         # every path (the curves here bend toward their control points, never past them)

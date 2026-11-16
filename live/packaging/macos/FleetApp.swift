@@ -40,6 +40,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     var server: Process?
     var tries = 0
     var quitting = false
+    var termZoom = false   // the page's terminals are the panel you're in: zoom sizes them (#351)
     let log = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/Fleet.log")
 
     func applicationDidFinishLaunching(_ note: Notification) {
@@ -93,6 +94,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
             window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)  // traffic lights, scroll bars, file panels
             UserDefaults.standard.set(dark, forKey: "FleetThemeDark")
         }
+        if let t = d["termFocus"] as? Bool { termZoom = t }   // the terminals are the panel you're in (#351)
         if let z = d["zoom"] as? String { zoom(z) }
         if let rs = d["regions"] as? [[Double]] {
             web.regions = rs.filter { $0.count == 4 }.map { NSRect(x: $0[0], y: $0[1], width: $0[2], height: $0[3]) }
@@ -221,6 +223,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     // Text size (⌘+ ⌘− ⌘0), kept for next time.
     static let zoomSteps: [CGFloat] = [0.67, 0.75, 0.85, 0.92, 1.0, 1.1, 1.2, 1.35, 1.5, 1.7, 2.0]
     func zoom(_ how: String) {
+        // in the terminals, ⌘+ ⌘− ⌘0 size only them (#351): the page does that
+        if termZoom { web.evaluateJavaScript("window.fleetTermZoom && window.fleetTermZoom('\(how)')", completionHandler: nil); return }
         let cur = web.pageZoom, steps = AppDelegate.zoomSteps
         var next: CGFloat = 1.0
         if how == "in" { next = steps.first(where: { $0 > cur + 0.001 }) ?? steps.last! }

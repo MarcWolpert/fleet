@@ -2950,6 +2950,7 @@ TTYD_BRIDGE_JS = r"""
     if (e.key === 'Tab' && e.ctrlKey && !e.metaKey && !e.altKey) act = e.shiftKey ? 'prevTab' : 'nextTab';
     if (MAC ? e.metaKey && !e.shiftKey && !e.altKey && e.code === 'Backslash' : e.ctrlKey && e.shiftKey && e.code === 'Digit5') act = 'split';
     if (k === 'z' && MAC && e.metaKey && !e.shiftKey && !e.altKey) act = 'undo';
+    if ((MAC ? e.metaKey : e.ctrlKey) && !e.altKey && ['=', '+', '-', '_', '0'].indexOf(e.key) >= 0) act = e.key === '0' ? 'zoomreset' : (e.key === '-' || e.key === '_') ? 'zoomout' : 'zoomin';
     if (!act) return;
     e.preventDefault(); e.stopPropagation();
     P.postMessage({fleet: 'termKey', act: act}, '*');

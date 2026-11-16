@@ -2269,7 +2269,8 @@ document.addEventListener('keydown', e => {
   if (e.key === 'Tab' && e.ctrlKey && !e.metaKey && !e.altKey) return run('space-step', e.shiftKey ? -1 : 1);
   if (mod && !e.altKey){
     const k = e.key.toLowerCase();
-    // text size: Fleet.app zooms natively; a browser does it itself
+    // in the terminals, the keys size only them (#351); elsewhere: Fleet.app zooms natively; a browser does it itself
+    if (['=', '+', '-', '_', '0'].includes(e.key) && termZoomHere()){ e.preventDefault(); fleetTermZoom(e.key === '0' ? 'reset' : (e.key === '-' || e.key === '_') ? 'out' : 'in'); return; }
     if (['=', '+', '-', '_', '0'].includes(e.key) && document.documentElement.classList.contains('native')){
       try { window.webkit.messageHandlers.fleet.postMessage({zoom: e.key === '0' ? 'reset' : (e.key === '-' || e.key === '_') ? 'out' : 'in'}); e.preventDefault(); } catch (x) {}
       return;
@@ -2565,7 +2566,19 @@ function markPanel(){
   if (wrap) wrap.classList.toggle('pactive', PANEL === 'main');
   if (dp) dp.classList.toggle('pactive', PANEL === 'details');
   const td = $('tdrawer'); if (td) td.classList.toggle('pactive', PANEL === 'term');
+  tellTermFocus();
 }
+// Fleet.app's View menu takes ⌘+ ⌘− ⌘0: the app hears when the terminals are the panel you're in, and its zoom then
+// calls fleetTermZoom (#351)
+let termFocusSent = null;
+function termZoomHere(){ return PANEL === 'term' && TD.list.length > 0 && !PREFS.termMin; }
+function tellTermFocus(){
+  const v = termZoomHere(); if (v === termFocusSent) return;
+  termFocusSent = v;
+  try { window.webkit.messageHandlers.fleet.postMessage({termFocus:v}); } catch (x) {}
+}
+function fleetTermZoom(how){ setTermFont(how === 'reset' ? TERM_FONT.def : termFont() + (how === 'out' ? -1 : 1)); }
+window.fleetTermZoom = fleetTermZoom;
 function notePanel(e){ const p = panelOf(e.target); if (p && p !== PANEL){ PANEL = p; markPanel(); } }
 document.addEventListener('pointerdown', notePanel, true);
 document.addEventListener('focusin', notePanel);
@@ -3348,6 +3361,7 @@ window.addEventListener('message', e => {
   else if (k === 'termFocus'){ if (s && TD.active !== s.key){ TD.active = s.key; keepActive(s); renderDrawer(); } if (PANEL !== 'term'){ PANEL = 'term'; markPanel(); } }
   else if (k === 'termKey' && e.data.act === 'split') splitInline(s);
   else if (k === 'termKey' && e.data.act === 'undo') undoTerm();
+  else if (k === 'termKey' && /^zoom(in|out|reset)$/.test(e.data.act)) fleetTermZoom(e.data.act.slice(4));
   else if (k === 'termKey' && e.data.act === 'newTab') openGoto({mode:'term', first:s && s.node});
   else if (k === 'termKey' && (e.data.act === 'nextTab' || e.data.act === 'prevTab')) cycleTerm(e.data.act === 'nextTab' ? 1 : -1);
   else if (k === 'termKey' && e.data.act === 'minimize') setTermMin(true);

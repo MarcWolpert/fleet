@@ -278,6 +278,7 @@ and `connect.json` (which machines connect when Fleet starts, and your saved set
 | ↑ ↓ ← → | Move through the tree; collapse, expand, go to the parent |
 | ⌘T | Open a terminal on the selection; in the terminals below the page, pick where to open another (that one's machine first; Ctrl+Shift+T inside one elsewhere) |
 | ⌘J | Show or minimize the terminals below the page |
+| ⌘+ ⌘− ⌘0 in the terminals | Their text size only (Fleet's zoom elsewhere) |
 | ⌘\\, ⌘⌫ in the terminals | Split the one you're on; kill it (Ctrl+Shift+5 and Delete elsewhere) |
 | ⌃⇥, ⌃⇧⇥ in the terminals | The next or previous terminal |
 | ⌘+ ⌘− ⌘0 | Bigger, smaller, actual size (the zoom shows by Settings when it isn't 100%) |
