@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""collect_linux.py's parsers, fed the text each source prints (/proc/net/dev, sysfs CPU lists, crontabs, virsh).
+"""collect_linux.py's parsers, fed the text each source prints (/proc/net/dev, sysfs CPU lists, crontabs, virsh,
+QEMU command lines).
 Importing the collector reads nothing from this machine: its reading loop runs only when the file runs as a
 script, the way Fleet Live pipes it to `python3 -`. Every assertion is the exact result.
 
@@ -134,6 +135,35 @@ class LibvirtVms(unittest.TestCase):
         c = collector()
         with mock.patch.object(c, "run", lambda cmd, timeout=8: ""):
             self.assertEqual(c.libvirt_vms(), [])
+
+
+def qemu_cmdline(*name):
+    """/proc/<pid>/cmdline of a QEMU process as libvirt starts it (NUL-separated), with these -name arguments."""
+    head = ["/usr/bin/qemu-system-x86_64"] + list(name)
+    rest = ["-S", "-object", '{"qom-type":"secret","id":"masterKey0","format":"raw","file":"/var/lib/libvirt/qemu/domain-1-vm/master-key.aes"}',
+            "-machine", "pc-q35-7.2,usb=off,dump-guest-core=off,memory-backend=pc.ram", "-accel", "kvm", "-cpu", "host,migratable=on",
+            "-m", "8192", "-smp", "4,sockets=1,dies=1,cores=2,threads=2", "-netdev", '{"type":"tap","fd":"30","id":"hostnet0"}']
+    return "\0".join(head + rest) + "\0"
+
+
+class QemuVm(unittest.TestCase):
+    def test_libvirt_name_with_spaces(self):
+        self.assertEqual(collector().qemu_vm(qemu_cmdline("-name", "guest=Windows 10,debug-threads=on")), "Windows 10")
+
+    def test_names_that_share_a_word_stay_apart(self):
+        c = collector()
+        self.assertEqual([c.qemu_vm(qemu_cmdline("-name", "guest=%s,debug-threads=on" % n)) for n in ("Windows 10", "Windows 11")],
+                         ["Windows 10", "Windows 11"])
+
+    def test_a_comma_in_the_name_is_written_twice(self):
+        self.assertEqual(collector().qemu_vm(qemu_cmdline("-name", "guest=lab,,test,debug-threads=on")), "lab,test")
+
+    def test_guest_key_after_another_key(self):
+        self.assertEqual(collector().qemu_vm(qemu_cmdline("-name", "debug-threads=on,guest=Windows 10")), "Windows 10")
+
+    def test_no_name_is_no_vm(self):
+        c = collector()
+        self.assertEqual([c.qemu_vm(qemu_cmdline()), c.qemu_vm("")], ["", ""])
 
 
 if __name__ == "__main__":

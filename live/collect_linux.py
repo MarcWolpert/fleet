@@ -358,6 +358,18 @@ def net_users(ifaddr):
     return users
 
 
+def qemu_vm(cmdline):
+    """The libvirt VM a QEMU process runs: the guest= key of its -name argument (guest=Windows 10,debug-threads=on),
+    from the NUL-separated command line /proc/<pid>/cmdline has. A name may hold spaces; QEMU writes a comma in it as two."""
+    argv = cmdline.split("\0")
+    for i, a in enumerate(argv[:-1]):
+        if a == "-name":
+            for kv in argv[i + 1].replace(",,", "\1").split(","):
+                if kv.startswith("guest="):
+                    return kv[6:].replace("\1", ",")
+    return ""
+
+
 def libvirt_vms():
     """Libvirt VMs and the tap interfaces they use. virsh list --name prints one VM per line, and a name may hold
     spaces ("Windows 10") or start with a dash, so it goes to virsh whole, as --domain's value."""
@@ -475,11 +487,11 @@ def snapshot():
         rb = re.search(r"read_bytes: (\d+)", io)
         wb = re.search(r"write_bytes: (\d+)", io)
         iob = (int(rb.group(1)) + int(wb.group(1))) if rb and wb else -1
-        cmd = rd("/proc/%s/cmdline" % pid).replace("\0", " ").strip()
+        argv = rd("/proc/%s/cmdline" % pid)
+        cmd = argv.replace("\0", " ").strip()
         vm = ""
         if comm.startswith("qemu"):
-            m = re.search(r"guest=([^,\s]+)", cmd)
-            vm = m.group(1) if m else ""
+            vm = qemu_vm(argv)
             if vm:
                 m = re.search(r"Cpus_allowed_list:\s*(\S+)", rd("/proc/%s/status" % pid))
                 out.setdefault("vm_cpus", {})[vm] = m.group(1) if m else ""
