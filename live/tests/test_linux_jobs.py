@@ -153,5 +153,36 @@ class JobsByCommand(unittest.TestCase):
         self.assertEqual(nodes(m), {1: "m1/base", 500: "m1/base", 600: "m1/base", 730: "m1/base", 731: "m1/base/cron/1", 732: "m1/base/cron/1"})
 
 
+BACKUP = {"sched": "0 4 * * *", "cmd": "/usr/local/bin/backup.sh", "src": "crontab"}
+
+
+class WholeRun(unittest.TestCase):
+    """Everything a job's run starts, however deep, is the job's; nothing outside the run is."""
+
+    def test_the_work_under_the_script_is_the_jobs(self):
+        m = derive(HOST + [
+            proc(740, 500, "cron", "/usr/sbin/CRON -f", 0.01),
+            proc(741, 740, "sh", "/bin/sh -c /usr/local/bin/backup.sh", 0.01),
+            proc(742, 741, "backup.sh", "/bin/bash /usr/local/bin/backup.sh", 0.05),
+            proc(743, 742, "tar", "tar -czf /backups/home.tgz /home", 1.0),
+            proc(744, 743, "gzip", "gzip", 0.5),
+            proc(745, 742, "rsync", "rsync -a /backups/ nas:/backups/", 0.25),
+            proc(750, 1, "tar", "tar -xf /tmp/other.tar", 0.5),     # the same program, not started by cron: Base
+        ], cron=[A_SH, BACKUP])
+        self.assertEqual(jobs(m), [("a.sh", False, IDLE), ("backup.sh", True, [1.81, 0.0, 0.0, 0.0, 0.0])])
+        self.assertEqual(nodes(m), {1: "m1/base", 500: "m1/base", 600: "m1/base", 740: "m1/base", 741: "m1/base/cron/1", 742: "m1/base/cron/1",
+                                    743: "m1/base/cron/1", 744: "m1/base/cron/1", 745: "m1/base/cron/1", 750: "m1/base"})
+        self.assertEqual(base(m), [1.01, 0.0, 0.0, 0.0, 0.0], "Base keeps sshd, cron's child and the other tar")
+
+    def test_a_job_of_busybox_crond(self):
+        # busybox crond starts sh -c <the job> itself, with no per-job child.
+        m = derive([proc(1, 0, "init", "/sbin/init"), proc(500, 1, "crond", "/usr/sbin/crond -f"),
+                    proc(741, 500, "sh", "/bin/sh -c /usr/local/bin/backup.sh"),
+                    proc(742, 741, "backup.sh", "/bin/sh /usr/local/bin/backup.sh"),
+                    proc(743, 742, "tar", "tar -czf /backups/home.tgz /home", 1.0)], cron=[BACKUP])
+        self.assertEqual(jobs(m), [("backup.sh", True, [1.0, 0.0, 0.0, 0.0, 0.0])])
+        self.assertEqual(nodes(m), {1: "m1/base", 500: "m1/base", 741: "m1/base/cron/0", 742: "m1/base/cron/0", 743: "m1/base/cron/0"})
+
+
 if __name__ == "__main__":
     unittest.main()

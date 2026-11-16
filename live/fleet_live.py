@@ -456,17 +456,24 @@ class Machine:
         # The host's cron; a container's own cron runs the container's jobs, which are its usage already.
         cron_daemons = {p[0] for p in r["procs"] if p[2] in ("cron", "crond") and not p[9]}
 
+        job_at = {}
+
         def job_of(row):
-            """The job a process cron started runs (by its command), or that process's child: cron's own
-            per-job child (named cron too) is cron's, Base."""
-            if row[0] in cron_daemons:
-                return None
-            if row[1] in cron_daemons:
-                return cron_job(jobs, row[10])
-            parent = by_pid.get(row[1])
-            if parent and parent[0] not in cron_daemons and parent[1] in cron_daemons:
-                return cron_job(jobs, parent[10])
-            return None
+            """The job a process cron started runs (by its command), for that process and everything under
+            it, however deep: cron's own per-job child (named cron too) is cron's, Base."""
+            chain, pid = [], row[0]
+            while pid in by_pid and pid not in cron_daemons and pid not in job_at and len(chain) < 64:
+                chain.append(pid)
+                pid = by_pid[pid][1]
+            if pid in job_at:
+                ji = job_at[pid]
+            elif chain and pid in cron_daemons:
+                ji = cron_job(jobs, by_pid[chain[-1]][10])  # chain[-1] is the process cron started
+            else:
+                ji = None
+            for q in chain:
+                job_at[q] = ji
+            return ji
         for row in procs:
             ji = job_of(row)
             if ji is not None:
