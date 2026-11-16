@@ -3,7 +3,8 @@
 cgroup did I/O on, and which interfaces and how many TCP bytes each process has, read from a /proc and /sys tree and
 ss / mdcmd output shaped like a real Linux host's (hand-made: no machine is read, no command is run).
 Every assertion is the exact result."""
-import importlib.util, os, shutil, sys, tempfile, unittest
+import importlib.util, os, re, shutil, sys, tempfile, unittest
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 LIVE = os.path.dirname(HERE)
@@ -106,6 +107,8 @@ def linux_host():
         "29 22 7:0 / /snap/core22/1380 ro,nodev,relatime shared:33 - squashfs /dev/loop0 ro",
         "30 22 0:30 / /tmp rw,nosuid,nodev shared:34 - tmpfs tmpfs rw",
         "31 22 0:52 / /mnt/backup rw,relatime shared:40 - nfs4 nas:/backup rw,vers=4.2,hard,proto=tcp",
+        "33 22 0:55 / /mnt/user rw,nosuid,nodev,noatime shared:41 - fuse.shfs shfs rw,user_id=0,group_id=0,allow_other",
+        "34 22 0:56 / /mnt/share rw,relatime shared:42 - cifs //nas/share rw,vers=3.1.1,cache=strict",
         "32 22 0:48 / /var/lib/docker/overlay2/7c1d/merged rw,relatime - overlay overlay rw,lowerdir=/var/lib/docker/overlay2/l/A"]) + "\n")
     for pid, cont in ((500, CONT1), (501, CONT1), (510, CONT2)):
         t.file("/proc/%d/cgroup" % pid, "0::/system.slice/docker-%s.scope\n" % cont)
@@ -164,6 +167,53 @@ class Disks(unittest.TestCase):
     def test_no_command_runs_on_a_host_without_unraid(self):
         self.m.disk_info(self.procs, [])
         self.assertEqual(self.m.run.ran, [])
+
+
+def fdinfo(mnt_id, ino):
+    return "pos:\t0\nflags:\t02100002\nmnt_id:\t%d\nino:\t%d\n" % (mnt_id, ino)
+
+
+class OpenFiles(unittest.TestCase):
+    """Each host process that did I/O since the last reading, with the disks that hold the files it has open."""
+    def setUp(self):
+        t = self.tree = linux_host()
+        self.addCleanup(shutil.rmtree, t.root)
+        files = {
+            300: [(0, "/dev/null", 24), (3, "/var/lib/postgresql/16/main/base/1/1259", 22), (4, "/mnt/backup/pg/base.tar", 31),
+                  (5, "/srv/db/wal/000000010000000000000001", 27), (6, "socket:[48211]", 8), (7, "/mnt/user/appdata/pg/dump.sql", 33),
+                  (8, "/mnt/share/exports/pg.csv", 34)],
+            310: [(3, "/var/log/app/app.log", 612), (4, "/home/app/data.db", 615)],    # in its own mount namespace
+            320: [(3, "/var/lib/app/cache.db", 22)],                                       # did no I/O
+            330: [(3, "/mnt/backup/rsync.tmp", 31), (4, "/mnt/user/media/a.mkv", 33), (5, "pipe:[5521]", 13)],  # only on the network
+            500: [(3, "/var/lib/nginx/cache/a", 22)],                                      # a container's: its cgroup says
+        }
+        for pid, fds in files.items():
+            for fd, target, mnt_id in fds:
+                t.raw_link("/proc/%d/fd/%d" % (pid, fd), target)
+                t.file("/proc/%d/fdinfo/%d" % (pid, fd), fdinfo(mnt_id, 1000 + fd))
+        t.file("/proc/310/mountinfo", "\n".join([      # systemd's ProtectSystem=strict: the same filesystems, new mount ids
+            "600 590 8:1 / / ro,relatime shared:1 - ext4 /dev/sda1 rw",
+            "612 600 8:1 /var/log /var/log rw,relatime shared:1 - ext4 /dev/sda1 rw",
+            "615 600 253:0 / /home ro,relatime shared:31 - ext4 /dev/mapper/home rw"]) + "\n")
+        self.m = load()
+        self.m.ROOT = t.root
+        self.m.run = commands({})
+
+    def readings(self):
+        before = [proc(300, "postgres", 1000), proc(310, "app", 50), proc(320, "app", 70), proc(330, "rsync", 0), proc(500, "nginx", 10, CONT1[:12])]
+        after = [proc(300, "postgres", 9000), proc(310, "app", 60), proc(320, "app", 70), proc(330, "rsync", 4096), proc(500, "nginx", 90, CONT1[:12])]
+        self.m.disk_info(before, [])
+        return self.m.disk_info(after, [])[1]
+
+    def test_each_busy_process_with_the_disks_its_open_files_are_on(self):
+        self.assertEqual(self.readings(), {300: ["sda", "sdb", "sdc"], 310: ["nvme0n1", "sda"]})
+
+    def test_open_files_are_never_stat_ed(self):
+        """stat() would ask the file's own filesystem: an NFS, SMB or FUSE server, which may never answer."""
+        fd_path = re.compile(re.escape(self.tree.root) + r"/proc/\d+/fd/\d+$")
+        with mock.patch.object(self.m.os, "stat", wraps=os.stat) as st:
+            self.readings()
+        self.assertEqual([c.args[0] for c in st.call_args_list if fd_path.search(str(c.args[0]))], [])
 
 
 MDCMD = """sbName=/boot/config/super.dat

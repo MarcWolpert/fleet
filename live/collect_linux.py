@@ -235,6 +235,16 @@ def disks_of(majmin):
     return out
 
 
+def mounts_in(text):
+    """mountinfo -> [(mount id, mount point, the physical disks under it)]"""
+    out = []
+    for line in text.splitlines():
+        f = line.split()
+        if len(f) > 4 and f[2]:
+            out.append((f[0], f[4], disks_of(f[2]) if not f[2].startswith("0:") else set()))
+    return out
+
+
 def disk_info(procs, containers):
     unraid_map()
     disks = []
@@ -249,12 +259,12 @@ def disk_info(procs, containers):
                       "model": (rd(b + "device/model").strip() or rd(b + "device/name").strip()), "size": int(size) * 512 if size.isdigit() else 0,
                       "rot": rd(b + "queue/rotational").strip() == "1", "mounts": [], "role": UNRAID["role"].get(n, "")})
     by = {d["name"]: d for d in disks}
-    for line in rd(ROOT + "/proc/self/mountinfo").splitlines():
-        f = line.split()
-        if len(f) > 4 and f[2] and not f[2].startswith("0:"):
-            for dn in disks_of(f[2]):
-                if dn in by and len(by[dn]["mounts"]) < 4 and f[4] not in by[dn]["mounts"]:
-                    by[dn]["mounts"].append(f[4])
+    mnt = {}  # mount id -> the disks under it, for the open files below
+    for mid, point, under in mounts_in(rd(ROOT + "/proc/self/mountinfo")):
+        mnt[mid] = under
+        for dn in under:
+            if dn in by and len(by[dn]["mounts"]) < 4 and point not in by[dn]["mounts"]:
+                by[dn]["mounts"].append(point)
     # Processes that did I/O since the last reading: which disks hold the files they have open.
     pdisks = {}
     busy = []
@@ -265,18 +275,26 @@ def disk_info(procs, containers):
             if prev is not None and p[8] > prev and not p[9]:
                 busy.append(p[0])
     for pid in busy[:300]:
-        found = set()
+        found, own = set(), False
         try:
             fds = os.listdir(ROOT + "/proc/%d/fd" % pid)[:2000]
         except Exception:
             continue
         for fd in fds:
+            # The fd's fdinfo names the mount its file is on. stat() would ask the file's own filesystem instead: a round
+            # trip to an NFS, SMB or FUSE server for no disk, and a reading that never returns when that server is gone.
             try:
-                st = os.stat(ROOT + "/proc/%d/fd/%s" % (pid, fd))
+                if not os.readlink(ROOT + "/proc/%d/fd/%s" % (pid, fd)).startswith("/"):
+                    continue  # a socket, pipe or anon inode: never on a disk
             except Exception:
                 continue
-            if st.st_dev and os.major(st.st_dev):
-                found |= disks_of("%d:%d" % (os.major(st.st_dev), os.minor(st.st_dev)))
+            m = re.search(r"^mnt_id:\s*(\d+)", rd(ROOT + "/proc/%d/fdinfo/%s" % (pid, fd)), re.M)
+            if not m:
+                continue
+            if m.group(1) not in mnt and not own:  # its own mount namespace (systemd's ProtectSystem, PrivateTmp); mount ids are global
+                own = True
+                mnt.update((mid, under) for mid, _, under in mounts_in(rd(ROOT + "/proc/%d/mountinfo" % pid)))
+            found |= mnt.get(m.group(1), set())
         if found:
             pdisks[pid] = sorted(found)
     if len(PREV_IO) > 20000:
