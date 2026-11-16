@@ -24,6 +24,7 @@ LAST_CLIENT = [0.0]   # when a Fleet window last asked for data
 PINS_PATH = os.path.expanduser("~/.config/fleet/pins.json")
 TILEPINS_PATH = os.path.expanduser("~/.config/fleet/tilepins.json")  # pinned tiles and CPU groups, per machine
 PREFS_PATH = os.path.expanduser("~/.config/fleet/ui.json")  # UI layout (Details columns per detail type)
+CONNECT_PATH = os.path.expanduser("~/.config/fleet/connect.json")  # which machines Fleet connects to when it starts, and saved sets
 PINS_LOCK = threading.Lock()
 
 
@@ -52,6 +53,40 @@ def load_prefs():
         return d if isinstance(d, dict) else {}
     except Exception:
         return {}
+
+
+def load_connect():
+    """'Connect automatically': auto is all, none or the name of a saved set of machine ids."""
+    try:
+        with open(CONNECT_PATH) as f:
+            d = json.load(f)
+    except Exception:
+        d = {}
+    d = d if isinstance(d, dict) else {}
+    raw = d.get("presets") if isinstance(d.get("presets"), dict) else {}
+    presets = {str(k)[:60]: [str(x)[:200] for x in v][:500] for k, v in raw.items() if isinstance(v, list)}
+    auto = d.get("auto") if d.get("auto") in ["all", "none"] + list(presets) else "all"
+    return {"auto": auto, "presets": presets}
+
+
+def save_connect(d):
+    with PINS_LOCK:
+        os.makedirs(os.path.dirname(CONNECT_PATH), exist_ok=True)
+        tmp = CONNECT_PATH + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump({"auto": d["auto"], "presets": d["presets"]}, f, indent=1)
+        os.replace(tmp, CONNECT_PATH)
+
+
+def connects_at_start(cfg, conn, off=()):
+    """Whether Fleet connects to this machine when it starts: this computer always (it needs no SSH); an
+    SSH machine per 'Connect automatically', unless it was turned off by hand before Fleet restarted itself."""
+    if cfg.get("kind") == "local":
+        return True
+    if cfg["id"] in off:
+        return False
+    a = conn["auto"]
+    return a == "all" or (a != "none" and cfg["id"] in conn["presets"].get(a, []))
 
 
 def save_prefs(d):
@@ -259,12 +294,19 @@ class Machine:
         self.proc = None
         self.last_ok = 0.0          # when the last good reading arrived
         self.wake = threading.Event()  # Retry now
+        self.on = threading.Event()    # connect (set) or stay disconnected (clear)
+        self.on.set()
         self.thread = threading.Thread(target=self.loop, daemon=True, name="fleet-" + self.id)
 
     # One thread per machine; reconnect with backoff.
     def loop(self):
         backoff = 5
         while True:
+            if not self.on.is_set():   # turned off: no session until it's turned on
+                with self.lock:
+                    self.view, self.status, self.error = None, "disabled", ""
+                self.on.wait()
+                backoff = 5
             try:
                 if self.cfg.get("kind") == "local":
                     self.local_loop()
@@ -273,9 +315,26 @@ class Machine:
                 backoff = 5
             except Exception as e:  # never die; show it
                 self.set_status("offline", "collector error: %s" % e)
+            if not self.on.is_set():
+                continue
             self.wake.wait(backoff)
             self.wake.clear()
             backoff = min(60, backoff * 2)
+
+    def turn(self, on):
+        """Connect (on) or disconnect (off) by hand. Off ends this machine's own SSH session and keeps it
+        closed until it's turned on. This computer has no switch: it needs no SSH."""
+        if self.cfg.get("kind") == "local":
+            return False
+        if on:
+            self.on.set()
+        else:
+            self.on.clear()
+            p = self.proc
+            if p is not None and p.poll() is None:
+                p.terminate()
+        self.wake.set()
+        return True
 
     def got(self, view):
         with self.lock:
@@ -301,6 +360,8 @@ class Machine:
         self.set_status("connecting")
         p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         self.proc = p
+        if not self.on.is_set():   # turned off while it was starting
+            p.terminate()
         if stdin:
             p.stdin.write(stdin)
             p.stdin.close()  # Linux: the script itself; python3 - runs it at EOF
@@ -1150,8 +1211,11 @@ class Fleet:
         self.config_path = cfg.get("__path", CONFIG_PATH)
         self.interval = float(cfg.get("interval", 3))
         self.machines = collections.OrderedDict()
+        conn, off = load_connect(), set(filter(None, os.environ.pop("FLEET_OFF", "").split(",")))
         for m in cfg.get("machine", []):
             self.machines[m["id"]] = Machine(m, self.interval)
+            if not connects_at_start(m, conn, off):
+                self.machines[m["id"]].on.clear()
         self.tick = 0
         self.specs = {}
         self.lock = threading.Lock()
@@ -1190,6 +1254,7 @@ class Fleet:
                 "error": error, "os": cfg.get("os_label") or {"windows": "Windows", "linux": "Linux", "macos": "macOS"}.get(cfg.get("os", ""), ""), "agent": "local" if cfg.get("kind") == "local" else "ssh " + cfg.get("ssh", ""),
                 "cronLabel": "Cron jobs", "gpus": [], "cap": [1, 1, 0, 1, 1], "procs": [], "baseCron": [], "compose": [], "containers": [], "vms": []}
         spec["ssh"] = cfg.get("ssh", "")
+        spec["on"] = m.on.is_set()
         spec["has_data"] = view is not None
         spec["last_ok"] = m.last_ok
         if view is None:
@@ -1197,7 +1262,7 @@ class Fleet:
                 spec["base"] = {"id": mid + "/base", "h": self.leaf(mid + "/base", vm_hostside["u"], record)}
                 spec["cap"] = [max(1, vm_hostside.get("vcpus", 1)), max(1, vm_hostside.get("mem", 1)), 0, 1, 1]
                 spec["status"] = "hostonly" if status != "ok" else status
-                spec["error"] = (error or "not reachable") + " · showing what its host sees"
+                spec["error"] = (error or ("not connected" if status == "disabled" else "not reachable")) + " · showing what its host sees"
             else:
                 spec["base"] = {"id": mid + "/base", "h": self.leaf(mid + "/base", [0] * 5, record)}
             if vm_parent is not None and vm_hostside is None:
@@ -1306,7 +1371,38 @@ class Fleet:
             if s:
                 machines.append(strip_procs(s))
         return {"t": time.time(), "interval": self.interval, "window_s": self.interval * H, "machines": machines,
-                "pins": load_pins(), "tilepins": load_tilepins(), "prefs": load_prefs()}
+                "pins": load_pins(), "tilepins": load_tilepins(), "prefs": load_prefs(), "connect": self.connect_state()}
+
+    def connect_state(self):
+        conn = load_connect()
+        conn["starts"] = [m.id for m in self.machines.values() if connects_at_start(m.cfg, conn)]
+        return conn
+
+    def api_connect(self, d):
+        """Turn a machine on or off ({machine, on}), or set 'Connect automatically': {auto: all | none | a
+        saved set}, {save: name} (the SSH machines connected now, which it then picks), {delete: name}."""
+        if "machine" in d:
+            m = self.machines.get(str(d["machine"]))
+            return {"ok": bool(m and m.turn(bool(d.get("on")))), "connect": self.connect_state()}
+        conn = load_connect()
+        if "save" in d:
+            name = " ".join(str(d["save"]).split())[:60]
+            if not name or name.lower() in ("all", "none"):
+                return {"ok": False, "error": "Give it a name other than All or None.", "connect": self.connect_state()}
+            conn["presets"][name] = [m.id for m in self.machines.values() if m.cfg.get("kind") != "local" and m.on.is_set()]
+            conn["auto"] = name
+        elif "delete" in d:
+            conn["presets"].pop(str(d["delete"]), None)
+            if conn["auto"] not in conn["presets"] and conn["auto"] not in ("all", "none"):
+                conn["auto"] = "all"
+        elif "auto" in d:
+            if d["auto"] not in ["all", "none"] + list(conn["presets"]):
+                return {"ok": False, "error": "No such set.", "connect": self.connect_state()}
+            conn["auto"] = d["auto"]
+        else:
+            return {"ok": False, "connect": self.connect_state()}
+        save_connect(conn)
+        return {"ok": True, "connect": self.connect_state()}
 
     def find_machine(self, mid):
         return self.machines.get(mid)
@@ -1468,6 +1564,7 @@ def load_state(fleet):
 
 def restart_self(fleet, reason):
     print("%s; restarting" % reason, flush=True)
+    os.environ["FLEET_OFF"] = ",".join(m.id for m in fleet.machines.values() if not m.on.is_set())   # stays off after the restart
     save_state(fleet)
     stop_collectors(fleet)
     args = [x for x in sys.argv[1:] if x not in ("--open", "--open-if-unseen")] + ["--open-if-unseen"]
@@ -2012,6 +2109,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 return
             save_tilepins({str(k)[:200]: [str(x)[:200] for x in v] for k, v in d.items() if v})
             return self.send_json({"tilepins": load_tilepins()})
+        if u.path == "/api/connect":
+            d = self.read_json()
+            return self.send_json(self.fleet.api_connect(d if isinstance(d, dict) else {}))
         if u.path == "/api/retry":
             d = self.read_json() or {}
             m = self.fleet.machines.get(str(d.get("machine", "")))
