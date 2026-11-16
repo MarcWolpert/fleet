@@ -508,6 +508,58 @@ class SocketOwners(unittest.TestCase):
         self.assertEqual(out, [dict({"2200": {"ifs": ["eth0"], "b": i * 1000000}}, **({"2300": {"ifs": ["eth0"], "b": i * 1000}} if i >= 4 else {}))
                                for i in range(1, 13)])
 
+    def gap(self, fails, owners=lambda i: True):
+        """12 readings of nginx's stream A (1 MB a reading) and, from reading 4, curl's G (1 kB a reading), on a host where
+        ss -p is cheap. fails: the readings whose ss -p walk times out (8 s, no output). owners(i): whether reading i's
+        walk names each socket's process. Returns the commands as a string ("p" a walk, "-" ss without -p) and pnet."""
+        m, clock, ran, out = load(), [1000.0], [], []
+        m.time = types.SimpleNamespace(time=lambda: clock[0])
+        for i in range(1, 13):
+            def run(cmd, timeout=8, i=i):
+                walk = cmd[1] == "-tinpH"
+                ran.append("p" if walk else "-")
+                if walk and i in fails:
+                    clock[0] += 8
+                    return ""
+                clock[0] += 0.02 if walk else 0.01
+                p = walk and owners(i)
+                text = conn(*A, "nginx", 2200, 21, i * 1000000 - 1000, 1000, p)
+                return text + (conn(*G, "curl", 2300, 3, i * 1000 - 100, 100, p) if i >= 4 else "")
+            m.run = run
+            out.append({pid: (u["ifs"], u["b"]) for pid, u in m.net_users(IFADDR, LIVE_PIDS).items()})
+            clock[0] += 3
+        return "".join(ran), out
+
+    def test_a_walk_that_fails_keeps_the_owners_it_knew(self):
+        # Reading 3's walk times out: ss gave nothing, so the counts hold for that reading. It cost 8 s, so the next walk
+        # is reading 11, and the readings between use the owners the last walk that answered found (reading 2's).
+        ran, out = self.gap({3})
+        self.assertEqual(ran, "ppp-------pp")
+        nginx = lambda i, ifs=("eth0",): {"2200": (list(ifs), i * 1000000)}
+        self.assertEqual(out, [nginx(1), nginx(2), nginx(2, ())] +
+                         [nginx(i) for i in range(4, 11)] +          # curl's connection is newer than reading 2's walk
+                         [dict(nginx(11), **{"2300": (["eth0"], 11000)}), dict(nginx(12), **{"2300": (["eth0"], 12000)})])
+
+    def test_a_connection_whose_owner_a_walk_missed_keeps_its_baseline(self):
+        # The walks of readings 3, 5 and 6 answer but name no process: each connection's bytes hold until a walk names
+        # its process again, and then count from where they were, not from 0 a second time.
+        ran, out = self.gap(set(), owners=lambda i: i not in (3, 5, 6))
+        self.assertEqual(ran, "p" * 12)
+        both = lambda i: {"2200": (["eth0"], i * 1000000), "2300": (["eth0"], i * 1000)}
+        unnamed = lambda d: {pid: ([], b) for pid, (ifs, b) in d.items()}
+        self.assertEqual(out, [{"2200": (["eth0"], 1000000)}, {"2200": (["eth0"], 2000000)}, {"2200": ([], 2000000)},
+                               both(4), unnamed(both(4)), unnamed(both(4))] + [both(i) for i in range(7, 13)])
+
+    def test_a_connection_reopened_on_the_same_ports_while_unnamed_counts_in_full(self):
+        # Negative control: an unnamed connection whose bytes went down is a new one on the same ports, so it keeps no
+        # old baseline. Reading 2's walk can't name A's process and A has started over (0.5 MB); reading 3 names it.
+        m, out = load(), []
+        for text in (conn(*A, "nginx", 2200, 21, 999000, 1000), conn(*A, "nginx", 2200, 21, 499000, 1000, False),
+                     conn(*A, "nginx", 2200, 21, 1499000, 1000)):
+            m.run = lambda cmd, timeout=8, text=text: text
+            out.append({pid: u["b"] for pid, u in m.net_users(IFADDR, LIVE_PIDS).items()})
+        self.assertEqual(out, [{"2200": 1000000}, {"2200": 1000000}, {"2200": 2500000}])
+
 
 if __name__ == "__main__":
     unittest.main()
