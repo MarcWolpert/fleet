@@ -236,5 +236,31 @@ class TimerLastRun(unittest.TestCase):
         self.assertEqual({j["name"]: j["last"] for j in m.view["jobs"]}, {k: last for k, (_, last) in self.LINES.items()})
 
 
+class JobNames(unittest.TestCase):
+    """A job is named after what it runs (run-parts: the directory), past a guard (test -x X ||, [ -x X ] &&,
+    command -v X &&), cd, variable assignments, and wrappers with their own arguments."""
+
+    def test_names(self):
+        cases = {
+            "/usr/local/bin/backup.sh": "backup.sh",
+            "cd / && run-parts --report /etc/cron.hourly": "cron.hourly",
+            "test -x /usr/sbin/anacron || { cd / && run-parts --report /etc/cron.daily; }": "cron.daily",
+            "test -x /usr/sbin/anacron || ( cd / && run-parts --report /etc/cron.weekly )": "cron.weekly",
+            "[ -x /usr/lib/php/sessionclean ] && if [ ! -d /run/systemd/system ]; then /usr/lib/php/sessionclean; fi": "sessionclean",
+            "test -e /run/systemd/system || SERVICE_MODE=1 /usr/lib/x86_64-linux-gnu/e2fsprogs/e2scrub_all_cron": "e2scrub_all_cron",
+            "command -v debian-sa1 > /dev/null && debian-sa1 1 1": "debian-sa1",
+            "/usr/bin/flock -n /tmp/x.lock /usr/local/bin/a.sh": "a.sh",
+            "nice -n 19 /usr/local/bin/backup.sh": "backup.sh",
+            "ionice -c3 nice -n 10 /usr/local/bin/backup.sh": "backup.sh",
+            "timeout -s KILL 1h /usr/local/bin/sync.sh": "sync.sh",
+            "sudo -u www-data php /var/www/artisan schedule:run": "artisan",
+            "env PATH=/usr/local/bin:/usr/bin /usr/local/bin/a.sh": "a.sh",
+            "php /var/www/cron.php": "cron.php",
+            "python3 /opt/jobs/sync.py >> /var/log/sync.log 2>&1": "sync.py",
+            "pg_dump shop > /backups/db-$(date +\\%F).sql": "pg_dump",
+        }
+        self.assertEqual({c: fleet_live.job_name(c) for c in cases}, cases)
+
+
 if __name__ == "__main__":
     unittest.main()

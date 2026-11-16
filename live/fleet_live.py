@@ -797,13 +797,38 @@ def aslist(x):
     return x if isinstance(x, list) else [x]
 
 
+JOB_GUARDS = ("cd", "test", "[", "[[", "command", "true", ":", "fi", "done", "}", ")")
+# Wrappers of a job's command, with their options that take a value; flock and timeout take one argument
+# (the lock file, the duration) before the command.
+JOB_WRAPPERS = {"run-parts": (), "nice": ("-n",), "ionice": ("-c", "-n", "-p"), "env": ("-u",), "sudo": ("-u", "-g"), "nohup": (),
+                "flock": ("-w", "-E"), "timeout": ("-s", "-k"), "php": (), "python3": (), "python": (), "sh": (), "bash": ()}
+JOB_ARGS = {"flock": 1, "timeout": 1}
+
+
 def job_name(cmd):
-    toks = [x for x in re.split(r"\s+", cmd) if x and not x.startswith("-") and x not in ("cd", "&&", "test", "-x", "||", "{", "}", "/", "sh", "bash", "-c")]
-    for tok in toks:
-        b = os.path.basename(tok.strip("'\";"))
-        if b and b not in ("run-parts", "nice", "ionice", "env", "flock", "timeout", "sudo", "php", "python3", "python"):
-            return b[:48]
-    return (toks[0] if toks else cmd)[:48]
+    """A short name for a cron job: what it runs (run-parts: the directory), past a guard (test -x X ||,
+    [ -x X ] &&, command -v X &&), cd, variable assignments, and wrappers with their own arguments."""
+    for part in re.split(r"&&|\|\||;", cmd):
+        words = [w.strip("'\";") for w in part.split()]
+        while words and words[0] in ("{", "(", "if", "then", "else", "do", "!", "exec"):
+            words.pop(0)
+        if not words or words[0] in JOB_GUARDS:
+            continue
+        opts, args, i = (), 0, 0
+        while i < len(words):
+            w = words[i]
+            i += 1
+            if w.startswith("-"):
+                i += w in opts  # its value
+            elif re.match(r"[A-Za-z_]\w*=", w):
+                continue
+            elif args:
+                args -= 1
+            elif os.path.basename(w) in JOB_WRAPPERS:
+                opts, args = JOB_WRAPPERS[os.path.basename(w)], JOB_ARGS.get(os.path.basename(w), 0)
+            elif os.path.basename(w):
+                return os.path.basename(w)[:48]
+    return (cmd.split() or [cmd])[0][:48]
 
 
 TIMER_LINE = re.compile(r"(?:\w{3} \S+ \S+ \S+|-|n/a) (?:-|n/a|.+? (?:left|ago)) (?:\w{3} (\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}):\d{2} \S+|-|n/a)(?: |$)")
