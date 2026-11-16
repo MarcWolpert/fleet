@@ -1,11 +1,12 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """A VM's memory, seen from its host and from inside.
 
-On its host, a VM costs what the host gives it: its QEMU process's resident memory (what htop and the
-hypervisor's own UI count), not what the guest says it uses. And a guest whose balloon is inflated with
+On its host, a VM costs what the host gives it: its QEMU process's resident memory (what htop counts) and its
+huge pages (which htop leaves out), not what the guest says it uses. And a guest whose balloon is inflated with
 deflate-on-OOM keeps the balloon inside MemTotal and counts it as used, so the guest's own reading has
 to leave the balloon out of both."""
 import ast, importlib.util, os, re, sys, unittest
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 LIVE = os.path.dirname(HERE)
@@ -84,6 +85,42 @@ class InsideTheGuest(unittest.TestCase):
     def test_nr_balloon_pages_wins_where_the_kernel_has_it(self):
         vmstat = "nr_balloon_pages 1000\nballoon_inflate 50331648\nballoon_deflate 7340032\n"
         self.assertEqual(collector_fn("guest_mem")(MEMINFO, vmstat, [DEFLATE_ON_OOM], 4096), [263895004 * KB - 1000 * 4096, 24421508 * KB])
+
+
+# /proc/<pid>/status of a QEMU process whose guest RAM (32 GiB) is on huge pages: libvirt <memoryBacking><hugepages/>.
+# Huge pages aren't in RSS (VmRSS, /proc/<pid>/stat), so the VM would cost its host 0.4 GB and Base system the rest (#300).
+QEMU_STATUS = ("Name:\tqemu-system-x86\nState:\tS (sleeping)\nVmRSS:\t  419328 kB\nRssAnon:\t  401408 kB\n"
+               "HugetlbPages:\t33554432 kB\nThreads:\t9\nCpus_allowed_list:\t2-7\n")
+
+
+class HugePages(unittest.TestCase):
+    def test_a_vm_on_huge_pages_costs_its_host_its_huge_pages(self):
+        self.assertEqual(collector_fn("hugetlb_bytes")(QEMU_STATUS), 32 * GIB)
+
+    def test_none_and_a_kernel_without_the_line_control(self):
+        for status in (QEMU_STATUS.replace("33554432", "0"), "\n".join(l for l in QEMU_STATUS.splitlines() if not l.startswith("Huge")), ""):
+            with self.subTest(status=status):
+                self.assertEqual(collector_fn("hugetlb_bytes")(status), 0)
+
+    def test_the_collector_adds_them_to_a_vms_qemu_process_only(self):
+        # one reading of a /proc with dev-vm's QEMU process (32 GiB on huge pages) and a database that also maps huge
+        # pages but isn't a VM (the control: its memory stays what RSS says, as everywhere else)
+        spec = importlib.util.spec_from_file_location("collect_linux_hugepages", os.path.join(LIVE, "collect_linux.py"))
+        cl = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cl)   # importing takes no reading
+        stat = lambda pid, comm: "%d (%s) S 1 %d %d 0 -1 4194560 100 0 0 0 500 200 0 0 20 0 9 0 1000 4000000000 102400 %s" % (pid, comm, pid, pid, " ".join(["0"] * 20))
+        files = {"/proc/stat": "cpu  1 0 1 10 0 0 0 0 0 0\ncpu0 1 0 1 10 0 0 0 0 0 0\n", "/proc/meminfo": MEMINFO,
+                 "/proc/4242/stat": stat(4242, "qemu-system-x86"), "/proc/4242/status": QEMU_STATUS,
+                 "/proc/4242/cmdline": "/usr/bin/qemu-system-x86_64\0-name\0guest=dev-vm,debug-threads=on\0-m\032768\0",
+                 "/proc/5151/stat": stat(5151, "postgres"), "/proc/5151/status": QEMU_STATUS.replace("qemu-system-x86", "postgres"),
+                 "/proc/5151/cmdline": "postgres\0-D\0/var/lib/postgresql\0"}
+        listdir = os.listdir
+        with mock.patch.object(cl, "rd", lambda p: files.get(p, "")), mock.patch.object(cl, "run", lambda *a, **kw: ""), \
+                mock.patch.object(cl.os, "listdir", lambda p: ["4242", "5151", "self"] if p == "/proc" else listdir(p)):
+            out = cl.snapshot()
+        self.assertEqual(sorted((p[0], p[2], p[5], p[10]) for p in out["procs"]),
+                         [(4242, "qemu-system-x86", 102400 * cl.PAGE + 32 * GIB, "dev-vm"), (5151, "postgres", 102400 * cl.PAGE, "")])
+        self.assertEqual(out["vm_cpus"], {"dev-vm": "2-7"})
 
 
 if __name__ == "__main__":

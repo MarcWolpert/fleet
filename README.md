@@ -63,7 +63,8 @@ waits on (CPU, disk, memory, GPU, locks, network), its cache misses over a lookb
 and threads; the list holds still while it's open.
 
 **Containers and VMs, counted once.** A VM on its host costs what the host gives it (its QEMU process, as
-`htop` shows it); its own page shows what the guest reports, without a ballooned guest's balloon. On a Mac,
+`htop` shows it, plus guest memory on huge pages, which `htop` leaves out); its own page shows what the guest
+reports, without a ballooned guest's balloon. On a Mac,
 Docker Desktop's VM folds into Base system, and Details lists each container's processes from inside it.
 Look inside one with a throwaway helper container or by running Fleet's inspector in its container.
 

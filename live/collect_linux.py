@@ -541,6 +541,14 @@ def qemu_vm(cmdline):
     return ""
 
 
+def hugetlb_bytes(status):
+    """The huge pages (hugetlbfs) a process has mapped, from its /proc/<pid>/status (Linux 4.4 on). They are not in
+    its RSS, so a VM whose guest RAM is on huge pages (libvirt <memoryBacking><hugepages/>) would cost its host
+    almost nothing and leave the rest to Base system (#300)."""
+    m = re.search(r"^HugetlbPages:\s*(\d+) kB", status, re.M)
+    return int(m.group(1)) * 1024 if m else 0
+
+
 def libvirt_vms():
     """Libvirt VMs and the tap interfaces they use. virsh list --name prints one VM per line, and a name may hold
     spaces ("Windows 10") or start with a dash, so it goes to virsh whole, as --domain's value."""
@@ -680,17 +688,19 @@ def snapshot():
         iob = (int(rb.group(1)) + int(wb.group(1))) if rb and wb else -1
         argv = rd("/proc/%s/cmdline" % pid)
         cmd = argv.replace("\0", " ").strip()
-        vm = ""
+        vm, rss = "", int(f[21]) * PAGE
         if comm.startswith("qemu"):
             vm = qemu_vm(argv)
             if vm:
-                m = re.search(r"Cpus_allowed_list:\s*(\S+)", rd("/proc/%s/status" % pid))
+                status = rd("/proc/%s/status" % pid)
+                m = re.search(r"Cpus_allowed_list:\s*(\S+)", status)
                 out.setdefault("vm_cpus", {})[vm] = m.group(1) if m else ""
+                rss += hugetlb_bytes(status)   # its guest RAM on huge pages isn't in RSS
         if cid and cid not in first_pid_of:
             first_pid_of[cid] = pid
         if cid:  # when the container's first process started (ticks since boot)
             started[cid] = min(started.get(cid, int(f[19])), int(f[19]))
-        procs.append([int(pid), int(f[1]), comm, f[0], int(f[11]) + int(f[12]), int(f[21]) * PAGE,
+        procs.append([int(pid), int(f[1]), comm, f[0], int(f[11]) + int(f[12]), rss,
                       int(f[17]), users.get(uid, uid), iob, cid, vm, unit, cmd[:300], int(f[36]) if len(f) > 36 else -1])
     out["procs"] = procs
 
