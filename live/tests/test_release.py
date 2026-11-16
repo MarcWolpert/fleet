@@ -51,6 +51,32 @@ class Packages(unittest.TestCase):
         r = subprocess.run(["sh", os.path.join(LIVE, "packaging", "macos", "build_macos.sh"), "--arch", "arm64", "--check"], capture_output=True, text=True, timeout=300)
         self.assertEqual((r.returncode, [l for l in r.stderr.splitlines() if "error" in l.lower()]), (0, []))
 
+    @unittest.skipUnless(sys.platform == "darwin" and shutil.which("swiftc"), "needs macOS and swiftc")
+    def test_the_mac_build_works_from_a_folder_with_a_space_in_its_name(self):
+        # a checkout under "My Code", and a TMPDIR with a space: --check, and a whole build, app and zip
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, work = os.path.join(tmp, "My Code"), os.path.join(tmp, "tmp dir")
+            live = os.path.join(repo, "live")
+            os.makedirs(os.path.join(live, "web")); os.makedirs(os.path.join(live, "packaging", "icon")); os.makedirs(work)
+            shutil.copy(os.path.join(os.path.dirname(LIVE), "COPYING"), repo)
+            shutil.copytree(os.path.join(LIVE, "packaging", "macos"), os.path.join(live, "packaging", "macos"))
+            shutil.copy(os.path.join(LIVE, "packaging", "icon", "Fleet.icns"), os.path.join(live, "packaging", "icon"))
+            for f in ("fleet_live.py", "collect_linux.py", "collect_windows.ps1", "inspect_linux.py", "inspect_windows.ps1", "machines.example.toml"):
+                shutil.copy(os.path.join(LIVE, f), live)
+            for f in ("index.html", "app.js", "themes.js", "icon.svg"):
+                shutil.copy(os.path.join(LIVE, "web", f), os.path.join(live, "web"))
+            build = os.path.join(live, "packaging", "macos", "build_macos.sh")
+            env = dict(os.environ, TMPDIR=work)
+            r = subprocess.run(["sh", build, "--arch", "arm64", "--check"], capture_output=True, text=True, timeout=300, env=env)
+            self.assertEqual((r.returncode, [l for l in r.stderr.splitlines() if "error" in l.lower()]), (0, []), "--check")
+            r = subprocess.run(["sh", build, "--arch", "arm64"], capture_output=True, text=True, timeout=600, env=env)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            app = os.path.join(live, "dist", "Fleet.app", "Contents", "MacOS", "Fleet")
+            self.assertEqual(subprocess.run(["lipo", "-archs", app], capture_output=True, text=True).stdout.split(), ["arm64"])
+            self.assertEqual(sorted(os.listdir(os.path.join(live, "dist"))), ["Fleet-%s-macos-arm64.zip" % version(), "Fleet.app"])
+            self.assertEqual(os.listdir(work), [], "the build cleans up after itself")
+
 
 class ReleaseNotes(unittest.TestCase):
     """The changelog section becomes the release notes word for word, so it promises only the Macs the release
