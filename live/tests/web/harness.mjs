@@ -20,18 +20,48 @@ export const WEB = path.resolve(process.env.FLEET_TEST_WEB || path.join(HERE, '.
 
 /* ---------- fixture server ---------- */
 const TYPES = {'.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml'};
+const WRITES = ['/api/config', '/api/test', '/api/terminal', '/api/prefs', '/api/tilepins', '/api/connect', '/api/retry', '/api/pins'];
+// A write, judged the way fleet_live.py's do_POST judges it: [status] or [200, its answer]. 403 unless it comes
+// from this page (Host, Origin, X-Fleet: 1), 404 for a route the server doesn't have, 400 for a body it won't keep
+// (the server drops the connection on a body that isn't JSON; the page sees a failed write either way).
+function judgeWrite(req, port, path, raw){
+  const hosts = ['127.0.0.1:' + port, 'localhost:' + port], h = req.headers;
+  if (!hosts.includes(h.host || '') || (h.origin && !hosts.some(x => h.origin === 'http://' + x)) || h['x-fleet'] !== '1') return [403];
+  if (!WRITES.includes(path)) return [404];
+  if (!['/api/prefs', '/api/tilepins', '/api/pins'].includes(path)) return [200, {ok: true}];
+  let d; try { d = JSON.parse(raw.subarray(0, path === '/api/pins' ? 65536 : 1 << 20).toString() || (path === '/api/pins' ? '[]' : 'null')); } catch (e) { return [400]; }
+  const dict = d !== null && typeof d === 'object' && !Array.isArray(d);
+  if (path === '/api/prefs') return dict && JSON.stringify(d).length <= 65536 ? [200, {prefs: d}] : [400];
+  if (path === '/api/tilepins'){
+    const vs = dict ? Object.values(d) : [];
+    if (!dict || vs.length > 500 || !vs.every(v => Array.isArray(v) && v.length <= 200)) return [400];
+    return [200, {tilepins: Object.fromEntries(Object.entries(d).filter(([, v]) => v.length).map(([k, v]) => [k.slice(0, 200), v.map(x => String(x).slice(0, 200))]))}];
+  }
+  return Array.isArray(d) && d.every(p => typeof p === 'string' && p.length < 300) ? [200, {pins: d.slice(0, 40)}] : [400];
+}
 export function startServer(fx){
   const srv = http.createServer((req, res) => {
     const u = new URL(req.url, 'http://x');
     const json = o => { const b = Buffer.from(JSON.stringify(o)); res.writeHead(200, {'Content-Type': 'application/json', 'Content-Length': b.length}); res.end(b); };
     if (u.pathname.startsWith('/api/')){
       const mid = u.searchParams.get('machine') || '';
-      if (req.method === 'POST'){ let body = ''; req.on('data', c => { body += c; }); req.on('end', () => { fx.posts = (fx.posts || []).concat([{path: u.pathname, body}]); const own = typeof fx.onPost === 'function' ? fx.onPost(u.pathname, body) : null; if (own) return json(own);  // a test plays the server's part if (u.pathname === '/api/prefs' && fx.fleet) fx.fleet.prefs = JSON.parse(body || '{}');  // kept, like the server's ui.json
-        json(u.pathname === '/api/pins' ? {pins: JSON.parse(body || '[]')} : u.pathname === '/api/prefs' ? {ok: true, prefs: JSON.parse(body || '{}')} : {ok: true}); }); return; }
+      // fx.posts: the writes the server took, {path, body, headers}; fx.refused: the ones it turned away, with the status
+      if (req.method === 'POST'){ const parts = []; req.on('data', c => parts.push(c)); req.on('end', () => {
+        const raw = Buffer.concat(parts), body = raw.toString(), w = {path: u.pathname, body, headers: req.headers};
+        const [status, answer] = judgeWrite(req, srv.address().port, u.pathname, raw);
+        if (status !== 200){ fx.refused = (fx.refused || []).concat([Object.assign(w, {status})]); res.writeHead(status); return res.end(); }
+        fx.posts = (fx.posts || []).concat([w]);
+        const own = typeof fx.onPost === 'function' ? fx.onPost(u.pathname, body) : null;
+        if (own) return json(own);  // a test plays the server's part
+        // kept and sent back with every /api/fleet, like the server's ui.json, pins.json and tilepins.json
+        const kept = {'/api/prefs': 'prefs', '/api/pins': 'pins', '/api/tilepins': 'tilepins'}[u.pathname];
+        if (kept && fx.fleet) fx.fleet[kept] = answer[kept];
+        json(answer); }); return; }
       if (u.pathname === '/api/fleet') return json(fx.fleet);
       if (u.pathname === '/api/procs') return json((fx.procs || {})[mid] || {procs: []});
       if (u.pathname === '/api/cpus') return json((fx.cpus || {})[mid] || {});
       if (u.pathname === '/api/disks') return json((fx.disks || {})[mid] || {disks: [], per_process: true});
+      if (u.pathname === '/api/ifs') return json((fx.ifs || {})[mid] || {ifs: [], per_process: true});
       if (u.pathname === '/api/net') return json(fx.net || {tailnet: 'tailnet', machines: []});
       if (u.pathname === '/api/proc'){  // the Details drop-down: fx.proc(machine, pid, call number) answers
         const pid = +u.searchParams.get('pid'); fx.procCalls = (fx.procCalls || []).concat([mid + ':' + pid]);
