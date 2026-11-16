@@ -123,5 +123,14 @@ class MakeIcons(unittest.TestCase):
                 self.assertEqual(os.listdir(os.path.join(tmp, tmpname)), [])
 
 
+class NoKeychain(unittest.TestCase):
+    """#280: Chrome launched for rendering or tests never touches the macOS keychain, so a scratch HOME (which has
+    none) shows no 'Keychain Not Found' dialog."""
+    def test_every_chrome_launch_the_tests_make_uses_a_mock_keychain(self):
+        for rel in (("packaging", "make_icons.sh"), ("tests", "web", "harness.mjs")):
+            text = open(os.path.join(LIVE, *rel), encoding="utf-8").read()
+            self.assertIn("--use-mock-keychain", text, "/".join(rel))
+
+
 if __name__ == "__main__":
     unittest.main()

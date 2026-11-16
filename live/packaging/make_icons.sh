@@ -19,7 +19,9 @@ url() { printf 'file://%s' "$1" | sed -e 's/%/%25/g' -e 's/#/%23/g' -e 's/?/%3F/
 # placeholder, so the page marks a load and the DOM Chrome dumps must carry that mark before any icon is replaced.
 printf '<!doctype html><html><head><style>html,body{margin:0;background:transparent}img{display:block;width:1024px;height:1024px}</style></head><body><img src="%s" onload="document.body.dataset.loaded=1"></body></html>' \
   "$(url "$ICON/fleet.svg")" > "$WORK/render.html"
-DOM=$("$CHROME" --headless=new --disable-gpu --hide-scrollbars --allow-file-access-from-files --user-data-dir="$WORK/profile" \
+# --use-mock-keychain: a fresh profile never asks the macOS keychain for Chrome's Safe Storage key, so a scratch HOME
+# (as the tests use, with no keychain) shows no "Keychain Not Found" dialog (#280).
+DOM=$("$CHROME" --headless=new --use-mock-keychain --disable-gpu --hide-scrollbars --allow-file-access-from-files --user-data-dir="$WORK/profile" \
   --default-background-color=00000000 --window-size=1024,1024 --screenshot="$WORK/fleet-1024.png" --dump-dom "$(url "$WORK/render.html")" 2>/dev/null) || DOM=
 case $DOM in *'data-loaded="1"'*) [ -s "$WORK/fleet-1024.png" ] ;; *) false ;; esac ||
   { echo "make_icons.sh: Chrome could not render $ICON/fleet.svg, so no icon was changed" >&2; exit 1; }

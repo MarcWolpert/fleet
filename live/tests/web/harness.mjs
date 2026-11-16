@@ -124,7 +124,8 @@ class CDP {
 export async function launch(){
   const bin = findChrome();
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-webtest-'));
-  const args = ['--remote-debugging-port=0', '--user-data-dir=' + dir, '--no-first-run', '--no-default-browser-check', '--disable-gpu',
+  // --use-mock-keychain: never touch the macOS keychain (a scratch HOME has none, and would show a dialog) (#280)
+  const args = ['--remote-debugging-port=0', '--user-data-dir=' + dir, '--use-mock-keychain', '--no-first-run', '--no-default-browser-check', '--disable-gpu',
                 '--disable-extensions', '--disable-background-networking', '--mute-audio', 'about:blank'];
   if (!/headless-shell/.test(bin)) args.unshift('--headless=new');
   const proc = spawn(bin, args, {stdio: ['ignore', 'ignore', 'pipe']});
