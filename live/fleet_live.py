@@ -257,8 +257,11 @@ def reap_leftover_collectors():
 
 
 def stop_collectors(fleet):
-    for sid in list(INLINE):   # inline terminals end with Fleet
+    for sid in list(INLINE):   # inline terminals end with Fleet, and so does the page made for them
         close_inline(sid)
+    for path in [x for x in TTYD_INDEX.values() if x]:
+        shutil.rmtree(os.path.dirname(path), ignore_errors=True)
+    TTYD_INDEX.clear()
     for m in fleet.machines.values():
         p = m.proc
         if p and p.poll() is None:
@@ -2451,12 +2454,96 @@ def ttyd_path():
     return shutil.which("ttyd") or next((p for p in ("/opt/homebrew/bin/ttyd", "/usr/local/bin/ttyd", "/usr/bin/ttyd") if os.path.exists(p)), None)
 
 
-def ttyd_argv(ttyd, token, argv, opts):
+def ttyd_argv(ttyd, token, argv, opts, index=None):
     lo = "lo0" if platform.system() == "Darwin" else "lo"
     a = [ttyd, "--port", "0", "--interface", lo, "--once", "--writable", "--check-origin", "--base-path", "/" + token]
     for k, v in opts.items():
         a += ["--client-option", "%s=%s" % (k, v)]
+    if index:
+        a += ["--index", index]
     return a + list(argv)
+
+
+def inline_opts(d, title):
+    """ttyd's client options for a session: its text size (its own, apart from Fleet's zoom, #335), title, theme."""
+    try:
+        size = float(d.get("fontSize") or 13)
+    except (TypeError, ValueError):
+        size = 13.0
+    th = d.get("theme") if isinstance(d.get("theme"), dict) else {}
+    keep = {k: str(v)[:32] for k, v in th.items() if k in ("background", "foreground", "cursor", "selectionBackground") and re.match(r"^#[0-9a-fA-F]{3,8}$", str(v))}
+    opts = {"fontSize": "%g" % round(max(6.0, min(32.0, size)), 2), "titleFixed": title}
+    if keep:
+        opts["theme"] = json.dumps(keep, separators=(",", ":"))
+    return opts
+
+
+# #335: added to ttyd's own page (ttyd --index), so Fleet, the page framing it, can set the terminal's text size live,
+# without reconnecting. ttyd's page keeps its terminal in window.term (with fit()); this takes messages only from the
+# frame's parent and only this one kind.
+TTYD_SIZE_JS = r"""
+(function(){
+  var P = window.parent; if (!P || P === window) return;
+  function apply(n, tries){
+    var t = window.term;
+    if (!t || !t.options){ if (tries < 100) setTimeout(function(){ apply(n, tries + 1); }, 100); return; }
+    if (t.options.fontSize !== n){ t.options.fontSize = n; if (typeof t.fit === 'function') t.fit(); }
+  }
+  window.addEventListener('message', function(e){
+    if (e.source !== P) return;
+    var d = e.data; if (!d || d.fleet !== 'termFont') return;
+    var n = Number(d.size); if (n >= 6 && n <= 32) apply(n, 0);
+  });
+  P.postMessage({fleet: 'termReady'}, '*');
+})();
+"""
+TTYD_INDEX = {}   # ttyd's path -> the page made from it for this run (None: it couldn't be made)
+
+
+def inject_index(page):
+    """ttyd's page with TTYD_SIZE_JS added, or None when it isn't a ttyd page that keeps window.term."""
+    if "window.term" not in page:
+        return None
+    tag = "<script>" + TTYD_SIZE_JS + "</script>"
+    i = page.rfind("</body>")
+    return page[:i] + tag + page[i:] if i >= 0 else page + tag
+
+
+def ttyd_index(ttyd):
+    """A copy of this ttyd's own page with the size script, made once a run (from ttyd itself, so it matches the
+    version here) in a private temporary folder. None when it can't be made: sessions then use ttyd's own page."""
+    if ttyd in TTYD_INDEX:
+        return TTYD_INDEX[ttyd]
+    path, p = None, None
+    try:
+        token = secrets.token_urlsafe(24)
+        p = subprocess.Popen(ttyd_argv(ttyd, token, ["true"], {}), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        port, end = None, time.time() + 5
+        while time.time() < end:
+            line = p.stdout.readline()
+            if not line and p.poll() is not None:
+                break
+            m = re.search(r"Listening on port: (\d+)", line)
+            if m:
+                port = int(m.group(1))
+                break
+        if port:
+            with urllib.request.urlopen("http://127.0.0.1:%d/%s/" % (port, token), timeout=5) as r:
+                page = inject_index(r.read().decode("utf-8", "replace"))
+            if page:
+                d = tempfile.mkdtemp(prefix="fleet-ttyd-")
+                path = os.path.join(d, "index.html")
+                fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                with os.fdopen(fd, "w") as f:
+                    f.write(page)
+    except Exception:
+        path = None
+    finally:
+        if p and p.poll() is None:
+            p.kill()
+            p.wait(timeout=5)
+    TTYD_INDEX[ttyd] = path
+    return path
 
 
 def inline_argv(fleet, node_id, then=""):
@@ -2479,7 +2566,7 @@ def open_inline(argv, title, opts):
     if not ttyd:
         raise RuntimeError("Inline terminals use ttyd, which isn't installed here: brew install ttyd (macOS), sudo apt install ttyd (Debian, Ubuntu).")
     token = secrets.token_urlsafe(24)
-    p = subprocess.Popen(ttyd_argv(ttyd, token, argv, opts), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    p = subprocess.Popen(ttyd_argv(ttyd, token, argv, opts, index=ttyd_index(ttyd)), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     port, seen, end = None, [], time.time() + 6
     while time.time() < end:
         line = p.stdout.readline()
@@ -2692,12 +2779,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             d = self.read_json() or {}
             try:
                 argv, title = inline_argv(self.fleet, str(d.get("node", "")), str(d.get("then", "")))
-                th = d.get("theme") if isinstance(d.get("theme"), dict) else {}
-                keep = {k: str(v)[:32] for k, v in th.items() if k in ("background", "foreground", "cursor", "selectionBackground") and re.match(r"^#[0-9a-fA-F]{3,8}$", str(v))}
-                opts = {"fontSize": str(max(9, min(24, int(d.get("fontSize") or 13)))), "titleFixed": title}
-                if keep:
-                    opts["theme"] = json.dumps(keep, separators=(",", ":"))
-                return self.send_json(dict(open_inline(argv, title, opts), ok=True))
+                return self.send_json(dict(open_inline(argv, title, inline_opts(d, title)), ok=True))
             except Exception as e:
                 return self.send_json({"ok": False, "error": str(e)[:300]})
         if u.path == "/api/inline-terminal/close":

@@ -3003,6 +3003,27 @@ document.addEventListener('change', e => {
 // refreshes, the split moves from the terminals' top edge (S.termH) and closing a tab ends that session.
 // Settings › Terminal picks what it starts.
 const TD = {list:[], active:'', seq:0, ro:null};
+// Its own text size (#335), kept in ui.json as termFont: Fleet's zoom (Fleet.app reports it) is divided out, so ⌘+ ⌘−
+// leave the terminal as it is. ttyd's page gets the size from Fleet's script in it (TTYD_SIZE_JS), live.
+let ZOOM = 1;
+const TERM_FONT = {min:7, max:24, def:13};
+function termFont(){ const n = Number(PREFS.termFont); return n >= TERM_FONT.min && n <= TERM_FONT.max ? n : TERM_FONT.def; }
+function termFontPx(){ return Math.round(termFont() / ZOOM * 100) / 100; }
+function frameOrigin(f){ try { const u = new URL(f.src); return /^https?:$/.test(u.protocol) ? u.origin : '*'; } catch (e) { return '*'; } }
+function sendTermFont(f){
+  (f ? [f] : [...document.querySelectorAll('#tdrawer iframe')]).forEach(x => { try { x.contentWindow.postMessage({fleet:'termFont', size:termFontPx()}, frameOrigin(x)); } catch (e) {} });
+}
+window.addEventListener('message', e => {
+  if (!e.data || e.data.fleet !== 'termReady') return;
+  const f = [...document.querySelectorAll('#tdrawer iframe')].find(x => x.contentWindow === e.source); if (f) sendTermFont(f);
+});
+function setTermFont(n){
+  const v = Math.min(TERM_FONT.max, Math.max(TERM_FONT.min, n));
+  if (v === termFont()) return;
+  PREFS = Object.assign({}, PREFS, {termFont:v});
+  const l = document.querySelector('#tdrawer [data-tdfontnow]'); if (l) l.textContent = v;
+  sendTermFont(); savePrefs('the terminal text size');
+}
 function termHex(c){
   const d = document.createElement('span'); d.style.color = c; document.body.appendChild(d);
   const m = getComputedStyle(d).color.match(/rgba?\(([\d.]+)[, ]+([\d.]+)[, ]+([\d.]+)(?:[,/ ]+([\d.]+%?))?/); d.remove();
@@ -3020,7 +3041,7 @@ function openInline(id){
   const n = nodes[id], key = 'k' + (++TD.seq);
   const s = {key, id:key, title:n ? n.name : String(id), pending:true};
   TD.list.push(s); TD.active = key; renderDrawer();
-  api('/api/inline-terminal', {node:id, then:PREFS.inlineCmd || '', theme:termTheme(), fontSize:13}).then(r => {
+  api('/api/inline-terminal', {node:id, then:PREFS.inlineCmd || '', theme:termTheme(), fontSize:termFontPx()}).then(r => {
     if (!TD.list.includes(s)){ if (r.ok) api('/api/inline-terminal/close', {id:r.id}).catch(() => {}); return; }  // closed while it opened
     if (r.ok) Object.assign(s, {id:r.id, url:r.url, title:r.title || s.title, pending:false, live:true});
     else Object.assign(s, {pending:false, error:r.error || 'Couldn’t open an inline terminal'});
@@ -3047,11 +3068,12 @@ function renderDrawer(){
   if (!TD.list.length){ if (d){ d.hidden = true; placeDrawer(); } return; }
   if (!d){
     d = document.createElement('section'); d.id = 'tdrawer'; d.className = 'tdrawer'; d.setAttribute('aria-label', 'Inline terminals');
-    d.innerHTML = `<div class="td-grip" role="separator" aria-orientation="horizontal" aria-label="Resize the terminal" tabindex="0"></div><div class="td-bar"><div class="td-tabs" role="tablist" aria-label="Inline terminals"></div></div><div class="td-frames"></div>`;
+    d.innerHTML = `<div class="td-grip" role="separator" aria-orientation="horizontal" aria-label="Resize the terminal" tabindex="0"></div><div class="td-bar"><div class="td-tabs" role="tablist" aria-label="Inline terminals"></div><div class="td-size" role="group" aria-label="Terminal text size"><button type="button" data-tdfont="-1" aria-label="Smaller terminal text" title="Smaller text (its own size, apart from Fleet’s zoom)">A−</button><span data-tdfontnow aria-live="polite"></span><button type="button" data-tdfont="1" aria-label="Larger terminal text" title="Larger text">A+</button></div></div><div class="td-frames"></div>`;
     $('mcol').appendChild(d);
     if (typeof ResizeObserver === 'function'){ TD.ro = new ResizeObserver(() => placeDrawer()); TD.ro.observe($('mcol')); }
   }
   d.hidden = false;
+  d.querySelector('[data-tdfontnow]').textContent = termFont();
   if (!TD.list.some(x => x.key === TD.active)) TD.active = TD.list[TD.list.length - 1].key;
   d.querySelector('.td-tabs').innerHTML = TD.list.map(s => `<span class="td-tab${s.key === TD.active ? ' on' : ''}"><button type="button" role="tab" id="tdt-${esc(s.key)}" aria-controls="tdp-${esc(s.key)}" aria-selected="${s.key === TD.active}" tabindex="${s.key === TD.active ? 0 : -1}" data-tdtab="${esc(s.key)}">${icon('terminal')}${esc(s.title)}${s.pending ? ' <span class="sub">opening…</span>' : ''}</button><button type="button" class="td-x" data-tdclose="${esc(s.id)}" aria-label="Close ${esc(s.title)}" title="Close (ends this session)">${icon('x', 2.2)}</button></span>`).join('');
   const fr = d.querySelector('.td-frames');
@@ -3079,6 +3101,7 @@ function setTermH(h, keep){
 }
 document.addEventListener('click', e => {
   const x = e.target.closest('#tdrawer [data-tdclose]'); if (x){ closeInline(x.dataset.tdclose); return; }
+  const fz = e.target.closest('#tdrawer [data-tdfont]'); if (fz){ setTermFont(termFont() + Number(fz.dataset.tdfont)); return; }
   const t = e.target.closest('#tdrawer [data-tdtab]'); if (t){ TD.active = t.dataset.tdtab; renderDrawer(); }
 });
 document.addEventListener('pointerdown', e => {
@@ -3100,6 +3123,7 @@ window.addEventListener('resize', () => placeDrawer());
 
 // The zoom level by Settings when it isn't 100% (#225): Fleet.app calls this after every zoom and on every load
 window.fleetZoomed = z => {
+  ZOOM = Number(z) > 0 ? Number(z) : 1; sendTermFont();   // the inline terminal keeps its own size (#335)
   const c = $('zoomchip'); if (!c) return;
   const pctz = Math.round(Number(z) * 100);
   c.hidden = !(pctz > 0) || pctz === 100;

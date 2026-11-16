@@ -4,6 +4,9 @@
 // moves from its edge, and closing a tab ends the session. Settings pick what it starts.
 import {test, before, after} from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import {fileURLToPath} from 'node:url';
 import {launch} from './harness.mjs';
 import {fixture, ui} from './fixtures.mjs';
 
@@ -96,6 +99,37 @@ test('Settings pick what the inline terminal starts', async () => {
     await p.eval(`(openInline('lx'), true)`);
     await p.waitFor(`document.querySelector('#tdrawer iframe')`);
     assert.equal(posts(fx, '/api/inline-terminal').pop().then, 'tmux new -A -s fleet');
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
+// #335: the terminal's own text size, apart from Fleet's zoom. The frame here is a stand-in for ttyd's page: a fake
+// window.term (its fit() reports the size it was given) and the very script Fleet adds to ttyd's page.
+test('its own text size: smaller or larger live, kept, and Fleet’s zoom divided out', async () => {
+  const src = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'fleet_live.py'), 'utf8');
+  const js = src.match(/TTYD_SIZE_JS = r"""([\s\S]*?)"""/)[1];
+  const page = `<html><body><script>window.term={options:{fontSize:13},fit(){parent.postMessage({fleet:'ack',size:this.options.fontSize},'*')}}</script><script>${js}</script></body></html>`;
+  const fx = fx1();
+  let n = 0;
+  fx.onPost = p => p === '/api/inline-terminal' ? {ok: true, id: 's' + (++n), url: 'data:text/html,' + encodeURIComponent(page), title: 'lab-linux'} : p === '/api/inline-terminal/close' ? {ok: true} : null;
+  const p = await browser.page(fx, {ui: ui({sel: 'lx'})});
+  try {
+    await p.waitFor(`document.querySelector('.hero [data-termchoose="lx"]')`);
+    await p.eval(`(window.__acks = [], addEventListener('message', e => { if (e.data && e.data.fleet === 'ack') __acks.push(e.data.size); }), openInline('lx'), true)`);
+    await p.waitFor(`document.querySelector('#tdrawer iframe')`);
+    assert.equal(posts(fx, '/api/inline-terminal')[0].fontSize, 13, 'starts at the default');
+    assert.equal(await p.eval(`document.querySelector('#tdrawer [data-tdfontnow]').textContent.trim()`), '13');
+    await p.eval(`(document.querySelector('#tdrawer [data-tdfont="-1"]').click(), document.querySelector('#tdrawer [data-tdfont="-1"]').click(), true)`);
+    await p.waitFor(`__acks.includes(11)`);
+    assert.equal(await p.eval(`document.querySelector('#tdrawer [data-tdfontnow]').textContent.trim()`), '11');
+    await p.waitFor(`PREFS.termFont === 11`);
+    assert.equal(posts(fx, '/api/prefs').pop().termFont, 11, 'kept');
+    // Fleet zooms to 125%: the terminal's text stays the same size on screen
+    await p.eval(`(window.fleetZoomed(1.25), true)`);
+    await p.waitFor(`__acks.includes(8.8)`);
+    await p.eval(`(openInline('lx'), true)`);
+    await p.waitFor(`document.querySelectorAll('#tdrawer [role=tab]').length === 2`);
+    assert.equal(posts(fx, '/api/inline-terminal')[1].fontSize, 8.8, 'a new session starts at that size');
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
 });
