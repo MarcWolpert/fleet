@@ -107,5 +107,51 @@ class ContainerCron(unittest.TestCase):
         self.assertEqual(base(m), [0.5, 0.0, 0.0, 0.0, 0.0], "Base is the host's sshd: the containers' cron work is taken out once")
 
 
+B_SH = {"sched": "0 3 * * *", "cmd": "/usr/local/bin/b.sh", "src": "crontab"}
+HOURLY = {"sched": "17 * * * *", "cmd": "cd / && run-parts --report /etc/cron.hourly", "src": "/etc/crontab"}
+REPORT = {"sched": "0 * * * *", "cmd": "python3 /opt/jobs/report.py", "src": "crontab"}
+SYNC = {"sched": "*/10 * * * *", "cmd": "python3 /opt/jobs/sync.py", "src": "crontab"}
+DUMP = {"sched": "30 2 * * *", "cmd": "pg_dump shop > /backups/db-$(date +\\%F).sql", "src": "crontab"}
+
+
+class JobsByCommand(unittest.TestCase):
+    """A process cron started belongs to the job whose command it runs, and to no other job."""
+
+    def test_only_the_job_that_runs_is_running(self):
+        m = derive(HOST + [
+            proc(700, 500, "cron", "/usr/sbin/CRON -f", 0.01),           # cron's per-job child: cron itself, Base
+            proc(701, 700, "sh", "/bin/sh -c /usr/local/bin/b.sh", 0.04),
+            proc(702, 701, "b.sh", "/bin/bash /usr/local/bin/b.sh", 1.0),
+        ], cron=[A_SH, B_SH, HOURLY])
+        self.assertEqual(jobs(m), [("a.sh", False, IDLE), ("b.sh", True, [1.04, 0.0, 0.0, 0.0, 0.0]), ("cron.hourly", False, IDLE)])
+        self.assertEqual(nodes(m), {1: "m1/base", 500: "m1/base", 600: "m1/base", 700: "m1/base", 701: "m1/base/cron/1", 702: "m1/base/cron/1"})
+
+    def test_jobs_with_one_interpreter_stay_apart(self):
+        m = derive(HOST + [
+            proc(710, 500, "cron", "/usr/sbin/CRON -f"),
+            proc(711, 710, "sh", "/bin/sh -c python3 /opt/jobs/sync.py"),
+            proc(712, 711, "python3", "python3 /opt/jobs/sync.py", 0.5),
+        ], cron=[REPORT, SYNC])
+        self.assertEqual(jobs(m), [("report.py", False, IDLE), ("sync.py", True, [0.5, 0.0, 0.0, 0.0, 0.0])])
+        self.assertEqual(nodes(m), {1: "m1/base", 500: "m1/base", 600: "m1/base", 710: "m1/base", 711: "m1/base/cron/1", 712: "m1/base/cron/1"})
+
+    def test_a_shell_that_execs_the_lone_command(self):
+        # dash and bash exec a lone command in place of themselves: cron's child is the script itself.
+        m = derive(HOST + [proc(720, 500, "cron", "/usr/sbin/CRON -f"), proc(721, 720, "b.sh", "/bin/bash /usr/local/bin/b.sh", 0.75)],
+                   cron=[A_SH, B_SH])
+        self.assertEqual(jobs(m), [("a.sh", False, IDLE), ("b.sh", True, [0.75, 0.0, 0.0, 0.0, 0.0])])
+        self.assertEqual(nodes(m), {1: "m1/base", 500: "m1/base", 600: "m1/base", 720: "m1/base", 721: "m1/base/cron/1"})
+
+    def test_a_percent_sign_is_what_cron_hands_the_shell(self):
+        # crontab(5): \% is a literal %; the shell gets the line with it unescaped.
+        m = derive(HOST + [
+            proc(730, 500, "cron", "/usr/sbin/CRON -f"),
+            proc(731, 730, "sh", "/bin/sh -c pg_dump shop > /backups/db-$(date +%F).sql"),
+            proc(732, 731, "pg_dump", "pg_dump shop", 0.5),
+        ], cron=[A_SH, DUMP])
+        self.assertEqual(jobs(m), [("a.sh", False, IDLE), ("pg_dump", True, [0.5, 0.0, 0.0, 0.0, 0.0])])
+        self.assertEqual(nodes(m), {1: "m1/base", 500: "m1/base", 600: "m1/base", 730: "m1/base", 731: "m1/base/cron/1", 732: "m1/base/cron/1"})
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -455,14 +455,26 @@ class Machine:
                          "src": c["src"], "last": "", "running": False, "u": [0.0] * 5})
         # The host's cron; a container's own cron runs the container's jobs, which are its usage already.
         cron_daemons = {p[0] for p in r["procs"] if p[2] in ("cron", "crond") and not p[9]}
+
+        def job_of(row):
+            """The job a process cron started runs (by its command), or that process's child: cron's own
+            per-job child (named cron too) is cron's, Base."""
+            if row[0] in cron_daemons:
+                return None
+            if row[1] in cron_daemons:
+                return cron_job(jobs, row[10])
+            parent = by_pid.get(row[1])
+            if parent and parent[0] not in cron_daemons and parent[1] in cron_daemons:
+                return cron_job(jobs, parent[10])
+            return None
         for row in procs:
-            if row[1] in cron_daemons or by_pid.get(row[1], [0, 0])[1] in cron_daemons:
-                j = match_job(jobs, row[2], row[10])
-                if j is not None:
-                    j["running"] = True
-                    for i, v in enumerate((row[5], row[6], row[8], row[7])):
-                        j["u"][(0, 1, 2, 3)[i]] += v
-                    row[11] = "job:%d" % jobs.index(j)
+            ji = job_of(row)
+            if ji is not None:
+                j = jobs[ji]
+                j["running"] = True
+                for i, v in enumerate((row[5], row[6], row[8], row[7])):
+                    j["u"][(0, 1, 2, 3)[i]] += v
+                row[11] = "job:%d" % ji
         for tm in r.get("timers", []):
             u = unit_u.get(tm["unit"], [0.0] * 5)
             line = tm["line"].split()
@@ -784,10 +796,24 @@ def job_name(cmd):
     return (toks[0] if toks else cmd)[:48]
 
 
-def match_job(jobs, comm, cmd):
-    for j in jobs:
-        if comm and (comm in j["cmd"] or (cmd and cmd.split()[0] in j["cmd"])):
-            return j
+SHELLS = ("sh", "bash", "dash", "ash", "zsh", "ksh", "mksh", "busybox")
+
+
+def cron_job(jobs, cmd):
+    """Index of the crontab job a process cron started runs, from its command line (cmd), or None. Cron
+    hands the job's line (up to an unescaped %, with \\% as %) to `sh -c`; a shell may exec a lone command
+    in its place, and a script then runs as `<interpreter> <script>`."""
+    words = cmd.split()
+    shell = len(words) > 2 and os.path.basename(words[0]) in SHELLS and words[1] == "-c"
+    got = " ".join(words[2:] if shell else words)
+    cut = len(cmd) >= 300  # the collector keeps 300 characters of a command line
+    for exact in (True, False):
+        for i, j in enumerate(jobs):
+            line = " ".join(re.split(r"(?<!\\)%", j["cmd"])[0].replace("\\%", "%").split())
+            if not line:
+                continue
+            if got == line or (cut and line.startswith(got)) or (not exact and not shell and got.endswith(" " + line)):
+                return i
     return None
 
 
