@@ -1397,7 +1397,7 @@ async function refreshNow(){
     const nm = n && n.kind === 'machine' ? n : null;
     if (nm && S.metric === 'net' && S.view !== 'details') jobs.push(fetch('/api/ifs?machine=' + encodeURIComponent(nm.id), {cache:'no-store'}).then(r => r.json()).then(d => { IFS[nm.id] = d; }));
     if (nm && S.metric === 'disk' && S.view !== 'details') jobs.push(fetch('/api/disks?machine=' + encodeURIComponent(nm.id), {cache:'no-store'}).then(r => r.json()).then(d => { DISKS[nm.id] = d; }));
-    if (nm && S.view !== 'details' && !S.detailsDocked && ((S.metric === 'disk' && diskSel(nm).length) || (S.metric === 'gpu' && gpuSel(nm).length) || (S.metric === 'net' && ifSel(nm).length)) && nm.status === 'ok') jobs.push(fetch('/api/procs?machine=' + encodeURIComponent(nm.id), {cache:'no-store'}).then(r => r.json()).then(d => { PROCS = {machine:nm.id, list:d.procs || [], gpuProcs:!!d.gpu_procs}; }));
+    if (nm && S.view !== 'details' && !S.detailsDocked && ((S.metric === 'disk' && S.diskView === 'each' && diskSel(nm).length) || (S.metric === 'net' && S.ifView === 'each' && ifSel(nm).length)) && nm.status === 'ok') jobs.push(fetch('/api/procs?machine=' + encodeURIComponent(nm.id), {cache:'no-store'}).then(r => r.json()).then(d => { PROCS = {machine:nm.id, list:d.procs || [], gpuProcs:!!d.gpu_procs}; }));
     if (S.tree === 'network') jobs.push(fetch('/api/net', {cache:'no-store'}).then(r => r.json()).then(d => { NET = d; }));
     await Promise.all(jobs.map(p => p.catch(() => null)));
     fails = 0; $('conn').hidden = true; $('live').hidden = false;
