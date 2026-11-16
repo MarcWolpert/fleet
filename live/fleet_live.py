@@ -19,6 +19,35 @@ VERSION = "0.1.0"
 HERE = os.path.dirname(os.path.abspath(__file__))
 H = 60
 METRICS = ("cpu", "mem", "gpu", "disk", "net")
+CONFIG_PATH = os.path.expanduser("~/.config/fleet/machines.toml")
+
+
+# ---------------------------------------------------------------- history
+class Hist:
+    """Last H readings per node id and metric."""
+    def __init__(self):
+        self.d = {}
+        self.lock = threading.Lock()
+
+    def push(self, key, vals):
+        with self.lock:
+            q = self.d.get(key)
+            if q is None:
+                q = self.d[key] = [collections.deque([0.0] * H, maxlen=H) for _ in vals]
+            for i, v in enumerate(vals):
+                q[i].append(round(float(v), 4))
+
+    def get(self, key, n=5):
+        with self.lock:
+            q = self.d.get(key)
+            return [list(x) for x in q] if q else [[0.0] * H for _ in range(n)]
+
+
+HIST = Hist()
+
+
+def hist_obj(key):
+    return dict(zip(METRICS, HIST.get(key)))
 
 
 # ---------------------------------------------------------------- helpers
@@ -935,3 +964,224 @@ def parse_cputime(s):
     for x in parts:
         secs = secs * 60 + x
     return days * 86400 + secs
+
+
+# ---------------------------------------------------------------- tree assembly
+class Fleet:
+    def __init__(self, cfg):
+        self.cfg = cfg
+        self.config_path = cfg.get("__path", CONFIG_PATH)
+        self.interval = float(cfg.get("interval", 3))
+        self.machines = collections.OrderedDict()
+        for m in cfg.get("machine", []):
+            self.machines[m["id"]] = Machine(m, self.interval)
+        self.tick = 0
+        self.specs = {}
+        self.lock = threading.Lock()
+        load_state(self)  # last readings and history from before a restart: no empty flash
+        for m in self.machines.values():
+            m.thread.start()
+        threading.Thread(target=self.record_loop, daemon=True, name="fleet-record").start()
+
+    def roots(self):
+        return [m for m in self.machines.values() if not m.cfg.get("vm_on")]
+
+    def record_loop(self):
+        """Every interval: build the tree from each machine's latest view and push one history step per node."""
+        while True:
+            began = time.time()
+            specs = {}
+            for m in self.roots():
+                try:
+                    specs[m.id] = self.machine_spec(m, record=True)
+                except Exception:
+                    import traceback
+                    traceback.print_exc()
+            with self.lock:
+                self.specs = specs
+            self.tick += 1
+            if self.tick % 10 == 0:
+                save_state(self)
+            time.sleep(max(0.2, self.interval - (time.time() - began)))
+
+    def machine_spec(self, m, record, vm_hostside=None, vm_parent=None):
+        with m.lock:
+            view, status, error = m.view, m.status, m.error
+        cfg = m.cfg
+        mid = m.id
+        spec = {"id": mid, "name": m.name, "tile": cfg.get("tile", "vm" if cfg.get("vm_on") else "terminal"), "status": status,
+                "error": error, "os": cfg.get("os_label") or {"windows": "Windows", "linux": "Linux"}.get(cfg.get("os", ""), ""), "agent": "local" if cfg.get("kind") == "local" else "ssh " + cfg.get("ssh", ""),
+                "cronLabel": "Cron jobs", "gpus": [], "cap": [1, 1, 0, 1, 1], "procs": [], "baseCron": [], "compose": [], "containers": [], "vms": []}
+        spec["ssh"] = cfg.get("ssh", "")
+        spec["has_data"] = view is not None
+        spec["last_ok"] = m.last_ok
+        if view is None:
+            if vm_hostside is not None:
+                spec["base"] = {"id": mid + "/base", "h": self.leaf(mid + "/base", vm_hostside["u"], record)}
+                spec["cap"] = [max(1, vm_hostside.get("vcpus", 1)), max(1, vm_hostside.get("mem", 1)), 0, 1, 1]
+                spec["status"] = "hostonly" if status != "ok" else status
+                spec["error"] = (error or "not reachable") + " · showing what its host sees"
+            else:
+                spec["base"] = {"id": mid + "/base", "h": self.leaf(mid + "/base", [0] * 5, record)}
+            if vm_parent is not None and vm_hostside is None:
+                spec["status"] = "off" if status != "ok" else status
+            return spec
+        spec.update({"os": view["os"] + (" · " + view["arch"] if view.get("arch") else ""), "cpu_model": view.get("cpu_model", ""),
+                     "uptime": fmt_uptime(view.get("uptime", 0)), "cap": view["cap"], "cronLabel": view.get("cronLabel", "Cron jobs"),
+                     "gpus": [{"name": g["name"], "mem": g.get("mem", "")} for g in view["gpus"]], "ncpu": view["ncpu"],
+                     "groups": view.get("groups", [])})
+        if view.get("note"):
+            spec["note"] = {"label": "How this is counted.", "text": view["note"]}
+        if cfg.get("note"):
+            spec["note"] = {"label": cfg["note"].get("label", "Note."), "text": cfg["note"].get("text", "")}
+        host = list(view["host"])
+        dflt_g = ["gpu0"] if view["gpus"] else []
+        # Containers grouped by Compose project.
+        proj = collections.OrderedDict()
+        loose = []
+        csum = [0.0] * 5
+        cont_ids = {}
+        for c in sorted(view["containers"], key=lambda c: (c["project"], c["service"] or c["name"])):
+            for i in range(5):
+                csum[i] += c["u"][i]
+            if c["project"]:
+                pid = "%s/compose/%s" % (mid, slug(c["project"]))
+                nid = "%s/%s" % (pid, slug(c["service"] or c["name"]))
+                if nid in cont_ids.values():
+                    nid += "-" + c["id"][:6]
+                cont_ids[c["id"]] = nid
+                proj.setdefault(c["project"], {"id": pid, "name": c["project"], "file": c["file"].split(",")[0], "services": []})["services"].append(
+                    {"id": nid, "name": c["service"] or c["name"], "cname": c["name"], "image": c["image"], "status": c["status"], "g": c.get("gkeys") or (dflt_g if c["u"][2] else []),
+                     "h": self.leaf(nid, c["u"], record)})
+            else:
+                nid = "%s/containers/%s" % (mid, slug(c["name"]))
+                cont_ids[c["id"]] = nid
+                loose.append({"id": nid, "name": c["name"], "cname": c["name"], "image": c["image"], "status": c["status"], "g": c.get("gkeys") or (dflt_g if c["u"][2] else []),
+                              "h": self.leaf(nid, c["u"], record)})
+        spec["compose"] = list(proj.values())
+        spec["containers"] = loose
+        # VMs: nested machines from config when they match by name; host-side usage otherwise.
+        vsum = [0.0] * 5
+        vm_ids = {}
+        nested = {mm.cfg.get("domain", mm.name): mm for mm in self.machines.values() if mm.cfg.get("vm_on") == mid}
+        listed = set()
+        for v in view["vms"]:
+            for i in range(5):
+                vsum[i] += v["u"][i]
+            mm = nested.get(v["name"])
+            if mm:
+                listed.add(v["name"])
+                sub = self.machine_spec(mm, record, vm_hostside={"u": v["u"], "vcpus": 0, "mem": 0}, vm_parent=m)
+                sub["hostside"] = v["u"]
+                vm_ids[v["name"]] = sub["id"]
+                spec["vms"].append(sub)
+            else:
+                vid = "%s/vms/%s" % (mid, slug(v["name"]))
+                vm_ids[v["name"]] = vid
+                facts = ", ".join("%s (%s)" % (d["name"], d["state"]) for d in v.get("distros", []))
+                spec["vms"].append({"id": vid, "name": v["name"], "tile": "vm", "status": "ok" if v.get("running") else "off",
+                                    "os": facts or "VM", "agent": "seen from the host", "cap": [max(1, view["ncpu"]), view["cap"][1], 0, 1, 1],
+                                    "gpus": [], "cronLabel": "Cron jobs", "base": {"id": vid + "/base", "h": self.leaf(vid + "/base", v["u"], record)},
+                                    "baseCron": [], "compose": [], "containers": [], "vms": [], "procs": []})
+        for name, mm in nested.items():
+            if name not in listed:
+                spec["vms"].append(self.machine_spec(mm, record, vm_parent=m))
+        # Scheduled jobs under Base system; their usage is a breakdown of Base.
+        jsum = [0.0] * 5
+        jobs = []
+        for i, j in enumerate(view["jobs"]):
+            jid = "%s/base/cron/%d" % (mid, i)
+            for k in range(5):
+                jsum[k] += j["u"][k]
+            jobs.append({"id": jid, "name": j["name"], "sched": j["sched"], "human": j.get("human", ""), "cmd": j.get("cmd", ""),
+                         "last": j.get("last", "") or ("next " + j["next"] if j.get("next") else ""), "running": j["running"],
+                         "state": j.get("state", ""), "src": j.get("src", ""), "g": dflt_g if j["u"][2] else [], "h": self.leaf(jid, j["u"], record)})
+        spec["baseCron"] = jobs
+        base_u = [max(0.0, host[i] - csum[i] - vsum[i] - jsum[i]) for i in range(5)]
+        if view["gpus"]:
+            base_u[2] = max(0.0, host[2] - csum[2] - vsum[2] - jsum[2])
+        spec["base"] = {"id": mid + "/base", "h": self.leaf(mid + "/base", base_u, record), "g": dflt_g}
+        spec["procs_owner"] = {"cont": cont_ids, "vm": vm_ids}
+        if record:
+            HIST.push(mid + "/__host", host)
+            for c in view.get("lcpus", []):
+                HIST.push("%s/__cpu/%d" % (mid, c["n"]), [c["pct"]])
+            for x in view.get("ifs", []):
+                HIST.push("%s/__if/%s" % (mid, x["name"]), [x["rx"], x["tx"]])
+            for x in view.get("disks", []):
+                HIST.push("%s/__disk/%s" % (mid, x["name"]), [x["read"], x["write"]])
+        return spec
+
+    def leaf(self, key, u, record):
+        if record:
+            HIST.push(key, u)
+        return hist_obj(key)
+
+    # API
+    def api_fleet(self):
+        with self.lock:
+            specs = self.specs
+        machines = []
+        for m in self.roots():
+            s = specs.get(m.id)
+            if s:
+                machines.append(strip_procs(s))
+        return {"t": time.time(), "interval": self.interval, "window_s": self.interval * H, "machines": machines}
+
+    def find_machine(self, mid):
+        return self.machines.get(mid)
+
+
+# ---------------------------------------------------------------- state that survives restarts
+STATE_PATH = os.path.expanduser("~/.cache/fleet-live/state.json")
+
+
+def save_state(fleet):
+    """Last reading per machine and all history, so a restart shows data at once instead of flashing empty."""
+    try:
+        views = {}
+        for m in fleet.machines.values():
+            with m.lock:
+                if m.view is not None:
+                    views[m.id] = {"view": dict(m.view, procs=[]), "last_ok": m.last_ok}
+        with HIST.lock:
+            hist = {k: [list(q) for q in v] for k, v in HIST.d.items()}
+        os.makedirs(os.path.dirname(STATE_PATH), exist_ok=True)
+        tmp = STATE_PATH + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump({"t": time.time(), "views": views, "hist": hist}, f, separators=(",", ":"))
+        os.replace(tmp, STATE_PATH)
+    except Exception as e:
+        print("could not save state: %s" % e, flush=True)
+
+
+def load_state(fleet):
+    try:
+        with open(STATE_PATH) as f:
+            st = json.load(f)
+    except Exception:
+        return
+    if time.time() - st.get("t", 0) > 6 * 3600:
+        return  # too old to be useful
+    for mid, v in st.get("views", {}).items():
+        m = fleet.machines.get(mid)
+        if m:
+            m.view, m.last_ok, m.status = v["view"], v.get("last_ok", 0.0), "connecting"
+    with HIST.lock:
+        for k, qs in st.get("hist", {}).items():
+            HIST.d[k] = [collections.deque(q[-H:], maxlen=H) for q in qs]
+
+
+def strip_procs(spec):
+    s = {k: v for k, v in spec.items() if k not in ("procs", "procs_owner")}
+    s["vms"] = [strip_procs(v) for v in spec.get("vms", [])]
+    return s
+
+
+def fmt_uptime(secs):
+    secs = int(secs or 0)
+    if secs >= 86400:
+        return "%d d" % (secs // 86400)
+    if secs >= 3600:
+        return "%d h" % (secs // 3600)
+    return "%d min" % (secs // 60)
