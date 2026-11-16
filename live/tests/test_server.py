@@ -103,7 +103,7 @@ class ReopenIfUnseen(unittest.TestCase):
         """Returns when the window was opened (None if it wasn't) and when reopen_if_unseen gave up waiting."""
         fleet_live.LAST_CLIENT[0] = last_poll
         clock, opened = Clock(SINCE, polls), []
-        with mock.patch.object(fleet_live, "time", clock), \
+        with mock.patch.object(fleet_live, "time", clock), mock.patch.object(fleet_live, "REOPENED", [0.0], create=True), \
                 mock.patch.object(fleet_live, "open_app_window", side_effect=lambda url: opened.append((url, clock.t))):
             fleet_live.reopen_if_unseen("http://127.0.0.1:4518/", SINCE)
         self.assertLessEqual(len(opened), 1)
@@ -134,6 +134,97 @@ class ReopenIfUnseen(unittest.TestCase):
             fleet_live.LAST_CLIENT[0] = 0.0      # a new process
             fleet_live.load_state(fleet)
         self.assertEqual((fleet_live.LAST_CLIENT[0], out.getvalue()), (SINCE - 30, ""))
+
+
+class Waiters:
+    """Several reopen_if_unseen waiters at once on one fake clock, as watch_own_files starts one per UI change and the
+    restart path one more. A waiter's sleep() returns only when every other waiter is asleep or done and its own wake
+    time comes first (ties in the order they went to sleep), so they take turns in clock order as on a real clock.
+    A window opened at t polls every 2 s from t + 2 (or never, with polls_after_open=False)."""
+
+    def __init__(self, polls_after_open=True):
+        self.t, self.polls, self.opened, self.polls_after_open = SINCE, [], [], polls_after_open
+        self.cv, self.awake, self.asleep, self.seq, self.stuck = threading.Condition(), 0, set(), 0, False
+
+    def time(self):
+        return self.t
+
+    def sleep(self, secs):
+        self.until(self.t + secs)
+
+    def until(self, at):
+        with self.cv:
+            self.seq += 1
+            me = (at, self.seq)
+            self.asleep.add(me)
+            self.awake -= 1
+            self.cv.notify_all()
+            if not self.cv.wait_for(lambda: self.stuck or (self.awake == 0 and min(self.asleep) == me), timeout=5):
+                self.stuck = True
+                self.cv.notify_all()
+            self.asleep.discard(me)
+            self.awake += 1
+            self.t = max(self.t, at)
+            while self.polls and self.polls[0] <= self.t:
+                fleet_live.LAST_CLIENT[0] = self.polls.pop(0)
+
+    def open_app_window(self, url):
+        self.opened.append(self.t - SINCE)
+        if self.polls_after_open:
+            self.polls = sorted(self.polls + [self.t + 2.0 * k for k in range(1, 100)])
+
+    def run(self, last_poll, starts):
+        """A waiter started at each of these times (seconds after SINCE); returns when windows were opened."""
+        fleet_live.LAST_CLIENT[0] = last_poll
+        self.awake = len(starts)
+
+        def one(at):
+            try:
+                self.until(SINCE + at)
+                fleet_live.reopen_if_unseen("http://127.0.0.1:4518/", self.t)
+            finally:
+                with self.cv:
+                    self.awake -= 1
+                    self.cv.notify_all()
+        threads = [threading.Thread(target=one, args=(at,), daemon=True) for at in starts]
+        with mock.patch.object(fleet_live, "time", self), mock.patch.object(fleet_live, "open_app_window", side_effect=self.open_app_window):
+            for th in threads:
+                th.start()
+            for th in threads:
+                th.join(10)
+        assert not self.stuck and not any(th.is_alive() for th in threads), "the waiters never finished"
+        return self.opened
+
+
+class ReopenIfUnseenTogether(unittest.TestCase):
+    """PR 255 review: since every waiter shares one deadline (a minute and a bit after the last poll), two or three UI
+    saves after the window was closed each opened a window in the same second, before the first one could poll."""
+
+    def setUp(self):
+        self.addCleanup(fleet_live.LAST_CLIENT.__setitem__, 0, fleet_live.LAST_CLIENT[0])
+        opened = mock.patch.object(fleet_live, "REOPENED", [0.0], create=True)   # no window opened by this process yet
+        opened.start()
+        self.addCleanup(opened.stop)
+
+    def test_saves_after_the_window_was_closed_open_one_window(self):
+        # closed 20 s before the first save; saves at +0, +10 and +30 all wait until +55
+        self.assertEqual(Waiters().run(SINCE - 20, [0, 10, 30]), [55.0])
+
+    def test_a_restart_and_a_save_in_the_new_process_open_one_window(self):
+        self.assertEqual(Waiters().run(SINCE - 20, [0, 1]), [55.0])
+
+    def test_saves_long_after_any_window_open_one_and_the_next_save_sees_it(self):
+        # the control: no window for an hour, so each waits 8 s; the first window polls at +10, before +3's deadline
+        self.assertEqual(Waiters().run(SINCE - 3600, [0, 3]), [8.0])
+
+    def test_a_save_after_the_reopened_window_is_gone_again_reopens_it(self):
+        # the window opened at +8 never polls (closed again at once): a later save still brings one back
+        self.assertEqual(Waiters(polls_after_open=False).run(SINCE - 3600, [0, 20]), [8.0, 28.0])
+
+    def test_a_window_seen_after_the_saves_opens_none(self):
+        w = Waiters()
+        w.polls = [SINCE + 40]   # the hidden window's once-a-minute poll
+        self.assertEqual(w.run(SINCE - 20, [0, 10, 30]), [])
 
 
 def allowed(headers, write=False, port=4518):
@@ -240,10 +331,32 @@ class Http(unittest.TestCase):
                                                                 "Access-Control-Request-Headers": "x-fleet"})}
         self.assertEqual(got, {"passes the gate": 404, "no X-Fleet": 403, "foreign Origin": 403, "foreign Host": 403, "preflight": 501})
 
+    def test_a_close_look_at_a_process_needs_what_a_write_needs(self):
+        # /api/proc is a GET, but it opens an SSH session (or runs a helper container) to look at the process. A
+        # page on any site can send a no-cors GET with Fleet's own Host, so a look must pass the write gate: no
+        # foreign Origin and X-Fleet: 1, which a cross-site page can't send without a preflight (#287).
+        own = "http://127.0.0.1:%d" % self.port
+        looks, fleet = [], types.SimpleNamespace(machines={"nas": types.SimpleNamespace(id="nas", cfg={"kind": "ssh", "ssh": "nas"})},
+                                                 api_procs=lambda mid, scope=None, docker=True: {"procs": []})   # as Fleet.api_procs (#312)
+        with mock.patch.object(fleet_live.Handler, "fleet", fleet), \
+                mock.patch.object(fleet_live, "inspect_process", side_effect=lambda m, pid: looks.append((m.id, pid)) or {"pid": pid}), \
+                mock.patch.object(fleet_live, "inspect_docker_vm", side_effect=lambda m, cid, pid, via: looks.append((m.id, cid, pid, via)) or {"pid": pid}):
+            got = {"the page's own look": self.send("GET", "/api/proc?machine=nas&pid=101", {"X-Fleet": "1"}),
+                   "with its own Origin": self.send("GET", "/api/proc?machine=nas&pid=102", {"X-Fleet": "1", "Origin": own}),
+                   "a cross-site no-cors fetch": self.send("GET", "/api/proc?machine=nas&pid=103", {}),
+                   "with Origin, no X-Fleet": self.send("GET", "/api/proc?machine=nas&pid=104", {"Origin": "https://evil.example"}),
+                   "foreign Origin": self.send("GET", "/api/proc?machine=nas&pid=105", {"X-Fleet": "1", "Origin": "https://evil.example"}),
+                   "foreign Host": self.send("GET", "/api/proc?machine=nas&pid=106", {"X-Fleet": "1"}, host="evil.example:%d" % self.port),
+                   "Docker VM, no X-Fleet": self.send("GET", "/api/proc?machine=nas&key=d:0123456789ab:7&via=helper", {}),
+                   "a read of memory, no X-Fleet": self.send("GET", "/api/procs?machine=nas", {})}
+        self.assertEqual(got, {"the page's own look": 200, "with its own Origin": 200, "a cross-site no-cors fetch": 403, "with Origin, no X-Fleet": 403,
+                               "foreign Origin": 403, "foreign Host": 403, "Docker VM, no X-Fleet": 403, "a read of memory, no X-Fleet": 200})
+        self.assertEqual(looks, [("nas", 101), ("nas", 102)], "a refused request never starts a look")
+
     def test_no_page_can_put_fleet_in_a_frame(self):
         # Inside a frame the UI is same-origin with the server, so its own requests would pass every check
         # above: the browser has to refuse to frame it, on every response.
-        reqs = {"the page": ("GET", "/", {}), "the script": ("GET", "/app.js", {}), "JSON": ("GET", "/api/proc?machine=none&pid=1", {}),
+        reqs = {"the page": ("GET", "/", {}), "the script": ("GET", "/app.js", {}), "JSON": ("GET", "/api/proc?machine=none&pid=1", {"X-Fleet": "1"}),
                 "refused": ("GET", "/", {}, "evil.example:%d" % self.port), "not found": ("POST", "/api/no-such-thing", {"X-Fleet": "1"}),
                 "preflight": ("OPTIONS", "/api/pins", {})}
         with mock.patch.object(fleet_live.Handler, "fleet", types.SimpleNamespace(machines={})):

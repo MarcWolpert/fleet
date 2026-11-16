@@ -23,17 +23,20 @@ while [ $# -gt 0 ]; do
   shift
 done
 # With more than one file, swiftc takes top-level code (FleetApp's app.run()) only from a main.swift.
+# (each path stays one quoted word: a checkout or a TMPDIR can have a space in its name)
 cp "$HERE/FleetApp.swift" "$WORK/main.swift"
-SRC="$WORK/main.swift $HERE/TitleBar.swift"
+MAIN="$WORK/main.swift" TITLEBAR="$HERE/TitleBar.swift"
 if [ -n "$CHECK" ]; then   # typecheck what a build compiles, and stop (the tests use this)
-  swiftc -typecheck $SRC
+  swiftc -typecheck "$MAIN" "$TITLEBAR"
   exit 0
 fi
 rm -rf "$APP" && mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/live/web"
+set --
 for arch in $ARCHS; do
-  swiftc -O -target "$arch-apple-macos13" -o "$WORK/Fleet-$arch" $SRC -framework Cocoa -framework WebKit
+  swiftc -O -target "$arch-apple-macos13" -o "$WORK/Fleet-$arch" "$MAIN" "$TITLEBAR" -framework Cocoa -framework WebKit
+  set -- "$@" "$WORK/Fleet-$arch"
 done
-lipo -create -output "$APP/Contents/MacOS/Fleet" $(for arch in $ARCHS; do echo "$WORK/Fleet-$arch"; done)
+lipo -create -output "$APP/Contents/MacOS/Fleet" "$@"
 
 cp "$LIVE/fleet_live.py" "$LIVE/collect_linux.py" "$LIVE/collect_windows.ps1" "$LIVE/inspect_linux.py" "$LIVE/inspect_windows.ps1" "$LIVE/machines.example.toml" "$APP/Contents/Resources/live/"
 cp "$LIVE/web/index.html" "$LIVE/web/app.js" "$LIVE/web/themes.js" "$LIVE/web/icon.svg" "$APP/Contents/Resources/live/web/"

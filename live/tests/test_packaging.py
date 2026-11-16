@@ -59,6 +59,14 @@ class Icon(unittest.TestCase):
             png = os.path.join(LIVE, "packaging", "icon", "png", "fleet-%d.png" % s)
             self.assertGreaterEqual(os.path.getmtime(png), os.path.getmtime(os.path.join(LIVE, "packaging", "icon", "fleet.svg")) - 1, png)
 
+    def test_the_icon_names_no_local_path(self):
+        # the page serves web/icon.svg as its favicon, and fleet.svg ships in the packages: neither may say where on
+        # a developer's machine it was made (#298)
+        for f in (os.path.join(LIVE, "packaging", "icon", "fleet.svg"), os.path.join(LIVE, "web", "icon.svg")):
+            svg = open(f, encoding="utf-8").read()
+            self.assertEqual(re.findall(r"~/|/Users/|/home/|\.cache|[A-Za-z]:\\|\w+\.(?:py|sh|mjs)\b", svg), [], f)
+            self.assertEqual(re.findall(r"<!--(.*?)-->", svg, re.S), [" Fleet: a 1700s East Indiaman under full sail, gold on a navy gradient "], f)
+
 
 if __name__ == "__main__":
     unittest.main()

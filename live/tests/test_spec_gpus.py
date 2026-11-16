@@ -152,5 +152,50 @@ class WindowsGpusPerWorkload(unittest.TestCase):
         self.assertEqual(s["base"]["h"]["gpu"][-1], 60.0)
 
 
+class GpuMetricHistory(unittest.TestCase):
+    """Each GPU's tiles in /api/fleet: [metric, limit, history] for the metrics it reports now (#290). Every metric a
+    GPU has reported keeps its history moving on every reading: one that comes and goes (Windows' compute and video
+    processing engines are counted only while a process holds them) reads 0 while it's away, so when it comes back
+    its past stays where it happened instead of sitting just before now."""
+
+    def setUp(self):
+        fl.HIST.d.clear()
+        self.view = fl.Machine({"id": "lx", "name": "lx"}, 3).derive_linux(linux_reading([nv(0, 0.0)], []))
+
+    def poll(self, m):
+        self.view["gpus"] = [{"name": "GPU 0", "mem": "", "util": m["util"], "m": m, "lim": {"vram": 8.0}}]
+        return spec_of(self.view)["gpus"][0]["m"]
+
+    def test_a_metric_that_comes_back_shows_its_past_where_it_happened(self):
+        # a CUDA job at 90% for 5 readings, gone for 30, then another at 5%
+        for _ in range(5):
+            self.poll({"util": 90.0, "compute": 90.0, "vram": 4.0})
+        for _ in range(30):
+            got = self.poll({"util": 1.0, "vram": 1.0})
+        self.assertEqual([k for k, _, _ in got], ["util", "vram"], "away: no compute tile")
+        got = {k: (lim, h[-36:]) for k, lim, h in self.poll({"util": 5.0, "compute": 5.0, "vram": 2.0})}
+        self.assertEqual(got, {"util": (None, [90.0] * 5 + [1.0] * 30 + [5.0]),
+                               "compute": (None, [90.0] * 5 + [0.0] * 30 + [5.0]),
+                               "vram": (8.0, [4.0] * 5 + [1.0] * 30 + [2.0])})
+
+    def test_metrics_present_throughout_and_one_never_seen(self):
+        # the "nothing else" control: steady metrics move one step a reading, and a metric this GPU never reported
+        # gets no history at all
+        for v in (10.0, 20.0, 30.0):
+            got = self.poll({"util": v, "temp": v + 40})
+        self.assertEqual({k: h[-3:] for k, _, h in got}, {"util": [10.0, 20.0, 30.0], "temp": [50.0, 60.0, 70.0]})
+        self.assertEqual(sorted(k for k in fl.HIST.d if "/gpu0/" in k), ["lx/gpu0/temp", "lx/gpu0/util"])
+
+    def test_a_machine_that_isnt_live_records_nothing(self):
+        self.poll({"util": 50.0, "compute": 50.0})
+        m = fl.Machine({"id": "lx", "name": "lx"}, 3)
+        m.view, m.status = dict(self.view, gpus=[{"name": "GPU 0", "mem": "", "util": 0.0, "m": {"util": 0.0}, "lim": {}}]), "offline"
+        f = fl.Fleet.__new__(fl.Fleet)
+        f.machines, f.lock, f.interval = {"lx": m}, threading.Lock(), 3
+        f.machine_spec(m, record=True)
+        self.assertEqual({k: list(fl.HIST.d[k][0])[-2:] for k in ("lx/gpu0/util", "lx/gpu0/compute")},
+                         {"lx/gpu0/util": [0.0, 50.0], "lx/gpu0/compute": [0.0, 50.0]})
+
+
 if __name__ == "__main__":
     unittest.main()

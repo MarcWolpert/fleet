@@ -687,6 +687,10 @@ tr.fmatch>td{background:color-mix(in srgb, var(--stale) 16%, transparent)!import
 .ggroup.sel .lgh .lgbtn{color:var(--ink)}
 .ggroup.sel .lcell{border-color:color-mix(in srgb, var(--accent) 45%, transparent)}
 .gmc .lt{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* the pin sits right after the label, outside it, so a long label gives way and the pin stays whole (#291) */
+.gmc .trow>.lt{flex:0 1 auto}
+.gmc .trow>.tpin{flex:none;align-self:center;width:15px;height:15px;margin-left:-6px}
+.gmc .trow>.lv{margin-left:auto}
 
 /* Right-click menus */
 .cxmenu{position:fixed;z-index:60;min-width:210px;max-width:340px;padding:5px;border-radius:10px;background:var(--pop);border:1px solid var(--line-2);box-shadow:0 16px 40px #000a;display:flex;flex-direction:column}

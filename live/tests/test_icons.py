@@ -2,10 +2,10 @@
 """The icon script (issue #90): make_icons.sh renders packaging/icon/fleet.svg with headless Chrome and only
 then replaces the PNGs, Fleet.icns and web/icon.svg. When Chrome could not load the SVG (truncated, empty or
 missing) it still writes a screenshot, of its broken-image placeholder, so the script must refuse and change
-nothing; and a checkout or TMPDIR whose path holds # ? or % must still render the SVG itself. Every case runs a
-copy of the script in a temporary checkout, so the committed icons are never touched. Needs macOS (sips,
-iconutil) and Google Chrome, like the script."""
-import os, shutil, struct, subprocess, sys, tempfile, unittest, zlib
+nothing; and a checkout or TMPDIR whose path holds # ? % or a character outside ASCII must still render the SVG
+itself. Every case runs a copy of the script in a temporary checkout, so the committed icons are never touched.
+Needs macOS (sips, iconutil) and Google Chrome, like the script."""
+import json, os, pathlib, shutil, struct, subprocess, sys, tempfile, unittest, zlib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 LIVE = os.path.dirname(HERE)
@@ -105,8 +105,10 @@ class MakeIcons(unittest.TestCase):
 
     def test_the_svg_renders_from_any_checkout_path(self):
         want = [[(0, 255, 0, 255) if 256 <= x < 768 and 256 <= y < 768 else (0, 0, 0, 0) for x in range(1024)] for y in range(1024)]
-        # (checkout dir, TMPDIR): a plain path (the control), then each character a file:// URL reads as syntax
-        for name, tmpname in (("fleet", "tmp"), ("fleet #1", "tmp"), ("fleet ?2", "tmp"), ("fleet %41", "tmp"), ("fleet", "tmp #3")):
+        # (checkout dir, TMPDIR): a plain path (the control), then each character a file:// URL reads as syntax, then
+        # characters outside ASCII (#305: the page Chrome loads must be read as UTF-8, or "é" reaches it as "Ã©")
+        for name, tmpname in (("fleet", "tmp"), ("fleet #1", "tmp"), ("fleet ?2", "tmp"), ("fleet %41", "tmp"), ("fleet", "tmp #3"),
+                              ("Développement", "tmp"), ("開発 fleet", "tmp"), ("fleet", "tmp é")):
             with self.subTest(checkout=name, tmpdir=tmpname), tempfile.TemporaryDirectory() as tmp:
                 root = self.checkout(tmp, name, SVG)
                 r = self.run_script(root, os.path.join(tmp, tmpname))
@@ -125,11 +127,47 @@ class MakeIcons(unittest.TestCase):
 
 class NoKeychain(unittest.TestCase):
     """#280: Chrome launched for rendering or tests never touches the macOS keychain, so a scratch HOME (which has
-    none) shows no 'Keychain Not Found' dialog."""
-    def test_every_chrome_launch_the_tests_make_uses_a_mock_keychain(self):
-        for rel in (("packaging", "make_icons.sh"), ("tests", "web", "harness.mjs")):
-            text = open(os.path.join(LIVE, *rel), encoding="utf-8").read()
-            self.assertIn("--use-mock-keychain", text, "/".join(rel))
+    none) shows no 'Keychain Not Found' dialog. Each launch runs a stand-in Chrome that writes down the arguments it
+    was started with, so the flag must be on the command that runs, not just somewhere in the file."""
+    def fake_chrome(self, tmp):
+        fake, out = os.path.join(tmp, "fake-chrome"), os.path.join(tmp, "argv")
+        write(fake, b'#!/bin/sh\nprintf "%s\\n" "$@" > "$FAKE_ARGV"\nexit 1\n')
+        os.chmod(fake, 0o755)
+        return fake, out
+
+    def argv(self, out):
+        self.assertTrue(os.path.exists(out), "Chrome was started")
+        with open(out, encoding="utf-8") as f:
+            return f.read().splitlines()
+
+    def test_make_icons_starts_chrome_with_a_mock_keychain(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fake, out = self.fake_chrome(tmp)
+            pack = os.path.join(tmp, "fleet", "live", "packaging")
+            os.makedirs(os.path.join(pack, "icon")); os.makedirs(os.path.join(tmp, "work"))
+            text = read(os.path.join(LIVE, "packaging", "make_icons.sh")).decode()
+            chrome = [l for l in text.splitlines() if l.startswith("CHROME=")]
+            self.assertEqual(len(chrome), 1, "one Chrome for the script")
+            write(os.path.join(pack, "make_icons.sh"), text.replace(chrome[0], 'CHROME="%s"' % fake).encode())
+            write(os.path.join(pack, "icon", "fleet.svg"), SVG)
+            subprocess.run(["sh", os.path.join(pack, "make_icons.sh")], capture_output=True,
+                           env=dict(os.environ, FAKE_ARGV=out, TMPDIR=os.path.join(tmp, "work")))
+            argv = self.argv(out)
+            self.assertIn("--headless=new", argv)
+            self.assertIn("--use-mock-keychain", argv)
+
+    @unittest.skipUnless(shutil.which("node"), "needs node")
+    def test_the_web_tests_start_chrome_with_a_mock_keychain(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fake, out = self.fake_chrome(tmp)
+            harness = pathlib.Path(LIVE, "tests", "web", "harness.mjs").as_uri()
+            # the stand-in exits, so launch() fails once it has started it: only its arguments matter here
+            js = "import {launch} from %s; try { await launch(); } catch (e) {} process.exit(0);" % json.dumps(harness)
+            subprocess.run(["node", "--input-type=module", "-e", js], capture_output=True, timeout=60,
+                           env=dict(os.environ, FLEET_TEST_CHROME=fake, FAKE_ARGV=out, TMPDIR=tmp))
+            argv = self.argv(out)
+            self.assertIn("--remote-debugging-port=0", argv)
+            self.assertIn("--use-mock-keychain", argv)
 
 
 if __name__ == "__main__":

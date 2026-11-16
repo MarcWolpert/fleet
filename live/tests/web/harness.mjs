@@ -24,9 +24,12 @@ const WRITES = ['/api/config', '/api/test', '/api/terminal', '/api/prefs', '/api
 // A write, judged the way fleet_live.py's do_POST judges it: [status] or [200, its answer]. 403 unless it comes
 // from this page (Host, Origin, X-Fleet: 1), 404 for a route the server doesn't have, 400 for a body it won't keep
 // (the server drops the connection on a body that isn't JSON; the page sees a failed write either way).
-function judgeWrite(req, port, path, raw){
+function fromThisPage(req, port){
   const hosts = ['127.0.0.1:' + port, 'localhost:' + port], h = req.headers;
-  if (!hosts.includes(h.host || '') || (h.origin && !hosts.some(x => h.origin === 'http://' + x)) || h['x-fleet'] !== '1') return [403];
+  return hosts.includes(h.host || '') && !(h.origin && !hosts.some(x => h.origin === 'http://' + x)) && h['x-fleet'] === '1';
+}
+function judgeWrite(req, port, path, raw){
+  if (!fromThisPage(req, port)) return [403];
   if (!WRITES.includes(path)) return [404];
   if (!['/api/prefs', '/api/tilepins', '/api/pins'].includes(path)) return [200, {ok: true}];
   let d; try { d = JSON.parse(raw.subarray(0, path === '/api/pins' ? 65536 : 1 << 20).toString() || (path === '/api/pins' ? '[]' : 'null')); } catch (e) { return [400]; }
@@ -66,9 +69,11 @@ export function startServer(fx){
       if (u.pathname === '/api/disks') return json((fx.disks || {})[mid] || {disks: [], per_process: true});
       if (u.pathname === '/api/ifs') return json((fx.ifs || {})[mid] || {ifs: [], per_process: true});
       if (u.pathname === '/api/net') return json(fx.net || {tailnet: 'tailnet', machines: []});
-      if (u.pathname === '/api/proc'){  // the Details drop-down: fx.proc(machine, pid, call number) answers
+      if (u.pathname === '/api/proc'){  // the Details drop-down: fx.proc(machine, pid, call number) answers, now or (a Promise) when it settles
+        // a look reaches out to the machine (SSH, a helper container), so like the server it passes the write gate (#287)
+        if (!fromThisPage(req, srv.address().port)){ fx.refused = (fx.refused || []).concat([{path: u.pathname + u.search, headers: req.headers, status: 403}]); res.writeHead(403); return res.end(); }
         const key = u.searchParams.get('key'), pid = key || +u.searchParams.get('pid'); fx.procCalls = (fx.procCalls || []).concat([mid + ':' + pid + (key ? ':' + u.searchParams.get('via') : '')]);
-        return json((typeof fx.proc === 'function' ? fx.proc(mid, pid, fx.procCalls.length) : null) || {pid, error: 'no fixture'});
+        return Promise.resolve(typeof fx.proc === 'function' ? fx.proc(mid, pid, fx.procCalls.length) : null).then(a => json(a || {pid, error: 'no fixture'}));
       }
       if (u.pathname === '/api/inline-terminals'){ if (fx.terms) return json(fx.terms); res.writeHead(404); return res.end(); }   // the kept inline terminals (#337)
       if (u.pathname === '/api/config') return json(fx.config || {path: '/dev/null', interval: 3, machines: [], status: {}, terminals: []});
@@ -184,9 +189,14 @@ async function openPage(cdp, fx, {ui = null, width = 1500, height = 950, fonts =
     async click(selector, {modifiers = 0} = {}){
       const r = await page.eval(`(() => { const e = document.querySelector(${JSON.stringify(selector)}); if (!e) return null; e.scrollIntoView({block: 'center', inline: 'center'}); const b = e.getBoundingClientRect(); return {x: b.left + b.width / 2, y: b.top + b.height / 2}; })()`);
       if (!r) throw new Error('no element for ' + selector);
-      await send('Input.dispatchMouseEvent', {type: 'mouseMoved', x: r.x, y: r.y, modifiers});
-      await send('Input.dispatchMouseEvent', {type: 'mousePressed', x: r.x, y: r.y, button: 'left', buttons: 1, clickCount: 1, modifiers});
-      await send('Input.dispatchMouseEvent', {type: 'mouseReleased', x: r.x, y: r.y, button: 'left', buttons: 0, clickCount: 1, modifiers});
+      await page.clickAt(r.x, r.y, {modifiers});
+    },
+    // A real mouse click at a point of the viewport. Unlike click(), nothing is scrolled first: scrollIntoView
+    // also scrolls an overflow:hidden ancestor, which would bring a clipped element into sight before the click.
+    async clickAt(x, y, {modifiers = 0} = {}){
+      await send('Input.dispatchMouseEvent', {type: 'mouseMoved', x, y, modifiers});
+      await send('Input.dispatchMouseEvent', {type: 'mousePressed', x, y, button: 'left', buttons: 1, clickCount: 1, modifiers});
+      await send('Input.dispatchMouseEvent', {type: 'mouseReleased', x, y, button: 'left', buttons: 0, clickCount: 1, modifiers});
     },
     async key(key, code = key){
       const vk = {Escape: 27, Enter: 13, ' ': 32}[key] || 0, text = {Enter: '\r', ' ': ' '}[key];

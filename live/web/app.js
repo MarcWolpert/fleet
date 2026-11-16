@@ -85,7 +85,8 @@ const KEEP = {pending:null, t:0};
 const FIRST = {checked:false, fresh:(() => { try { return localStorage.getItem('fleet-live-ui') === null; } catch (e) { return false; } })()};
 try { const k = JSON.parse(sessionStorage.getItem('fleet-scroll') || 'null'); if (k && k.pos) Object.assign(KEEP, {pending:k, t:Date.now()}); } catch (e) {}   // the panel you're in: 'tree', 'main' or 'details'
 // the process open in the Details drop-down (see "One process, up close")
-const INSP = {mid:null, pid:0, name:'', order:null, gorder:null, data:null, good:null, acc:{}, samples:0, secs:0, looks:0, busy:false, cacheLooks:[]};
+// gen: which opening of the drop-down a look belongs to; lastT: when the server took the last look counted (#288)
+const INSP = {mid:null, pid:0, name:'', order:null, gorder:null, data:null, good:null, acc:{}, samples:0, secs:0, looks:0, busy:false, cacheLooks:[], gen:0, lastT:null};
 let DATA = null, PINS = [], WINDOW = 180, INTERVAL = 3, CPUS = {}, PROCS = {machine:null, list:[]}, NET = null, DISKS = {}, IFS = {};
 const nodes = {}, roots = [];
 const zero = () => new Array(H).fill(0);
@@ -103,6 +104,7 @@ function machineFrom(s, isVm){
     hostHist:s.hostside && !Array.isArray(s.hostside) ? histOf(s.hostside) : null,
     hostG:Object.fromEntries(Object.entries(s.hostside_gh || {}).filter(([, a]) => a && a.length === H)),
     ssh:s.ssh || '', hasData:s.has_data !== false || s.status === 'hostonly', lastOk:s.last_ok || 0, on:s.on !== false});
+  connAsked(m, s);
   // what a node measurably uses of each of this machine's GPUs (the server's gh: one history per GPU); without gh, the
   // GPU keys it names (g), over which its GPU use is split
   const ghOf = gh => gh ? Object.fromEntries(gpus.filter(g => gh[g.key] && gh[g.key].length === H).map(g => [g.key, gh[g.key]])) : null;
@@ -184,10 +186,31 @@ function ctxOf(key){
     bt:(metric, i) => { const o = {base:0, compose:0, container:0, vm:0}; roots.forEach(r => { const b = byType(r, metric, i); for (const k in o) o[k] += b[k]; }); return o; },
     cap:metric => roots.filter(r => hasData(r)).reduce((s, r) => s + capOf(r, metric), 0)};
   const m = nodes[key];
-  if (m && m.kind === 'division' && !m.parent) return {name:m.name,
-    bt:(metric, i) => { const o = {base:0, compose:0, container:0, vm:0}; m.children.forEach(r => { const b = byType(r, metric, i); for (const k in o) o[k] += b[k]; }); return o; },
-    cap:metric => m.children.filter(r => hasData(r)).reduce((s, r) => s + capOf(r, metric), 0)};
+  if (m && m.kind === 'division' && !m.parent) return {name:m.name, bt:(metric, i) => divBt(m, metric, i),
+    cap:metric => divHosts(m).filter(r => hasData(r)).reduce((s, r) => s + capOf(r, metric), 0)};
   return {name:m.name, bt:(metric, i) => byType(m, metric, i), cap:metric => capOf(m.kind === 'machine' ? m : hostOf(m), metric)};
+}
+// A group with nothing above it counts against the machines its members run on (#294): a group of machines, their
+// own; a group of things on several machines (Pins only groups anything), the machines those are on.
+const topMachine = n => n.kind === 'machine' && !n.parent;
+function divHosts(d, seen = new Set([d])){
+  const out = new Set();
+  d.children.forEach(c => {
+    if (topMachine(c)) out.add(c);
+    else if (c.kind === 'division' && !c.parent){ if (!seen.has(c)){ seen.add(c); divHosts(c, seen).forEach(h => out.add(h)); } }
+    else { const h = hostOf(c); if (h.kind === 'machine') out.add(h); }
+  });
+  return [...out];
+}
+// ...and adds up its members by type: a machine by what's in it, anything else as what it is
+function divBt(d, metric, i, seen = new Set([d])){
+  const o = {base:0, compose:0, container:0, vm:0};
+  d.children.forEach(c => {
+    const b = topMachine(c) ? byType(c, metric, i) : c.kind === 'division' && !c.parent ? (seen.has(c) ? {} : (seen.add(c), divBt(c, metric, i, seen)))
+      : {[c.type]:i == null ? cur(c, metric) : c.series[metric][i]};
+    for (const k in o) o[k] += b[k] || 0;
+  });
+  return o;
 }
 function cronCount(n){ let c = 0; (function v(x){ if (x.kind === 'cron') c++; x.children.forEach(v); })(n); return c; }
 function shareOfHost(n, metric){   // under a host without a reading there's no host to take a share of: a VM's is of its own capacity
@@ -410,10 +433,19 @@ function cmpNodes(a, b){ const pa = PINS.includes(a.id), pb = PINS.includes(b.id
 function orderedKids(n){ return n.kind === 'machine' ? n.children : n.children.slice().sort(cmpNodes); }
 function sortedRoots(){ return roots.slice().sort(cmpNodes); }
 function treeRoots(){
-  if (S.pinsOnly) return PINS.map(id => nodes[id]).filter(Boolean).sort((a, b) => COLL.compare(a.name, b.name));
+  if (S.pinsOnly){
+    // a pinned Pins only group is already among the pins, as its box around them: not a row of its own too (#296)
+    const boxed = new Set(((PREFS.tgroups || {})['pins|root'] || []).filter(g => g.ids.some(id => PINS.includes(id) && nodes[id])).map(g => 'div:' + g.id));
+    return PINS.filter(id => !boxed.has(id)).map(id => nodes[id]).filter(Boolean).sort((a, b) => COLL.compare(a.name, b.name));
+  }
   return S.space === 'fleet' ? sortedRoots() : (nodes[S.space] ? [nodes[S.space]] : sortedRoots());
 }
+// A group's name field while it's open (renameGroup): the tree isn't redrawn under it, since a poll can bring other
+// rows at any time, so what's typed and the focus stay. Closing it redraws the tree (#293).
+let RENAMING = null;
+const renaming = () => !!(RENAMING && RENAMING.isConnected);
 function renderTree(){
+  if (renaming()) return;
   if (S.tree === 'network') return renderNetTree();
   if (S.groupsOnly) return renderGroupsTree();
   const rows = [];
@@ -455,11 +487,16 @@ function treeHeader(){
 // the nearest group of its own tree (All machines or Pins only) that holds one of its members' ancestors. Pins
 // only adds the groups you pinned, with their subgroups. Folding (S.gfold) is the same fold as in the normal tree.
 function groupsHierarchy(){
+  // only the groups of the tree this replaces (a machine's space, Pins only): a group at the top holds one of its
+  // roots, a deeper one sits under a node in it (#297)
+  const tops0 = treeRoots(), rootIds = new Set(tops0.map(n => n.id)), reach = new Set();
+  (function walk(list){ list.forEach(n => { if (reach.has(n.id)) return; reach.add(n.id); walk(n.children); }); })(tops0);
+  const inTree = (g, pk) => pk === 'root' ? rootIds.has('div:' + g.id) || g.ids.some(id => rootIds.has(id)) : reach.has(pk) && g.ids.some(id => reach.has(id));
   const all = [];
   for (const [key, list] of Object.entries(PREFS.tgroups || {})){
-    const at = key.indexOf('|'), sc = key.slice(0, at);
+    const at = key.indexOf('|'), sc = key.slice(0, at), pk = key.slice(at + 1);
     if (sc === 'network') continue;
-    list.forEach(g => { const n = nodes['div:' + g.id]; if (n) all.push({g, sc, pk:key.slice(at + 1), n}); });
+    list.forEach(g => { const n = nodes['div:' + g.id]; if (n && inTree(g, pk)) all.push({g, sc, pk, n}); });
   }
   all.forEach(x => {
     x.up = null;
@@ -568,6 +605,7 @@ function netTreeHTML(){
   }
 }
 function renderNetTree(html = netTreeHTML()){
+  if (renaming()) return;
   $('tree').innerHTML = html; netDrawn = {html, first:$('tree').firstElementChild};
   netRates();
   $('tree-title').innerHTML = 'Network';
@@ -638,14 +676,14 @@ function tableCard(title, sub, list){
   const rows = list.map(({n, d}) => {
     const share = shareOfHost(n, S.metric), w = isFinite(share) ? Math.min(100, share) : 0;
     const off = n.kind === 'machine' && n.status !== 'ok' && n.status !== 'hostonly';
-    return `<tr><td style="padding-left:${10 + d*20}px"><button type="button" class="namebtn" data-select="${esc(n.id)}"><span class="ico" style="color:${n.kind==='cron'||n.kind==='cronfolder'?'var(--ink-3)':colOf(n)}">${icon(iconOf(n))}</span>${esc(n.name)}${off ? ` <span class="gtag">${statusText(n)}</span>` : ''}</button></td>`
+    return `<tr data-row="${esc(n.id)}"><td style="padding-left:${10 + d*20}px"><button type="button" class="namebtn" data-select="${esc(n.id)}"><span class="ico" style="color:${n.kind==='cron'||n.kind==='cronfolder'?'var(--ink-3)':colOf(n)}">${icon(iconOf(n))}</span>${esc(n.name)}${off ? ` <span class="gtag">${statusText(n)}</span>` : ''}</button></td>`
       + METRICS.map(m => `<td>${m.id === 'gpu' ? gpuCell(n) : fmt(cur(n, m.id), m.id)}</td>`).join('')
       + `<td><span class="share" data-tip="child|${esc(n.id)}|${S.metric}"><span class="b"><i style="width:${w}%;background:${TCOL[n.type] || 'var(--accent-bg)'}"></i></span>${pct(share)}</span></td></tr>`;
   }).join('');
   return `<section class="card"><div class="card-h"><h2>${title}</h2><span class="sub">${sub}</span></div><div class="scroll-x"><table class="tbl"><thead><tr><th>Name</th>${METRICS.map(m => `<th>${m.label}</th>`).join('')}<th>Share of host · ${mlabel(S.metric)}</th></tr></thead><tbody>${rows}</tbody></table></div></section>`;
 }
 function cronTableCard(folder, title){
-  const rows = orderedKids(folder).map(n => `<tr><td><button type="button" class="namebtn" data-select="${esc(n.id)}"><span class="ico" style="color:var(--ink-3)">${icon('clock')}</span>${esc(n.name)}</button></td><td class="l"><code>${esc(n.job.sched)}</code>${n.job.human && n.job.human !== n.job.sched ? ' · ' + esc(n.job.human) : ''}</td><td class="l"><span class="pill${n.running?' on':''}"><i></i>${n.running ? 'running' : esc(n.job.state || 'idle')}</span></td>`
+  const rows = orderedKids(folder).map(n => `<tr data-row="${esc(n.id)}"><td><button type="button" class="namebtn" data-select="${esc(n.id)}"><span class="ico" style="color:var(--ink-3)">${icon('clock')}</span>${esc(n.name)}</button></td><td class="l"><code>${esc(n.job.sched)}</code>${n.job.human && n.job.human !== n.job.sched ? ' · ' + esc(n.job.human) : ''}</td><td class="l"><span class="pill${n.running?' on':''}"><i></i>${n.running ? 'running' : esc(n.job.state || 'idle')}</span></td>`
     + METRICS.map(m => `<td>${!n.running ? '—' : m.id === 'gpu' ? gpuCell(n) : fmt(cur(n, m.id), m.id)}</td>`).join('') + `<td class="l">${esc(n.job.last || '')}</td></tr>`).join('');
   return `<section class="card"><div class="card-h"><h2>${title}</h2><span class="sub">usage shows while a job runs</span></div><div class="scroll-x"><table class="tbl"><thead><tr><th>Job</th><th style="text-align:left">Schedule</th><th style="text-align:left">Status</th>${METRICS.map(m => `<th>${m.label}</th>`).join('')}<th style="text-align:left">Last / next</th></tr></thead><tbody>${rows}</tbody></table></div></section>`;
 }
@@ -690,7 +728,7 @@ function cpuSelCard(m){
   else {
     const on = machineProcs.filter(p => sel.includes(p[12])).sort((a, b) => b[4] - a[4]);
     const ncpu = m.ncpu || capOf(m, 'cpu');
-    procs = on.length ? `<div class="scroll-x"><table class="tbl"><thead><tr><th>Process</th><th>PID</th><th style="text-align:left">Runs in</th><th>CPU (machine)</th><th>Memory</th><th>Last ran on</th></tr></thead><tbody>${on.slice(0, 15).map(p => `<tr><td>${esc(p[1])}</td><td>${p[0]}</td><td class="l"><button type="button" class="namebtn" data-select="${esc(p[10])}" style="font-weight:400">${esc(nodes[p[10]] ? nodes[p[10]].name : '')}</button></td><td>${pct(p[4] / ncpu * 100)}</td><td>${memText(p[5])}</td><td>CPU ${p[12]}</td></tr>`).join('')}</tbody></table></div>${on.length > 15 ? `<div class="more">${on.length - 15} more on these processors.</div>` : ''}` : `<div class="sub">Nothing ran on these processors in the last reading.</div>`;
+    procs = on.length ? `<div class="scroll-x"><table class="tbl"><thead><tr><th>Process</th><th>PID</th><th style="text-align:left">Runs in</th><th>CPU (machine)</th><th>Memory</th><th>Last ran on</th></tr></thead><tbody>${on.slice(0, 15).map(p => `<tr data-row="pid:${esc(p[0])}"><td>${esc(p[1])}</td><td>${esc(p[0])}</td><td class="l"><button type="button" class="namebtn" data-select="${esc(p[10])}" style="font-weight:400">${esc(nodes[p[10]] ? nodes[p[10]].name : '')}</button></td><td>${pct(p[4] / ncpu * 100)}</td><td>${memText(p[5])}</td><td>CPU ${esc(p[12])}</td></tr>`).join('')}</tbody></table></div>${on.length > 15 ? `<div class="more">${on.length - 15} more on these processors.</div>` : ''}` : `<div class="sub">Nothing ran on these processors in the last reading.</div>`;
   }
   return `<section class="card"><div class="card-h"><h2>${esc(title)}</h2><span class="sub">${cs.length} of ${d.cpus.length} processors</span><span class="grow"></span><button type="button" class="btn" data-cpuclear="1">${icon('x', 2.2)}Clear selection</button></div>`
     + `<div class="cpustats">${heroStats([{k:'Now', v:pct(now), s:'average'}, {k:'Peak', v:pct(peak), s:'any one, last ' + ago(WINDOW).replace(' ago', '')}].concat(mhz ? [{k:'Clock', v:(mhz / 1000).toFixed(2) + ' GHz', s:'average'}] : []))}</div>`
@@ -735,7 +773,7 @@ function ifSelCard(m){
   if (!P) list = `<div class="sub">Loading processes…</div>`;
   else {
     const on = P.filter(p => (p[15] || []).some(x => sel.includes(x))).sort((a, b) => (b[16] || 0) - (a[16] || 0) || b[4] - a[4]);
-    list = on.length ? `<div class="scroll-x"><table class="tbl"><thead><tr><th>Process</th><th>PID</th><th style="text-align:left">Runs in</th><th>Network (TCP)</th><th style="text-align:left">Via</th></tr></thead><tbody>${on.slice(0, 15).map(p => `<tr><td>${esc(p[1])}</td><td>${p[0]}</td><td class="l"><button type="button" class="namebtn" data-select="${esc(p[10])}" style="font-weight:400">${esc(nodes[p[10]] ? nodes[p[10]].name : '')}</button></td><td>${p[16] >= 0 ? rateText(p[16]) : '—'}</td><td class="l">${esc((p[15] || []).filter(x => sel.includes(x)).join(', '))}</td></tr>`).join('')}</tbody></table></div>${on.length > 15 ? `<div class="more">${on.length - 15} more.</div>` : ''}` : `<div class="sub">Nothing is talking through ${xs.length === 1 ? 'this interface' : 'these interfaces'} right now.</div>`;
+    list = on.length ? `<div class="scroll-x"><table class="tbl"><thead><tr><th>Process</th><th>PID</th><th style="text-align:left">Runs in</th><th>Network (TCP)</th><th style="text-align:left">Via</th></tr></thead><tbody>${on.slice(0, 15).map(p => `<tr data-row="pid:${esc(p[0])}"><td>${esc(p[1])}</td><td>${esc(p[0])}</td><td class="l"><button type="button" class="namebtn" data-select="${esc(p[10])}" style="font-weight:400">${esc(nodes[p[10]] ? nodes[p[10]].name : '')}</button></td><td>${p[16] >= 0 ? rateText(p[16]) : '—'}</td><td class="l">${esc((p[15] || []).filter(x => sel.includes(x)).join(', '))}</td></tr>`).join('')}</tbody></table></div>${on.length > 15 ? `<div class="more">${on.length - 15} more.</div>` : ''}` : `<div class="sub">Nothing is talking through ${xs.length === 1 ? 'this interface' : 'these interfaces'} right now.</div>`;
   }
   return card.replace(/<\/section>$/, `<h3 class="cpuproc">Using ${xs.length === 1 ? 'this interface' : 'these interfaces'}</h3>${list}</section>`);
 }
@@ -807,7 +845,7 @@ function diskSelCard(m){
   else if (!P) list = `<div class="sub">Loading processes…</div>`;
   else {
     const on = P.filter(p => (p[14] || []).some(x => sel.includes(x))).sort((a, b) => b[6] - a[6]);
-    list = on.length ? `<div class="scroll-x"><table class="tbl"><thead><tr><th>Process</th><th>PID</th><th style="text-align:left">Runs in</th><th>Disk I/O (all disks)</th><th style="text-align:left">On</th></tr></thead><tbody>${on.slice(0, 15).map(p => `<tr><td>${esc(p[1])}</td><td>${p[0]}</td><td class="l"><button type="button" class="namebtn" data-select="${esc(p[10])}" style="font-weight:400">${esc(nodes[p[10]] ? nodes[p[10]].name : '')}</button></td><td>${rateText(p[6])}</td><td class="l">${esc((p[14] || []).filter(x => sel.includes(x)).join(', '))}</td></tr>`).join('')}</tbody></table></div>` : `<div class="sub">No process did I/O on ${ds.length === 1 ? 'this disk' : 'these disks'} in the last reading.</div>`;
+    list = on.length ? `<div class="scroll-x"><table class="tbl"><thead><tr><th>Process</th><th>PID</th><th style="text-align:left">Runs in</th><th>Disk I/O (all disks)</th><th style="text-align:left">On</th></tr></thead><tbody>${on.slice(0, 15).map(p => `<tr data-row="pid:${esc(p[0])}"><td>${esc(p[1])}</td><td>${esc(p[0])}</td><td class="l"><button type="button" class="namebtn" data-select="${esc(p[10])}" style="font-weight:400">${esc(nodes[p[10]] ? nodes[p[10]].name : '')}</button></td><td>${rateText(p[6])}</td><td class="l">${esc((p[14] || []).filter(x => sel.includes(x)).join(', '))}</td></tr>`).join('')}</tbody></table></div>` : `<div class="sub">No process did I/O on ${ds.length === 1 ? 'this disk' : 'these disks'} in the last reading.</div>`;
   }
   return card.replace(/<\/section>$/, `<h3 class="cpuproc">Doing I/O on ${ds.length === 1 ? 'this disk' : 'these disks'}</h3>${list}</section>`);
 }
@@ -843,7 +881,8 @@ function gpuEachCard(m){
       const pts = h.map((v, i) => `${(i/(H-1)*100).toFixed(1)},${(56 - Math.min(v, max)/max*52).toFixed(1)}`);
       const val = gpuValText(unit, now), sub = lim ? 'of ' + gpuValText(unit, lim) : '';
       return `<div class="lcell gmc${tpinned('gpum', m.id, g.key + ':' + k) ? ' pinned' : ''}" data-gm="${esc(k)}" title="${esc(full)}"><button type="button" class="tsel" data-gsel="${esc(g.key)}" aria-pressed="${on}" aria-label="GPU ${gi} ${esc(full)} ${esc(val)}${sub ? ' ' + esc(sub) : ''}"></button>`
-        + `<span class="trow"><span class="lt">${esc(label)}${tpinBtn('gpum', m.id, g.key + ':' + k, label)}</span><span class="lv">${esc(val)}</span></span><span class="lm">${sub ? esc(sub) : '&nbsp;'}</span>`
+        // the pin beside the label, not inside it: a label too long for the tile is cut short, the pin never is (#291)
+        + `<span class="trow"><span class="lt">${esc(label)}</span>${tpinBtn('gpum', m.id, g.key + ':' + k, label)}<span class="lv">${esc(val)}</span></span><span class="lm">${sub ? esc(sub) : '&nbsp;'}</span>`
         + `<svg viewBox="0 0 100 56" preserveAspectRatio="none" aria-hidden="true"><path d="M0,56L${pts.join('L')}L100,56Z" fill="var(--accent-bg)" fill-opacity=".35"/><polyline points="${pts.join(' ')}" fill="none" stroke="var(--accent)" stroke-width="1.4" vector-effect="non-scaling-stroke"/></svg></div>`;
     }).join('');
     const pt = /passed through/.test(g.mem || '') ? `<p class="lhint">Its use shows inside that VM, not on this host.</p>` : '';
@@ -1098,11 +1137,14 @@ function selectionFilters(m, all, gpuProcs){
   }
   return out;
 }
-// The node whose processes a Details view shows right now (full or docked), or null.
+// A selection with a machine of its own; not All machines, nor a group of machines or of things on several (#294)
+const ownsMachine = n => !!n && !(n.kind === 'division' && !n.parent);
+// The node whose processes a Details view shows right now (full or docked), or null. With nothing of one machine
+// selected, the full view shows the first machine (All machines) or member (a group), and the docked panel asks for one.
 function shownDetails(){
   const n = S.sel === 'fleet' ? null : nodes[S.sel];
-  if (S.view === 'details') return n || roots[0] || null;
-  return S.detailsDocked && S.tree !== 'network' ? n : null;
+  if (S.view === 'details'){ let x = n || roots[0] || null; for (let i = 0; x && !ownsMachine(x) && i < 9; i++) x = x.children[0] || null; return ownsMachine(x) ? x : null; }
+  return S.detailsDocked && S.tree !== 'network' && ownsMachine(n) ? n : null;
 }
 // Left of the view pills: what Details is filtered to, each part with its own ×, plus Clear all; and a
 // dot on the CPU, GPU and Disk I/O pills while their selection filters Details.
@@ -1159,7 +1201,7 @@ function detailsView(n, docked){
     {k:'cmd', label:'Command line', l:true, cls:'cmd', get:p => p[9] || '', show:p => `<span title="${esc(p[9])}">${esc(p[9])}</span>`},
     {k:'ppid', label:'Parent PID', get:p => p[11] || 0, show:p => esc(p[11] || '—')},
     {k:'lastcpu', label:'Last CPU', get:p => p[12], show:p => p[12] >= 0 ? esc('cpu' + p[12]) : '—'},
-    {k:'gpus', label:'Which GPU', l:true, get:p => (p[13] || []).join(','), show:p => (p[13] || []).length ? 'GPU' + p[13].join('+') : '—'},
+    {k:'gpus', label:'Which GPU', l:true, get:p => (p[13] || []).join(','), show:p => (p[13] || []).length ? esc('GPU' + p[13].join('+')) : '—'},
     {k:'disks', label:'Disks used', l:true, get:p => (p[14] || []).join(','), show:p => esc((p[14] || []).join(', ') || '—')},
     {k:'ifaces', label:'Interfaces', l:true, get:p => (p[15] || []).join(','), show:p => esc((p[15] || []).join(', ') || '—')}
   ];
@@ -1178,7 +1220,7 @@ function detailsView(n, docked){
   const isInsp = p => INSP.pid === p[0] && INSP.mid === mid;
   let inspShown = false;
   const rowHTML = p => `<tr data-pid="${esc(p[0])}" aria-expanded="${isInsp(p)}" class="drow${isInsp(p) ? ' open' : ''}">${COLS.map(c => `<td class="${c.l ? 'l' : ''} ${c.cls || ''}">${c.show(p)}</td>`).join('')}</tr>`  // data-pid: columns can move or hide
-    + (isInsp(p) ? (inspShown = true, `<tr class="pinsp"><td colspan="${COLS.length}">${inspectPanel(p)}</td></tr>`) : '');
+    + (isInsp(p) ? (inspShown = true, `<tr class="pinsp" data-row="insp:${esc(p[0])}"><td colspan="${COLS.length}">${inspectPanel(p)}</td></tr>`) : '');
   if (groupBy){
     // Groups start collapsed, each header a summary; open ones are remembered per Group-by mode (S.groupOpen)
     // and share the row limit.
@@ -1222,7 +1264,7 @@ function detailsView(n, docked){
   const thead = `<tr>${COLS.map(c => `<th class="${c.l ? 'l' : ''}" data-colk="${c.k}" ${c.k === SORT.k ? `aria-sort="${dir < 0 ? 'descending' : 'ascending'}"` : ''}><button type="button" data-sort="${c.k}" title="Sort; right-click to choose and arrange columns">${c.label}${c.k === SORT.k ? (dir < 0 ? ' ↓' : ' ↑') : ''}</button></th>`).join('')}</tr>`;
   const applied = FS.filter(f => f.apply);
   // the open process isn't in the list any more (it exited, or the filter hides it): its drop-down goes first
-  if (INSP.pid && INSP.mid === mid && !inspShown && all) body = `<tr class="pinsp"><td colspan="${COLS.length}">${inspectPanel(null)}</td></tr>` + body;
+  if (INSP.pid && INSP.mid === mid && !inspShown && all) body = `<tr class="pinsp" data-row="insp:${esc(INSP.pid)}"><td colspan="${COLS.length}">${inspectPanel(null)}</td></tr>` + body;
   if (applied.length && all && !list.length && !INSP.pid) body = `<tr class="empty"><td colspan="${COLS.length}" class="l" style="padding:18px 10px;color:var(--ink-3)">No process matches ${esc(applied.map(f => f.short).concat(q ? ['“' + S.filter.trim() + '”'] : []).join(' + '))} right now.</td></tr>`;
   const hold = holding ? `<div class="holdbar">${icon('pin')}<span>Rows hold their places while <b>${esc(INSP.name || 'PID ' + INSP.pid)}</b> is open</span><button type="button" class="btn" data-inspclose="1">Resume live order</button></div>` : '';
   return head + groupNote + offNote + `<section class="card">${tools}${filterChips(FS)}${hold}<div class="pscroll"><table class="ptbl" data-mid="${esc(mid)}"><thead>${thead}</thead><tbody>${body}</tbody></table>${more ? `<div class="more">${more}</div>` : ''}</div></section>`;
@@ -1238,7 +1280,7 @@ function netView(){
   if (n.kind === 'if'){ facts.push(n.ifkind); if (n.state) facts.push(n.state); if (n.speed && n.speed !== '-1') facts.push(/^\d+$/.test(n.speed) ? n.speed + ' Mb/s' : n.speed); facts.push(...n.addrs); if (n.desc) facts.push(n.desc); if (n.vm) facts.push('VM: ' + n.vm); if (n.dnet) facts.push('Docker network: ' + n.dnet); }
   let graph = '';
   if (n.hrx && n.htx) graph = graphCard('Traffic', '↓ received and ↑ sent, stacked', [{label:'received', color:'var(--t-compose)', data:n.hrx}, {label:'sent', color:'var(--t-vm)', data:n.htx}], graphMax(0, [{data:n.hrx}, {data:n.htx}], 'net'), 'net');
-  const rows = n.children.map(c => `<tr><td><button type="button" class="namebtn" data-netsel="${esc(c.id)}">${esc(c.name)}</button></td><td class="l">${esc(c.kind === 'if' ? c.ifkind : c.kind === 'nmachine' ? statusText({status:c.status}) : c.kind === 'ncontainer' ? 'container' : '')}</td><td class="l">${esc((c.addrs || []).join(', ') || (c.ts && c.ts.ip) || '')}</td><td>${rateText(c.rx)}</td><td>${rateText(c.tx)}</td></tr>`).join('');
+  const rows = n.children.map(c => `<tr data-row="${esc(c.id)}"><td><button type="button" class="namebtn" data-netsel="${esc(c.id)}">${esc(c.name)}</button></td><td class="l">${esc(c.kind === 'if' ? c.ifkind : c.kind === 'nmachine' ? statusText({status:c.status}) : c.kind === 'ncontainer' ? 'container' : '')}</td><td class="l">${esc((c.addrs || []).join(', ') || (c.ts && c.ts.ip) || '')}</td><td>${rateText(c.rx)}</td><td>${rateText(c.tx)}</td></tr>`).join('');
   return `<div class="hero"><span class="tile fleet">${icon(n.kind === 'tailnet' ? 'net' : n.kind === 'if' ? (n.ifkind === 'bridge' ? 'bridge' : 'nic') : 'desktop')}</span><div><h1>${esc(n.name)}</h1><div class="facts">${facts.filter(Boolean).map(f => `<span>${esc(f)}</span>`).join('')}</div></div>${heroStats([{k:'In', v:rateText(n.rx), s:'received'}, {k:'Out', v:rateText(n.tx), s:'sent'}])}</div>`
     + (n.error ? noteHTML(`<b>${esc(statusText({status:n.status}))}.</b> ${esc(n.error)}`, 'warn') : '')
     + graph
@@ -1246,19 +1288,39 @@ function netView(){
 }
 
 /* ---------- main ---------- */
-let lastMainHTML = '';
-// A text selection in the pane (a command line to copy) survives its rebuild: each end is kept as its process
-// row (rows re-sort) or the pane, the child path down to the text, and the offset there.
+let lastMainHTML = '', lastMainPage = '';
+// A text selection in the pane (a command line or a PID to copy) survives its rebuild. Each end is kept as the rows
+// and entries it lies in, each known by what it shows (a process, a node, a thread: tables re-sort every poll), then
+// the child path from there down to the text, and the offset; it goes when its row does. It is put back only on
+// the same page: on another one the same place holds other text.
+const SEL_KEYS = ['pid', 'row', 'select', 'netsel', 'gtoggle'], SEL_ANY = SEL_KEYS.map(k => `[data-${k}]`).join(',');
+function selKey(n){ if (n.nodeType === 1) for (const k of SEL_KEYS) if (n.dataset[k] != null) return `[data-${k}="${CSS.escape(n.dataset[k])}"]`; return null; }
+// the elements with this key right inside `scope` (no other keyed element between): one process can be in two tables
+function selKeyed(root, scope, key){
+  return [...scope.querySelectorAll(key)].filter(e => { const up = e.parentElement.closest(SEL_ANY); return scope === root ? !up || !root.contains(up) : up === scope; });
+}
 function selEnd(root, node, off){
-  const row = (node.nodeType === 1 ? node : node.parentNode).closest('tr[data-pid]'), top = row && root.contains(row) ? row : root, path = [];
-  for (let n = node; n !== top; n = n.parentNode) path.unshift([...n.parentNode.childNodes].indexOf(n));
-  return {pid:top === row ? row.dataset.pid : null, path, off};
+  const chain = [], steps = [];
+  for (let n = node; n && n !== root; n = n.parentNode) chain.unshift(n);
+  let scope = root;
+  for (const n of chain){
+    const k = selKey(n);
+    if (!k){ steps.push([...n.parentNode.childNodes].indexOf(n)); continue; }
+    while (typeof steps[steps.length - 1] === 'number') steps.pop();   // a keyed element is found from the one above it, wherever it moved
+    steps.push({k, i:selKeyed(root, scope, k).indexOf(n)});
+    scope = n;
+  }
+  return {steps, off};
 }
 function selAt(root, e){
-  let n = e.pid ? root.querySelector(`tr[data-pid="${CSS.escape(e.pid)}"]`) : root;
-  for (const i of e.path){ if (!n) break; n = n.childNodes[i]; }
-  return n ? [n, Math.min(e.off, n.nodeType === 3 ? n.length : n.childNodes.length)] : null;   // its process exited: gone
+  let scope = root, n = root;
+  for (const s of e.steps){
+    n = typeof s === 'number' ? n.childNodes[s] : (scope = selKeyed(root, scope, s.k)[s.i]);
+    if (!n) return null;   // its process exited, its row is gone: so is the selection
+  }
+  return [n, Math.min(e.off, n.nodeType === 3 ? n.length : n.childNodes.length)];
 }
+function mainPage(){ return [S.tree, S.tree === 'network' ? S.netSel : '', S.sel, S.view, S.metric, S.cpuView, S.gpuView, S.diskView, S.ifView, S.detailsDocked ? 'dock' : ''].join('|'); }
 let resizing = false;  // the docked panel's edge is being dragged: hold the page still till it's let go
 function renderMain(){
   if (resizing) return;  // a rebuild would replace the handle, which drops its pointer capture and strands the drag
@@ -1276,19 +1338,21 @@ function renderMain(){
   if (S.tree === 'network' && S.view !== 'details') html = netView();
   else {
     const n = S.sel === 'fleet' ? null : nodes[S.sel];
-    if (S.view === 'details') html = detailsView(n || (roots[0] || {id:'', name:'—'}));
-    else html = !n ? (S.pinsOnly && S.space === 'fleet' ? pinsView() : fleetView()) : n.kind === 'division' && !n.parent ? fleetView(n) : n.kind === 'machine' ? machineView(n) : n.kind === 'cronfolder' ? cronFolderView(n) : n.kind === 'cron' ? cronView(n) : n.hist ? leafView(n) : groupView(n);
+    if (S.view === 'details') html = detailsView(shownDetails() || {id:'', name:'—'});
+    else html = !n ? (S.pinsOnly && S.space === 'fleet' ? pinsView() : fleetView()) : n.kind === 'division' && !n.parent ? (n.children.every(topMachine) ? fleetView(n) : mixView(n)) : n.kind === 'machine' ? machineView(n) : n.kind === 'cronfolder' ? cronFolderView(n) : n.kind === 'cron' ? cronView(n) : n.hist ? leafView(n) : groupView(n);
     if (S.detailsDocked && S.view !== 'details')
-      panel = n ? detailsView(n, true) : `<div class="dhead"><div class="dtitle"><b>Details</b><span>Select a machine or anything in it to see its processes.</span></div><button type="button" class="iconbtn" data-closedock="1" aria-label="Close the Details panel">${icon('x', 2.2)}</button></div>`;
+      panel = ownsMachine(n) ? detailsView(n, true) : `<div class="dhead"><div class="dtitle"><b>Details</b><span>Select a machine or anything in it to see its processes.</span></div><button type="button" class="iconbtn" data-closedock="1" aria-label="Close the Details panel">${icon('x', 2.2)}</button></div>`;
   }
   const full = panel
     ? `<div class="split"><div class="wrap">${html}</div><aside class="dpanel" style="width:${Math.round(S.dockW || 560)}px" aria-label="Details panel"><div class="dresize" data-resize="1" role="separator" aria-orientation="vertical" aria-label="Resize the Details panel" title="Drag to resize"></div>${panel}</aside></div>`
     : `<div class="wrap">${html}</div>`;
+  const page = mainPage(), samePage = page === lastMainPage;
+  lastMainPage = page;
   if (full === lastMainHTML) return;
   lastMainHTML = full;
   // the panels inside are rebuilt: keep where each was scrolled (the docked Details, the page beside it, wide tables)
   const pos = scrollSnapshot(main);
-  const sel = getSelection(), ends = sel.rangeCount && !sel.isCollapsed && main.contains(sel.anchorNode) && main.contains(sel.focusNode) && selStart == null
+  const sel = getSelection(), ends = samePage && sel.rangeCount && !sel.isCollapsed && main.contains(sel.anchorNode) && main.contains(sel.focusNode) && selStart == null
     ? [selEnd(main, sel.anchorNode, sel.anchorOffset), selEnd(main, sel.focusNode, sel.focusOffset)] : null;
   main.innerHTML = full;
   scrollRestore(main, pos);
@@ -1423,6 +1487,8 @@ function select(id){
 document.addEventListener('click', e => {
   // empty space in the tree does nothing; the All machines row (or the tailnet's) is the all-up view (#327)
   if (e.target.closest('[data-allrow]')){ selectNone(); return; }
+  // a click in a group's rename box moves the caret; the row around it doesn't take it as a select (#297)
+  if (e.target.closest('#tree input.tg-name')) return;
   // a machine's dot (or Connect on its page) turns its connection off or on; it doesn't select the row
   const cn = e.target.closest('[data-conn]'); if (cn){ e.stopPropagation(); setConnected(cn.dataset.conn, cn.getAttribute('aria-pressed') !== 'true'); return; }
   if (e.target.closest('[data-autoconn]')){ openAutoConn(e.target.closest('[data-autoconn]')); return; }
@@ -1430,14 +1496,20 @@ document.addEventListener('click', e => {
   const tf = e.target.closest('[data-tgfold]'); if (tf){ S.gfold = Object.assign({}, S.gfold, {[tf.dataset.tgfold]:tf.getAttribute('aria-expanded') === 'true'}); save(); renderTree(); const b = document.querySelector(`[data-tgfold="${CSS.escape(tf.dataset.tgfold)}"]`); if (b) b.focus(); return; }
   // a group's header selects the group: its own all-up view (a fleet's is All machines for its members)
   const tgh = e.target.closest('#tree .tg-h');
-  if (tgh && !e.target.closest('input, [data-pin], [data-unpin]') && S.tree !== 'network'){ const id = 'div:' + tgh.closest('.tgroup').dataset.tgroup; buildDivisions(); if (nodes[id]) select(id); return; }   // empty space in a tree: nothing selected, everything shown
+  // The first click of a double-click selects it and redraws the tree, so the second lands on a new header and the
+  // browser sends no dblclick: that second click (detail 2) renames it, as a double-click does (#295).
+  if (tgh && !e.target.closest('input, [data-pin], [data-unpin]') && S.tree !== 'network'){
+    const box = tgh.closest('.tgroup'), id = 'div:' + box.dataset.tgroup;
+    if (e.detail >= 2){ renameGroup(box.dataset.tgkey, box.dataset.tgroup); return; }
+    buildDivisions(); if (nodes[id]) select(id); return;
+  }   // empty space in a tree: nothing selected, everything shown
   const nv = e.target.closest('[data-nav]'); if (nv){ navGo(nv.dataset.nav === 'back' ? -1 : 1); return; }
   const fs = e.target.closest('[data-mfstep]'); if (fs){ stepFind(+fs.dataset.mfstep); return; }
   if (e.target.closest('[data-mfclose]')){ closeFind(); return; }
   if (e.target.closest('[data-inspclose]')){ closeInspect(); return; }
   const lb = e.target.closest('[data-lookback]'); if (lb){ PREFS = Object.assign({}, PREFS, {cacheLookback:+lb.dataset.lookback}); lastMainHTML = ''; renderMain(); savePrefs('the cache lookback'); return; }
   const look = e.target.closest('[data-vmlook]');
-  if (look && typeof INSP.pid === 'string'){ INSP.via = look.dataset.vmlook; INSP.data = null; INSP.good = null; INSP.acc = {}; INSP.samples = 0; INSP.secs = 0; INSP.looks = 0; INSP.cacheLooks = []; lastMainHTML = ''; renderMain(); inspectTick(); return; }
+  if (look && typeof INSP.pid === 'string'){ INSP.via = look.dataset.vmlook; INSP.gen++; INSP.busy = false; INSP.lastT = null; INSP.data = null; INSP.good = null; INSP.acc = {}; INSP.samples = 0; INSP.secs = 0; INSP.looks = 0; INSP.cacheLooks = []; lastMainHTML = ''; renderMain(); inspectTick(); return; }
   const prow = e.target.closest('.ptbl tbody tr[data-pid]');
   if (prow && !e.target.closest('button, a, input, select, label')){
     const k = prow.dataset.pid;   // a process in Docker Desktop's VM is keyed d:<container>:<pid>
@@ -1534,6 +1606,10 @@ function sigOf(){ return Object.keys(nodes).join('|') + '#' + PINS.join('|'); }
 // The Network tree's data comes on its own: the server runs tailscale status for /api/net, which can take seconds,
 // and the fleet's numbers never wait for it. One is on its way at a time (#144).
 let netBusy = false;
+// What a process list is for, so this Mac's server reads Docker Desktop's containers (a docker top each) only for the
+// ones shown (#312): Details names its node unless that's the whole machine (a division's members are anywhere); the
+// CPU, disk and interface cards' lists ask for none (&docker=0), since those rows never say a CPU, disk or interface.
+function procsScope(n, mid){ return n && n.id !== mid && n.kind !== 'division' ? '&scope=' + encodeURIComponent(n.id) : ''; }
 function refreshNet(){
   if (netBusy || S.tree !== 'network') return; netBusy = true;
   fetch('/api/net', {cache:'no-store'}).then(r => r.json()).then(d => { NET = d; if (S.tree === 'network'){ updateTree(); renderMain(); } })
@@ -1562,15 +1638,16 @@ async function refreshNow(){
     if (S.sel !== 'fleet' && !nodes[S.sel]) { /* keep selection; it may come back */ }
     const n = S.sel === 'fleet' ? null : nodes[S.sel];
     const jobs = [];
-    if ((S.view === 'details' || (S.detailsDocked && n && S.tree !== 'network')) && (n || roots[0])){ const mid = procMachineFor(n || roots[0]); if (mid) jobs.push(fetch('/api/procs?machine=' + encodeURIComponent(mid), {cache:'no-store'}).then(r => r.json()).then(d => takeProcs(mid, d))); }
-    if (S.view !== 'details' && !S.detailsDocked && n && n.kind === 'machine' && S.metric === 'cpu' && S.cpuView === 'logical' && cpuSel(n).length && n.status === 'ok') jobs.push(fetch('/api/procs?machine=' + encodeURIComponent(n.id), {cache:'no-store'}).then(r => r.json()).then(d => takeProcs(n.id, d)));
+    const shown = shownDetails();
+    if (shown){ const mid = procMachineFor(shown); if (mid) jobs.push(fetch('/api/procs?machine=' + encodeURIComponent(mid) + procsScope(shown, mid), {cache:'no-store'}).then(r => r.json()).then(d => takeProcs(mid, d))); }
+    if (S.view !== 'details' && !S.detailsDocked && n && n.kind === 'machine' && S.metric === 'cpu' && S.cpuView === 'logical' && cpuSel(n).length && n.status === 'ok') jobs.push(fetch('/api/procs?machine=' + encodeURIComponent(n.id) + '&docker=0', {cache:'no-store'}).then(r => r.json()).then(d => takeProcs(n.id, d)));
     if (S.view !== 'details' && n && n.kind === 'machine' && S.metric === 'cpu' && S.cpuView === 'logical') jobs.push(fetch('/api/cpus?machine=' + encodeURIComponent(n.id), {cache:'no-store'}).then(r => r.json()).then(d => { CPUS[n.id] = d; }));
     const nm = n && n.kind === 'machine' ? n : null;
     // Each interface / Each disk shows nm's; Details filtered by a disk or interface pick needs its machine's to tell whether that's still there.
     const dn = shownDetails(), dmid = dn && procMachineFor(dn), lists = (shown, pick) => [...new Set([shown && nm ? nm.id : null, pick && pick.mid === dmid && pick.names.length ? dmid : null].filter(Boolean))];
     lists(S.metric === 'net' && S.view !== 'details', S.ifSel).forEach(id => jobs.push(fetch('/api/ifs?machine=' + encodeURIComponent(id), {cache:'no-store'}).then(r => r.json()).then(d => { IFS[id] = d; })));
     lists(S.metric === 'disk' && S.view !== 'details', S.diskSel).forEach(id => jobs.push(fetch('/api/disks?machine=' + encodeURIComponent(id), {cache:'no-store'}).then(r => r.json()).then(d => { DISKS[id] = d; })));
-    if (nm && S.view !== 'details' && !S.detailsDocked && ((S.metric === 'disk' && S.diskView === 'each' && diskSel(nm).length) || (S.metric === 'net' && S.ifView === 'each' && ifSel(nm).length)) && nm.status === 'ok') jobs.push(fetch('/api/procs?machine=' + encodeURIComponent(nm.id), {cache:'no-store'}).then(r => r.json()).then(d => takeProcs(nm.id, d)));
+    if (nm && S.view !== 'details' && !S.detailsDocked && ((S.metric === 'disk' && S.diskView === 'each' && diskSel(nm).length) || (S.metric === 'net' && S.ifView === 'each' && ifSel(nm).length)) && nm.status === 'ok') jobs.push(fetch('/api/procs?machine=' + encodeURIComponent(nm.id) + '&docker=0', {cache:'no-store'}).then(r => r.json()).then(d => takeProcs(nm.id, d)));
     await Promise.all(jobs.map(p => p.catch(() => null)));
     fails = 0; $('conn').hidden = true; $('live').hidden = false;
     const sig = sigOf();
@@ -2065,8 +2142,9 @@ document.addEventListener('keydown', e => {
     if ($('keys')){ e.preventDefault(); closeKeys(); return; }
     if (e.target.id === 'tfq'){ e.preventDefault(); closeTreeFind(); return; }
     if (e.target.id === 'mfq'){ e.preventDefault(); closeFind(); return; }
+    // the innermost thing first: a Details drop-down on screen closes before the tree lets go of its selection (#292)
+    if (INSP.pid && !typing && !overlayOpen() && (PANEL !== 'tree' || document.querySelector('tr.pinsp'))){ e.preventDefault(); closeInspect(); return; }
     if (PANEL === 'tree' && !typing && !overlayOpen() && !TF.q){ e.preventDefault(); selectNone(); return; }
-    if (INSP.pid && !typing && !overlayOpen()){ e.preventDefault(); closeInspect(); return; }
     if (e.target.id === 'pfilter'){ e.preventDefault(); if (e.target.value){ e.target.value = ''; S.filter = ''; save(); renderMain(); } else e.target.blur(); return; }
     return;
   }
@@ -2160,9 +2238,10 @@ function gotoItems(){
   for (const x of cmds){ const r = gotoRank(q, x.label, 'command'); if (r >= 0) scored.push([r, x]); }
   return scored.sort((a, b) => b[0] - a[0]).map(x => x[1]).slice(0, 60);
 }
-function renderGoto(){
+// keep: draw the same items in the same order (a pin from the list changes only its pin), see gotoPin
+function renderGoto(keep){
   const box = $('gotolist'); if (!box) return;
-  GOTO.items = gotoItems();
+  if (!keep) GOTO.items = gotoItems();
   GOTO.i = Math.max(0, Math.min(GOTO.i, GOTO.items.length - 1));
   box.innerHTML = GOTO.items.length ? GOTO.items.map((x, i) => {
     const ic = x.n ? icon(iconOf(x.n)) : icon(x.ic || 'chev'), col = x.n ? (x.n.kind === 'machine' ? 'var(--ink-2)' : colOf(x.n)) : 'var(--ink-3)';
@@ -2198,7 +2277,10 @@ function openGoto(){
   $('gotoq').focus();
 }
 function closeGoto(){ const el = $('goto'); if (el) el.remove(); }
-function gotoPin(id){ const was = PINS.includes(id); togglePin(id); renderGoto(); const q = $('gotoq'); if (q) q.focus(); toast(was ? 'Unpinned' : 'Pinned as a space'); }
+// A pin from the list leaves the list as it is while it's open (#296): sorting it again (pinned items go first) would
+// move another item under the highlight and the pointer, so the next ⇧Enter or click would act on that one. A new
+// query sorts it again.
+function gotoPin(id){ const was = PINS.includes(id); togglePin(id); renderGoto(true); const q = $('gotoq'); if (q) q.focus(); toast(was ? 'Unpinned' : 'Pinned as a space'); }
 function runGoto(i){ const x = GOTO.items[i]; if (!x) return; closeGoto(); x.run(); }
 
 
@@ -2216,24 +2298,32 @@ const VERDICT = {cpu:'CPU: it is running most of the time it isn’t idle', cpuw
 function toggleInspect(mid, pid, row){
   if (INSP.pid === pid && INSP.mid === mid){ closeInspect(); return; }
   const tbl = row && row.closest('.ptbl');
-  Object.assign(INSP, {via:null, mid, pid, name:'', data:null, good:null, acc:{}, samples:0, secs:0, looks:0, busy:false, cacheLooks:[],
+  Object.assign(INSP, {via:null, mid, pid, name:'', data:null, good:null, acc:{}, samples:0, secs:0, looks:0, busy:false, cacheLooks:[], gen:INSP.gen + 1, lastT:null,
     order:tbl ? [...tbl.querySelectorAll('tbody tr[data-pid]')].map(r => +r.dataset.pid) : null,
     gorder:tbl ? [...tbl.querySelectorAll('[data-gtoggle]')].map(b => b.dataset.gtoggle) : null});
   const pr = PROCS.list.find(p => p[0] === pid); INSP.name = pr ? pr[1] : '';
   lastMainHTML = ''; renderMain(); inspectTick();
 }
-function closeInspect(){ if (!INSP.pid) return; Object.assign(INSP, {via:null, mid:null, pid:0, order:null, gorder:null, data:null, good:null, acc:{}, looks:0}); lastMainHTML = ''; renderMain(); }
+function closeInspect(){ if (!INSP.pid) return; Object.assign(INSP, {via:null, mid:null, pid:0, order:null, gorder:null, data:null, good:null, acc:{}, looks:0, busy:false, gen:INSP.gen + 1, lastT:null}); lastMainHTML = ''; renderMain(); }
 async function inspectTick(){
   // a process in Docker's VM is looked at only the way you picked (#218): a helper container, or its own container
   if (!INSP.pid || INSP.busy || (typeof INSP.pid === 'string' && !INSP.via)) return;
-  const mid = INSP.mid, pid = INSP.pid;
+  // only while its drop-down is on screen, and not once the process has exited: Details on another machine or
+  // closed, or another view, asks the machine nothing; back on its machine, the looks go on (#288)
+  if (!document.querySelector('tr.pinsp') || (INSP.data && INSP.data.gone)) return;
+  const mid = INSP.mid, pid = INSP.pid, gen = INSP.gen;
   INSP.busy = true;
   let d;
   const q = typeof pid === 'string' ? `key=${encodeURIComponent(pid)}&via=${INSP.via}` : `pid=${pid}`;
-  try { d = await (await fetch(`/api/proc?machine=${encodeURIComponent(mid)}&${q}`, {cache:'no-store'})).json(); }
+  // X-Fleet: a look reaches out to the machine, so the server wants proof it comes from this page (#287)
+  try { d = await (await fetch(`/api/proc?machine=${encodeURIComponent(mid)}&${q}`, {cache:'no-store', headers:{'X-Fleet':'1'}})).json(); }
   catch (e) { d = {pid, error:'Fleet didn’t answer'}; }
+  // the answer for a drop-down since closed or moved to another process: that one's own look is on its way (#288)
+  if (INSP.gen !== gen) return;
   INSP.busy = false;
-  if (INSP.pid !== pid || INSP.mid !== mid) return;
+  // the server shares a look for a second after it ends, so the next poll can bring the same one again: count it once
+  if (d.t != null && d.t === INSP.lastT) return;
+  INSP.lastT = d.t;
   INSP.data = d; INSP.looks++;
   if (!d.error && !d.gone){
     INSP.good = d; if (d.name) INSP.name = d.name;
@@ -2263,10 +2353,13 @@ const ibytes = b => b == null ? '—' : memText(b / 1073741824);
 const ibps = b => b == null ? '—' : rateText(b / 1e6);
 const perSec = v => v == null ? '—' : (v >= 100 ? Math.round(v).toLocaleString() : v >= 1 ? v.toFixed(1) : v > 0 ? '<1' : '0') + '/s';
 const kvRow = (k, v, title) => `<div class="kv"${title ? ` title="${esc(title)}"` : ''}><span>${esc(k)}</span><b>${v}</b></div>`;
-// "0-15,32" stays as it is; a Windows bitmask (16777215) becomes "CPUs 0–23"
-function affinityText(a){
-  if (!/^\d+$/.test(a)) return a;
-  let m = BigInt(a), i = 0, runs = [], start = -1;
+// Where a process may run (#289): Linux's CPU list (affinity, "0-15,32", or "3" for one CPU) as Linux sends it;
+// Windows' bitmask (affinity_mask, 16777215 becomes "CPUs 0–23"; -1, a full 64-bit mask, "CPUs 0–63")
+function affinityText(g){
+  const a = g.affinity_mask;
+  if (a == null || a === '') return g.affinity || '';
+  if (!/^-?\d+$/.test(a)) return a;
+  let m = BigInt.asUintN(64, BigInt(a)), i = 0, runs = [], start = -1;
   for (; m > 0n || start >= 0; i++, m >>= 1n){ const on = (m & 1n) === 1n; if (on && start < 0) start = i; if (!on && start >= 0){ runs.push(start === i - 1 ? String(start) : `${start}–${i - 1}`); start = -1; } }
   return runs.length ? 'CPUs ' + runs.join(', ') : a;
 }
@@ -2290,7 +2383,7 @@ function inspectPanel(p){
   if (typeof INSP.pid === 'string' && !INSP.via) return vmInspectPanel(p);
   const d = INSP.data, g = INSP.good, name = (g && g.name) || INSP.name || (p && p[1]) || '';
   const close = `<button type="button" class="iconbtn" data-inspclose="1" aria-label="Close" title="Close (Esc)">${icon('x', 2.2)}</button>`;
-  const head = `<div class="insp-h"><div><b>${esc(name)}</b> <span class="mono">PID ${typeof INSP.pid === 'string' ? pidNum(INSP.pid) + ' in Docker’s VM · ' + (INSP.via === 'helper' ? 'through a helper container' : 'inside its container') : INSP.pid}</span>${g && g.cmdline ? `<div class="insp-cmd mono">${esc(g.cmdline)}</div>` : ''}</div>${close}</div>`;
+  const head = `<div class="insp-h"><div><b>${esc(name)}</b> <span class="mono">PID ${typeof INSP.pid === 'string' ? pidNum(INSP.pid) + ' in Docker’s VM · ' + (INSP.via === 'helper' ? 'through a helper container' : (g && Number.isInteger(g.pid) && g.pid > 0 ? `PID ${g.pid} ` : '') + 'inside its container') : INSP.pid}</span>${g && g.cmdline ? `<div class="insp-cmd mono">${esc(g.cmdline)}</div>` : ''}</div>${close}</div>`;
   if (!d) return `<div class="insp">${head}<div class="insp-wait">Looking at it… (about 2 seconds)</div></div>`;
   let note = '';
   if (d.gone) note = noteHTML(`<b>${esc(name || 'This process')} has exited.</b> What Fleet saw before is below.`, 'warn');
@@ -2309,7 +2402,7 @@ function inspectPanel(p){
     c.ctx_invol != null ? kvRow('Switches: preempted', perSec(c.ctx_invol), 'involuntary: the scheduler took the core away') : '',
     c.runq_s != null ? kvRow('Queued for a core', Math.round(c.runq_s * 1000) + ' ms/s') : '',
     cg && cg.cpu_limit ? kvRow('CPU limit', num(cg.cpu_limit) + ' cores') : '', cg && cg.cpu_limit ? kvRow('Throttled', pct((cg.throttled || 0) * 100)) : '',
-    g.affinity ? kvRow('May run on', esc(affinityText(g.affinity))) : '', g.last_cpu >= 0 ? kvRow('Last ran on', 'cpu' + g.last_cpu) : '',
+    affinityText(g) ? kvRow('May run on', esc(affinityText(g))) : '', g.last_cpu >= 0 ? kvRow('Last ran on', 'cpu' + g.last_cpu) : '',
     kvRow('Priority', `nice ${g.nice || 0}` + (g.priority_class ? ' · ' + esc(g.priority_class) : ''))]]);
   cards.push(['Memory', [kvRow('Resident', ibytes(m.rss)), m.anon != null ? kvRow('Its own (anon)', ibytes(m.anon)) : '', m.file != null ? kvRow('Files mapped', ibytes(m.file)) : '',
     m.shmem ? kvRow('Shared', ibytes(m.shmem)) : '', m.private != null ? kvRow('Private', ibytes(m.private)) : '', m.swap != null ? kvRow('Swapped out', ibytes(m.swap)) : '',
@@ -2330,7 +2423,7 @@ function inspectPanel(p){
   cards.push(['Process', [kvRow('User', esc(g.user || '—')), kvRow('Parent', g.ppid ? `PID ${g.ppid}` : '—'), g.started ? kvRow('Started', sinceText(g.started)) : '',
     kvRow('Threads', String(g.threads_n || '—')), g.exe ? `<div class="kv mono"><span title="${esc(g.exe)}">${esc(g.exe)}</span></div>` : '', g.cwd ? kvRow('Working dir', `<span class="mono">${esc(g.cwd)}</span>`) : '']]);
   const th = (g.threads || []).filter(t => t.name || t.tid).slice(0, 8);
-  const threads = th.length ? `<div class="icard wide"><h4>Busiest threads</h4><table class="ithr"><tbody>${th.map(t => `<tr><td class="l">${esc(t.name || '—')}</td><td>${t.tid}</td><td>${t.total != null ? num(t.total) + ' s in all' : pct((t.cpu || 0) * 100)}</td><td class="l">${esc(WAIT_LABEL[t.doing] || t.doing || '')}</td></tr>`).join('')}</tbody></table></div>` : '';
+  const threads = th.length ? `<div class="icard wide"><h4>Busiest threads</h4><table class="ithr"><tbody>${th.map(t => `<tr data-row="tid:${esc(t.tid)}"><td class="l">${esc(t.name || '—')}</td><td>${t.tid}</td><td>${t.total != null ? num(t.total) + ' s in all' : pct((t.cpu || 0) * 100)}</td><td class="l">${esc(WAIT_LABEL[t.doing] || t.doing || '')}</td></tr>`).join('')}</tbody></table></div>` : '';
   return `<div class="insp">${head}${note}${wait}<div class="insp-grid">${cards.map(([h, rows]) => `<div class="icard"><h4>${h}</h4>${rows.filter(Boolean).join('')}</div>`).join('')}${threads}</div></div>`;
 }
 
@@ -2443,14 +2536,25 @@ const termOk = n => n.kind === 'machine' ? (n.agent === 'local' || !!n.ssh) : (n
 function openDefaultTerminal(id){ loadTerms().then(t => t.def === 'inline' ? openInline(id) : openTerminal(id)); }   // inline may be the default (#336)
 function openTerminal(id, terminal){ api('/api/terminal', terminal ? {node:id, terminal} : {node:id}).then(r => toast(r.ok ? `Opened ${r.title} in ${r.terminal}` : (r.error || 'Couldn’t open a terminal'))).catch(() => toast('Couldn’t reach Fleet')); }
 function goNode(id, view){ S.view = view; select(id); if (view === 'details'){ S.detailsDocked = false; save(); lastMainHTML = ''; renderAll(); } }
+// Tiles redraw on every poll (their numbers change) while the menu stays open, so an item keeps what its tile's
+// button stands for, not the button: the one the menu opened on is usually gone by the time a person picks (#292).
 // a tile's own pin button, as a menu item
-function pinItem(scope, label){ const b = scope && scope.querySelector('[data-tpin]'); if (!b) return null; const on = b.getAttribute('aria-pressed') === 'true'; return {label:(on ? 'Unpin ' : 'Pin ') + label, run:() => b.click()}; }
+function pinItem(scope, label){ const b = scope && scope.querySelector('[data-tpin]'); if (!b) return null; const on = b.getAttribute('aria-pressed') === 'true', spec = b.dataset.tpin; return {label:(on ? 'Unpin ' : 'Pin ') + label, run:() => toggleTilePin(spec)}; }
+// whether the selection is that tile's and nothing else (a plain click on it would then let it go). Judged from the
+// selection, not by counting pressed buttons: in Each GPU one GPU has a pressed button in its header and in each metric.
+function onlyPicked(attr, v){
+  const m = nodes[S.sel]; if (!m) return false;
+  const cur = (attr === 'data-lcpu' || attr === 'data-lgroup' ? cpuSel(m) : attr === 'data-gsel' ? gpuSel(m) : attr === 'data-dsel' ? diskSel(m) : ifSel(m)).map(String);
+  const want = attr === 'data-lgroup' ? v.split(',') : [v];
+  return cur.length === want.length && want.every(x => cur.includes(x));
+}
 // a tile's own select button: pick just it, or add it to (take it out of) the selection
 function selItems(btn, what){
   if (!btn) return [];
-  const on = btn.getAttribute('aria-pressed') === 'true';
-  return [{label:`See what runs on ${what}`, run:() => { if (!on || document.querySelectorAll(`[aria-pressed="true"][${[...btn.attributes].find(a => /^data-(lcpu|lgroup|gsel|dsel|isel)$/.test(a.name)).name}]`).length > 1) btn.click(); }},
-    ...(btn.matches('[data-lgroup], .lgbtn') ? [] : [{label:on ? `Take ${what} out of the selection` : `Add ${what} to the selection`, run:() => btn.dispatchEvent(new MouseEvent('click', {bubbles:true, metaKey:true, ctrlKey:true}))}])];
+  const on = btn.getAttribute('aria-pressed') === 'true', attr = [...btn.attributes].find(a => /^data-(lcpu|lgroup|gsel|dsel|isel)$/.test(a.name)).name, v = btn.getAttribute(attr);
+  const live = () => document.querySelector(`[${attr}="${CSS.escape(v)}"]`);
+  return [{label:`See what runs on ${what}`, run:() => { const b = live(); if (b && !onlyPicked(attr, v)) b.click(); }},
+    ...(btn.matches('[data-lgroup], .lgbtn') ? [] : [{label:on ? `Take ${what} out of the selection` : `Add ${what} to the selection`, run:() => { const b = live(); if (b) b.dispatchEvent(new MouseEvent('click', {bubbles:true, metaKey:true, ctrlKey:true})); }}])];
 }
 function ctxFor(t){
   if (!t || !t.closest || t.closest('.ptbl thead th, #ctxmenu, #colmenu, input, textarea, select')) return null;
@@ -2525,7 +2629,11 @@ function openCtx(spec, x, y, origin){
   el.style.top = Math.max(8, Math.min(y, innerHeight - r.height - 8)) + 'px';
   const first = el.querySelector('[role=menuitem]'); if (first) first.focus();
 }
+// a menu whose items come from the server waits for them: Open terminal's terminals (#223) aren't fetched until asked for
+function ctxWait(t){ const tmb = t && t.closest && t.closest('[data-terminal], [data-termchoose]'); return tmb && !TERMS.list ? loadTerms() : null; }
 document.addEventListener('contextmenu', e => {
+  const t = e.target, wait = ctxWait(t);
+  if (wait){ e.preventDefault(); const x = e.clientX, y = e.clientY; wait.then(() => { const spec = ctxFor(t); if (spec) openCtx(spec, x, y, t.closest('button, [tabindex]') || t); }); return; }
   const spec = ctxFor(e.target);
   if (!spec || !spec.items.filter(x => x && x !== '—').length){ closeCtx(false); return; }
   e.preventDefault();
@@ -2540,8 +2648,11 @@ document.addEventListener('click', e => {
 addEventListener('keydown', e => {
   const el = $('ctxmenu'), open = el && !el.hidden;
   if (!open && ((e.key === 'F10' && e.shiftKey) || e.key === 'ContextMenu')){
-    const a = document.activeElement, spec = a && a !== document.body ? ctxFor(a) : null;
-    if (spec){ e.preventDefault(); e.stopPropagation(); const r = a.getBoundingClientRect(); openCtx(spec, r.left + 8, r.bottom + 2, a); }
+    const a = document.activeElement, wait = a && a !== document.body ? ctxWait(a) : null;
+    const at = spec => { const r = a.getBoundingClientRect(); openCtx(spec, r.left + 8, r.bottom + 2, a); };
+    if (wait){ e.preventDefault(); e.stopPropagation(); wait.then(() => { const spec = ctxFor(a); if (spec) at(spec); }); return; }
+    const spec = a && a !== document.body ? ctxFor(a) : null;
+    if (spec){ e.preventDefault(); e.stopPropagation(); at(spec); }
     return;
   }
   if (!open) return;
@@ -2584,8 +2695,9 @@ function groupedWalk(roots, kidsOf, openFn, shownFn, scope){
     const pinnedFirst = items.filter(it => it.gx && PINS.includes('div:' + it.gx.g.id)).concat(items.filter(it => !(it.gx && PINS.includes('div:' + it.gx.g.id))));
     pinnedFirst.forEach(({n, gx}) => {
       if (n) return one(n);
-      // a folded group is just its header; its members keep their own open state for when it unfolds
-      const folded = !!(S.gfold && S.gfold[gx.g.id]);
+      // a folded group is just its header; its members keep their own open state for when it unfolds. While find in
+      // the tree filters, it shows what in it matches, as a collapsed row opens on the way to a match (#295)
+      const folded = !TF.q && !!(S.gfold && S.gfold[gx.g.id]);
       out.push({open:gx.g, key, d, kind:groupKind(gx.members), folded, count:gx.members.length}); if (!folded) gx.members.forEach(one); out.push({close:true});
     });
   })(roots, 0, 'root');
@@ -2609,12 +2721,15 @@ function groupEditItems(n){
   return ['—', {label:'Rename', run:() => renameGroup(key, id)}, {label:'Disband ' + GKIND[n.gkind || 'taskforce'][1], run:() => updGroup(key, id, null)}];
 }
 function renameGroup(key, id){
+  if (renaming()) return;   // one name field at a time (a double-click's second click and its dblclick both ask)
   // the group's header in the tree, or its row in Groups only
   const n = document.querySelector(`#tree .tgroup[data-tgroup="${CSS.escape(id)}"] .tg-n`) || document.querySelector(`#tree .row[data-select="div:${CSS.escape(id)}"] .nm`); if (!n) return;
   const inp = document.createElement('input'); inp.className = 'tg-name'; inp.value = n.textContent; inp.setAttribute('aria-label', 'Group name');
-  n.replaceWith(inp); inp.focus(); inp.select();
+  n.replaceWith(inp); inp.focus(); inp.select(); RENAMING = inp;
   let done = false;
-  const commit = ok => { if (done) return; done = true; const v = inp.value.trim().slice(0, 60); if (ok && v) updGroup(key, id, g => Object.assign({}, g, {name:v})); else renderTree(); };
+  // saved once the code running now is done: a redraw that takes the box away (its blur fires mid-render) would
+  // otherwise put the old name back over the new one (#297)
+  const commit = ok => { if (done) return; done = true; RENAMING = null; const v = inp.value.trim().slice(0, 60); queueMicrotask(() => { if (ok && v) updGroup(key, id, g => Object.assign({}, g, {name:v})); else renderTree(); }); };
   inp.addEventListener('keydown', e => { if (e.key === 'Enter'){ e.preventDefault(); commit(true); } if (e.key === 'Escape'){ e.preventDefault(); e.stopPropagation(); commit(false); } });
   inp.addEventListener('blur', () => commit(true));
 }
@@ -2631,7 +2746,9 @@ document.addEventListener('pointermove', e => {
   if (!m.on){ if (Math.hypot(e.clientX - m.x0, e.clientY - m.y0) < 6) return; m.on = true; m.box = document.createElement('div'); m.box.className = 'mqbox'; document.body.appendChild(m.box); }
   const x = Math.min(m.x0, e.clientX), y = Math.min(m.y0, e.clientY), w = Math.abs(e.clientX - m.x0), h = Math.abs(e.clientY - m.y0);
   Object.assign(m.box.style, {left:x + 'px', top:y + 'px', width:w + 'px', height:h + 'px'});
-  document.querySelectorAll('#tree .row').forEach(r => { const b = r.getBoundingClientRect(); r.classList.toggle('mqhit', b.bottom > y && b.top < y + h && b.right > x && b.left < x + w); });
+  // only what you can see: the box is cut to the tree's view, so rows scrolled above or below it stay out (#293)
+  const t = $('tree').getBoundingClientRect(), x0 = Math.max(x, t.left), y0 = Math.max(y, t.top), x1 = Math.min(x + w, t.right), y1 = Math.min(y + h, t.bottom);
+  document.querySelectorAll('#tree .row').forEach(r => { const b = r.getBoundingClientRect(); r.classList.toggle('mqhit', b.bottom > y0 && b.top < y1 && b.right > x0 && b.left < x1); });
 });
 document.addEventListener('pointerup', () => {
   const m = MQ.st; MQ.st = null; if (!m || !m.on) return;
@@ -2717,12 +2834,20 @@ function buildDivisions(){
       const members = g.ids.map(id => nodes[id]).filter(Boolean); if (!members.length) return;
       const types = new Set(members.map(m => m.type));
       const d = {id:'div:' + g.id, name:g.name, kind:'division', type:types.size === 1 ? [...types][0] : 'base', children:members,
-        parent:pk === 'root' ? null : (nodes[pk] || null), gkind:groupKind(members)};
+        parent:divParent(pk, members), gkind:groupKind(members)};
       d.color = `var(--g-${d.gkind})`;
       d.series = sumSeries(members); d.gseries = members.reduce((t, c) => addG(t, c.gseries), {});
       nodes[d.id] = d;
     });
   }
+}
+// What a group hangs off (#294): the node its key names, or, for one saved at the top of Pins only or inside another
+// group's space (whose key names no node of the tree), the nearest node all its members are under; nothing when
+// they're on different machines (or are machines), so it counts against those machines (ctxOf).
+function divParent(pk, members){
+  const at = nodes[pk]; if (at && at.kind !== 'division') return at;
+  const above = n => { const a = []; for (let p = n.parent; p; p = p.parent) a.push(p); return a; };
+  return members.slice(1).reduce((common, m) => { const up = above(m); return common.filter(p => up.includes(p)); }, above(members[0]))[0] || null;
 }
 function divisionsChanged(){ buildDivisions(); renderSpaces(); renderTree(); if (PICK.open) renderPickerList(); }
 
@@ -2742,6 +2867,25 @@ function newGroupName(list, ids){
   return word + ' ' + k;
 }
 
+// each one with its share of its host (or of itself, for a machine), to open it: Pins only's mix, a group's members
+function shareRows(items){
+  return items.map(n => {
+    const v = rowVal(n), w = parseFloat(v) || 0, where = n.kind === 'machine' && !n.parent ? '' : n.kind === 'division' && !n.parent ? kindLabel(n) : (n.kind === 'division' ? kindLabel(n) + ' on ' : '') + hostOf(n).name;
+    return `<div class="prow2"><button type="button" class="namebtn" data-select="${esc(n.id)}"><span class="ico" style="color:${colOf(n)}">${icon(iconOf(n))}</span>${esc(n.name)}</button>`
+      + `<span class="pw">${esc(where)}</span><div class="track"><i style="width:${Math.min(100, w).toFixed(1)}%;background:${colOf(n)}"></i></div><span class="pv">${esc(v)}</span></div>`;
+  }).join('');
+}
+// A group of things on several machines (Pins only groups anything) (#295): its share of the machines they run on,
+// where that goes by type, and each member with its share of its own host, to open it, as Pins only lists a mix.
+function mixView(d){
+  const c = ctxOf(d.id), hosts = divHosts(d), series = typeSeries(i => c.bt(S.metric, i));
+  const stat = m => { const cap = c.cap(m), used = sumv(c.bt(m)); return {k:mlabel(m) + ' of its machines', v:cap ? pct(used / cap * 100) : '—', s:cap ? `${fmt(used, m)} of ${capText(cap, m)}` : `no ${mlabel(m)}`}; };
+  return `<div class="hero"><span class="tile" style="background:color-mix(in srgb, ${d.color} 22%, transparent);color:${d.color}">${icon(iconOf(d))}</span><div><h1>${esc(d.name)}</h1>`
+    + `<div class="facts"><span>${esc(kindLabel(d))}</span><span>${d.children.length} members on ${hosts.length} machine${hosts.length === 1 ? '' : 's'}</span><span>${hosts.map(h => esc(h.name)).join(', ')}</span></div></div>${heroStats(['cpu', 'mem', 'gpu'].map(stat))}</div>`
+    + `<div class="grid2">${whereCard(d.id, `Where ${esc(d.name)}’s usage goes`)}${graphCard(mlabel(S.metric), 'its members, by type', series, graphMax(c.cap(S.metric), series, S.metric), S.metric)}</div>`
+    + `<section class="card"><div class="card-h"><h2>In ${esc(d.name)} · ${mlabel(S.metric)}</h2><span class="sub">each one’s share of its host</span></div><div class="pinlist">${shareRows(d.children)}</div></section>`;
+}
+
 // Pins only, with nothing selected: an all-up view of the pins (#57). Pinned machines alone get the All machines
 // view of just them; a mix gets each pin with its share, to open it.
 function pinsView(){
@@ -2751,11 +2895,7 @@ function pinsView(){
     pv.series = sumSeries(items); pv.gseries = items.reduce((t, c) => addG(t, c.gseries), {});
     return fleetView(pv);
   }
-  const rows = items.map(n => {
-    const v = rowVal(n), w = parseFloat(v) || 0, where = n.kind === 'machine' && !n.parent ? '' : n.kind === 'division' && !n.parent ? kindLabel(n) : (n.kind === 'division' ? kindLabel(n) + ' on ' : '') + hostOf(n).name;
-    return `<div class="prow2"><button type="button" class="namebtn" data-select="${esc(n.id)}"><span class="ico" style="color:${colOf(n)}">${icon(iconOf(n))}</span>${esc(n.name)}</button>`
-      + `<span class="pw">${esc(where)}</span><div class="track"><i style="width:${Math.min(100, w).toFixed(1)}%;background:${colOf(n)}"></i></div><span class="pv">${esc(v)}</span></div>`;
-  }).join('');
+  const rows = shareRows(items);
   return `<div class="hero"><span class="tile" style="background:color-mix(in srgb, var(--accent) 22%, transparent);color:var(--accent)">${icon('pin')}</span><div><h1>Pins only</h1><div class="facts"><span>${items.length} pinned</span><span>${mlabel(S.metric)}: each pin's share of its host (or of itself, for a machine)</span></div></div></div>`
     + (items.length ? `<section class="card"><div class="card-h"><h2>Your pins · ${mlabel(S.metric)}</h2></div><div class="pinlist">${rows}</div></section>`
       : noteHTML('Nothing pinned yet: pin a machine, container or group with the pin on its row, or with <b>+</b> in the top bar.'));
@@ -2821,23 +2961,36 @@ function connTitle(n){
   if (!n.on) return 'off · click to connect';
   return (n.status === 'off' ? 'stopped on its host' : statusText(n)) + ' · click to disconnect';
 }
+// A connection turned on or off by hand shows as asked until the server says so (#302): /api/fleet answers from
+// machine specs built once a reading (up to an interval old), and a poll already on its way left before the change.
+// CONN_ASKED: machine id -> {on, until}; it goes when the server agrees, turns it down, or after 15 s.
+const CONN_ASKED = {};
+function connAsked(m, s){
+  const a = CONN_ASKED[m.id]; if (!a) return;
+  if (s && ((s.on !== false) === a.on || Date.now() > a.until)){ delete CONN_ASKED[m.id]; return; }
+  m.on = a.on; m.status = a.on ? 'connecting' : 'disabled'; if (!a.on) m.hasData = false;
+}
 async function setConnected(id, on){
   const n = nodes[id];
-  if (n){ n.on = on; n.status = on ? 'connecting' : 'disabled'; updateTree(); }
+  CONN_ASKED[id] = {on, until:Date.now() + 15000};
+  if (n){ connAsked(n); updateTree(); if (S.sel === id){ lastMainHTML = ''; renderMain(); } }   // the click shows at once, on its page too
   try {
     const r = await api('/api/connect', {machine:id, on});
     if (r.connect && DATA) DATA.connect = r.connect;
-    if (!r.ok) toast('Couldn’t change that connection');
+    if (!r.ok){ delete CONN_ASKED[id]; toast('Couldn’t change that connection'); }
     else toast(`${on ? 'Connecting to' : 'Disconnected'} ${n ? n.name : id}`);
-  } catch (e) { toast('Couldn’t change that connection'); }
+  } catch (e) { delete CONN_ASKED[id]; toast('Couldn’t change that connection'); }
   lastMainHTML = ''; refreshNow();
 }
 function autoLabel(c){ return !c || c.auto === 'none' ? 'None' : c.auto === 'all' ? 'All' : c.auto; }   // nothing chosen: None (#224)
 function renderAutoConn(){
   const box = $('autoconn'); if (!box || AC.naming) return;
   const c = DATA && DATA.connect, label = autoLabel(c);
-  const html = `<button type="button" class="btn autoc-btn" data-autoconn="1" aria-haspopup="menu" title="Which machines Fleet connects to when it starts">${icon('power')}<span>Auto: ${esc(label)}</span></button>`;
-  if (box.innerHTML !== html) box.innerHTML = html;
+  // drawn again only for a new label: the browser writes the icon's <path/> back as <path></path>, so comparing
+  // innerHTML never matched and every poll replaced the button, its focus and a click in progress with it (#302)
+  if (box.dataset.label === label && box.querySelector('[data-autoconn]')) return;
+  box.dataset.label = label;
+  box.innerHTML = `<button type="button" class="btn autoc-btn" data-autoconn="1" aria-haspopup="menu" title="Which machines Fleet connects to when it starts">${icon('power')}<span>Auto: ${esc(label)}</span></button>`;
 }
 async function connApi(body){
   try {

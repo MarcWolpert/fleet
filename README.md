@@ -63,7 +63,8 @@ waits on (CPU, disk, memory, GPU, locks, network), its cache misses over a lookb
 and threads; the list holds still while it's open.
 
 **Containers and VMs, counted once.** A VM on its host costs what the host gives it (its QEMU process, as
-`htop` shows it); its own page shows what the guest reports, without a ballooned guest's balloon. On a Mac,
+`htop` shows it, plus guest memory on huge pages, which `htop` leaves out); its own page shows what the guest
+reports, without a ballooned guest's balloon. On a Mac,
 Docker Desktop's VM folds into Base system, and Details lists each container's processes from inside it.
 Look inside one with a throwaway helper container or by running Fleet's inspector in its container.
 
@@ -168,7 +169,7 @@ Download Fleet from [Releases](https://github.com/MarcWolpert/fleet/releases/lat
 
 | | |
 |---|---|
-| **macOS** (Apple silicon) | `Fleet-<version>-macos-arm64.zip`: unzip, drag **Fleet.app** to Applications, open it. It needs Python 3.11 or newer on the Mac (`brew install python`). |
+| **macOS** (Apple silicon) | `Fleet-<version>-macos-arm64.zip`: unzip, drag **Fleet.app** to Applications, open it. Fleet.app isn't notarized yet, so the first time macOS says it can't verify it: choose **Done**, then System Settings › Privacy & Security › **Open Anyway**. If macOS says the app is damaged instead, run `xattr -dr com.apple.quarantine /Applications/Fleet.app` once. It needs Python 3.11 or newer on the Mac (`brew install python`). |
 | **Linux** (x64 or arm64) | `fleet-<version>-linux-x64.tar.gz` or `-linux-arm64.tar.gz`: `tar -xzf fleet-*.tar.gz && fleet-*/install.sh`, then open Fleet from your app menu or run `fleet`. It needs Python 3.11+; the window is Chrome, Chromium or Edge in app mode when one is installed, otherwise your browser. `uninstall.sh` removes it. |
 
 Or run it from source, anywhere with Python 3.11+:
@@ -278,7 +279,8 @@ and `connect.json` (which machines connect when Fleet starts, and your saved set
 - **Compose projects** come from Docker's `com.docker.compose.*` labels; a container's usage from its
   cgroup; **VMs** are matched by their QEMU process or WSL's utility VM.
 - **A VM Fleet also reads over SSH** (`vm_on`) is counted once on its host, as what the host gives it, and
-  on its own page as what the guest reports.
+  on its own page as what the guest reports. A figure the host can't see (a Mac's VMs' disk and network,
+  WSL's network, a VM whose network card is passed through) is the guest's own there too.
 - **A scheduled job's usage** is a breakdown of what runs it, never added on top.
 - **Looking inside a process** (the Details drop-down) runs a one-shot inspector the same way, for a couple
   of seconds. On a Mac with Docker Desktop, you choose a helper container or the container itself.

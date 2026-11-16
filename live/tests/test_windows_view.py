@@ -96,6 +96,26 @@ class UntrustedProcessRows(unittest.TestCase):
         out = api_procs({"t": 1000.0, "procs": [row(1, 0, 1), row(2, 1, 4.0), row(3, self.HOSTILE[0], self.HOSTILE[1]), row(4, None, [5])]})
         self.assertEqual({p[0]: (p[11], p[8]) for p in out["procs"]}, {1: (0, 1), 2: (1, 4.0), 3: (0, 0), 4: (0, 0)})
 
+    def test_which_gpu_is_gpu_numbers_only(self):
+        # #307: p[13] names the GPUs a process uses by their places in the machine's GPU list, and Details shows it
+        # as "GPU0+1"; anything else a host sends there is dropped.
+        row = lambda pid, gpus: [pid, 0, "sh", "root", "S", 0.0, 0.0, 0.0, 0.0, 1, "/bin/sh", "base", 0, gpus, [], [], 0.0]
+        out = api_procs({"t": 1000.0, "procs": [row(1, [0]), row(2, [0, 1]), row(3, []), row(4, [self.HOSTILE[1]]),
+                                                row(5, [1, self.HOSTILE[0], True, 1.5, None]), row(6, self.HOSTILE[0]), row(7, None),
+                                                [8, 0, "sh", "root", "S", 0.0, 0.0, 0.0, 0.0, 1, "/bin/sh", "base", 0]]})
+        self.assertEqual({p[0]: p[13] for p in out["procs"]}, {1: [0], 2: [0, 1], 3: [], 4: [], 5: [1], 6: [], 7: [], 8: []})
+
+    def test_pid_and_last_cpu_are_numbers(self):
+        # #307: a remote Mac's view is its collector's raw output, so the pid is the host's word too. A row whose pid
+        # isn't a number names no process and is left out; the last CPU is a CPU's number, or -1 (not reported).
+        row = lambda pid, lastcpu: [pid, 1, "sh", "root", "S", 0.0, 0.0, 0.0, 0.0, 1, "/bin/sh", "base", lastcpu, [], [], [], 0.0]
+        out = api_procs({"t": 1000.0, "procs": [
+            row(0, -1), row(1, 0), row(2, 7),                                                     # kernel_task, and two others
+            row(self.HOSTILE[1], 0), row("12", 0), row(True, 0), row(1.5, 0), row(None, 0),       # no number: left out
+            row(3, self.HOSTILE[0]), row(4, "3"), row(5, None), row(6, True), row(7, 2.0),         # last CPU: -1
+            [8, 1, "sh", "root", "S", 0.0, 0.0, 0.0, 0.0, 1, "/bin/sh", "base"]]})                 # a row that stops before it
+        self.assertEqual([(p[0], p[12]) for p in out["procs"]], [(0, -1), (1, 0), (2, 7), (3, -1), (4, -1), (5, -1), (6, -1), (7, -1), (8, -1)])
+
 
 MIB = 2 ** 20
 L4080, LA2000 = "0x00000000_0x0000c1d2", "0x00000000_0x0000e4f2"
@@ -178,7 +198,7 @@ class CompleteView(unittest.TestCase):
             "groups": [{"name": "P-cores", "cpus": [0, 1, 2, 3]}, {"name": "E-cores", "cpus": [4, 5, 6, 7]}],
             "containers": [web, dict(web, id=DB[:12], name="shop-db-1", image="postgres:16", service="db", u=[0.0] * 5, nettx=0.0)],   # docker stats: "--"
             # the WSL utility VM: vmmemWSL's 2 cores and 6 GB, less the container Docker Desktop runs in it
-            "vms": [{"name": "WSL", "u": [1.5, 5.0, 0.0, 0.0, 0.0], "gu": [0.0, 0.0], "running": True, "ifs": [], "cpus": "",   # on neither GPU
+            "vms": [{"name": "WSL", "u": [1.5, 5.0, 0.0, 0.0, 0.0], "gu": [0.0, 0.0], "running": True, "ifs": [], "cpus": "", "measured": [0, 1, 2, 3],   # on neither GPU; no network (#300)
                      "distros": [{"name": "docker-desktop", "state": "Running", "default": False}, {"name": "Ubuntu", "state": "Running", "default": True}]}],
             "jobs": [{"name": "Backup", "sched": "Daily 02:00", "human": "Daily 02:00", "cmd": "C:\\backup.cmd --all", "src": "\\Fleet\\",
                       "last": "2026-11-14 02:00", "next": "2026-11-16 02:00", "running": False, "state": "Ready", "u": [0.0] * 5}],

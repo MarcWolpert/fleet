@@ -22,6 +22,8 @@ METRICS = ("cpu", "mem", "gpu", "disk", "net")
 CONFIG_PATH = os.path.expanduser("~/.config/fleet/machines.toml")
 LAST_CLIENT = [0.0]   # when a Fleet window last asked for data
 HIDDEN_POLL_S = 75.0  # longest gap between a hidden window's polls: Chrome's once-a-minute timers, plus slack
+REOPENED = [0.0]      # when reopen_if_unseen last opened the app window
+REOPEN_LOCK = threading.Lock()
 PINS_PATH = os.path.expanduser("~/.config/fleet/pins.json")
 TILEPINS_PATH = os.path.expanduser("~/.config/fleet/tilepins.json")  # pinned tiles and CPU groups, per machine
 PREFS_PATH = os.path.expanduser("~/.config/fleet/ui.json")  # UI layout (Details columns per detail type)
@@ -139,6 +141,10 @@ class Hist:
                 q = self.d[key] = [collections.deque([0.0] * H, maxlen=H) for _ in vals]
             for i, v in enumerate(vals):
                 q[i].append(round(float(v), 4))
+
+    def keys(self, prefix):
+        with self.lock:
+            return [k for k in self.d if k.startswith(prefix)]
 
     def get(self, key, n=5):
         with self.lock:
@@ -346,6 +352,7 @@ class Machine:
         self.view = None          # derived, see derive_*()
         self.fresh = False        # a reading arrived in this run (a view restored at start has no processes)
         self.cum = {}             # cumulative counters from the previous reading
+        self.nv_pair = {}         # Windows: each adapter's (LUID's) nvidia-smi index, as the last reading paired them
         self.disk_peak = 500 * MB
         self.lock = threading.Lock()
         self.proc = None
@@ -396,40 +403,55 @@ class Machine:
         self.wake.set()
         return True
 
-    def docker_desktop_procs(self, view, own, now=None):
+    def docker_desktop_procs(self, view, own, now=None, scope=None):
         """Docker Desktop (this Mac): each container's processes, read with docker top, since they run in
         Docker's Linux VM, which macOS can't see. Their PIDs are the VM's, so rows are keyed
         d:<container>:<pid> and never meet this Mac's. CPU comes from each one's cumulative CPU time over its
-        last readings (up to 15 s apart); it is read at most every 2 s."""
+        last readings (up to 15 s apart).
+        Only the containers inside `scope` (a node id: this Mac, a Compose project, one container; None: all) are
+        read, each at most once per reading interval and on a thread of its own: a request gets each one's last
+        rows at once, and waits (up to 6 s) only for one it has never read or not for 15 s (nothing showed it)."""
         now = time.time() if now is None else now
-        st = self.__dict__.setdefault("dtop", {"t": -1e9, "rows": [], "cpu": {}})
-        if now - st["t"] < 2.0:
-            return st["rows"]
-        conts = [c for c in view.get("containers", []) if c.get("id")]
-        outs = {}
-        def top(c):
-            outs[c["id"]] = run(["docker", "top", c["id"], "-eo", "pid,ppid,user,stat,cputimes,rss,nlwp,args"], timeout=5)
-        threads = [threading.Thread(target=top, args=(c,), daemon=True) for c in conts]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join(6)
-        rows, seen = [], set()
-        for c in conts:
-            cid = c["id"]
-            for pid, ppid, user, stat, cpus, rss, nlwp, args in parse_docker_top(outs.get(cid, "")):
+        st = self.__dict__.setdefault("dtop", {"c": {}, "lock": threading.Lock()})
+        node_of = lambda cid: own["cont"].get(cid, self.id + "/base")
+        listed = [c for c in view.get("containers", []) if c.get("id")]
+        conts = [c for c in listed if scope is None or node_of(c["id"]) == scope or node_of(c["id"]).startswith(scope + "/")]
+        every, first = max(2.5, self.interval), []
+        with st["lock"]:
+            ids = {c["id"] for c in listed}
+            for cid in [k for k in st["c"] if k not in ids]:   # gone: forgotten, with its CPU history
+                del st["c"][cid]
+            for c in conts:
+                e = st["c"].setdefault(c["id"], {"t": -1e9, "rows": None, "cpu": {}, "reading": None})
+                if e["reading"] is None and now - e["t"] >= every:
+                    e["reading"] = threading.Thread(target=self.docker_top_read, args=(c["id"], e, now, st["lock"]), daemon=True, name="fleet-dtop")
+                    e["reading"].start()
+                if e["reading"] is not None and (e["rows"] is None or now - e["t"] > 15):
+                    first.append(e["reading"])
+        for th in first:
+            th.join(6)
+        rows = []
+        with st["lock"]:
+            for c in conts:
+                for r in st["c"].get(c["id"], {}).get("rows") or []:
+                    rows.append(r[:10] + [node_of(c["id"])] + r[11:])
+        return rows
+
+    def docker_top_read(self, cid, e, now, lock):
+        """One container's docker top, into its entry in docker_desktop_procs' cache (the node is filled in there)."""
+        out = run(["docker", "top", cid, "-eo", "pid,ppid,user,stat,cputimes,rss,nlwp,args"], timeout=5)
+        rows, cpu = [], {}
+        with lock:
+            for pid, ppid, user, stat, cpus, rss, nlwp, args in parse_docker_top(out):
                 key = "d:%s:%d" % (cid, pid)
-                seen.add(key)
-                hist = st["cpu"].setdefault(key, collections.deque(maxlen=8))
+                hist = cpu[key] = e["cpu"].get(key) or collections.deque(maxlen=8)
                 hist.append((now, cpus))
                 old = next(((t0, c0) for t0, c0 in hist if now - t0 <= 15), None)
-                cpu = (cpus - old[1]) / (now - old[0]) if old and now - old[0] >= 2.5 else 0.0
+                rate = (cpus - old[1]) / (now - old[0]) if old and now - old[0] >= 2.5 else 0.0
                 name = os.path.basename(args.split()[0]).rstrip(":") if args.split() else ""
-                rows.append([key, name, user, stat, round(max(0.0, cpu), 4), round(rss * 1024 / GB, 5), 0.0, 0.0, nlwp, args,
-                             own["cont"].get(cid, self.id + "/base"), "d:%s:%d" % (cid, ppid), -1, [], [], [], -1])
-        st["cpu"] = {k: v for k, v in st["cpu"].items() if k in seen}
-        st["t"], st["rows"] = now, rows
-        return rows
+                rows.append([key, name, user, stat, round(max(0.0, rate), 4), round(rss * 1024 / GB, 5), 0.0, 0.0, nlwp, args,
+                             None, "d:%s:%d" % (cid, ppid), -1, [], [], [], -1])
+            e["cpu"], e["rows"], e["t"], e["reading"] = cpu, rows, now, None
 
     def got(self, view):
         with self.lock:
@@ -620,7 +642,9 @@ class Machine:
         for name, v in vmmap.items():
             u = vm_u.get(name, [0.0] * 5)
             u[4] = sum(x["rx"] + x["tx"] for x in ifs if x["name"] in [i["if"] for i in v["ifs"]])
-            vms.append({"name": name, "u": u, "gu": vm_g.get(name, [0.0] * len(gpus)), "running": True, "ifs": v["ifs"], "cpus": (r.get("vm_cpus") or {}).get(name, "")})
+            # measured: which of u the host sees (#300); without a tap on the host (a NIC passed through) not its network
+            vms.append({"name": name, "u": u, "gu": vm_g.get(name, [0.0] * len(gpus)), "running": True, "ifs": v["ifs"], "cpus": (r.get("vm_cpus") or {}).get(name, ""),
+                        "measured": [0, 1, 2, 3, 4] if v["ifs"] else [0, 1, 2, 3]})
         # Scheduled jobs: crontab lines (deduplicated) and systemd timers.
         jobs, seen = [], set()
         for c in r.get("cron", []):
@@ -822,7 +846,8 @@ class Machine:
     def windows_gpus(self, r):
         """Adapters by VRAM size, largest first, each named by its LUID (DXGI's adapter list), with its engines by
         type (the GPU Engine counters), dedicated and shared memory, and NVIDIA's own numbers from the nvidia-smi
-        row of the same name (two cards of one model pair in order: nvidia-smi's index, DXGI's)."""
+        row of the same card: one of the same name, and of two cards of one model the one whose memory.used is the
+        adapter's dedicated VRAM in use."""
         nv = [[x.strip() for x in line.split(",")] for line in r.get("nvidia", []) if line and line.count(",") >= 4]
         num = lambda x: float(x) if re.match(r"^-?\d+(\.\d+)?$", x or "") else None
         key = lambda s: tuple(int(x, 16) for x in s.split("_")) if re.match(r"^0x[0-9a-fA-F]+_0x[0-9a-fA-F]+$", str(s)) else str(s).lower()
@@ -831,20 +856,31 @@ class Machine:
             dx.setdefault(key(a.get("luid")), (i, str(a.get("name") or ""), float(a.get("vram") or 0)))
         info = lambda g: dx.get(key(g.get("luid")))
         lone = len(r.get("gpus", [])) == 1 and not dx   # no adapter list: a lone adapter can only be the one nvidia-smi or Windows names
-        free = list(nv)
-        def nv_row(name):
-            for x in free:
-                if x[1].lower() == name.lower():
-                    free.remove(x)
-                    return x
-            return []
         gpus, luid_idx = [], {}
         order = lambda g: (-info(g)[2], info(g)[0], "") if info(g) else (0.0, len(dx), str(g.get("luid")).lower())
-        for i, g in enumerate(sorted(r.get("gpus", []), key=order)):
+        ordered = sorted(r.get("gpus", []), key=order)
+        # Each adapter's nvidia-smi row. Older GeForce and Quadro drivers leave "NVIDIA " out of nvidia-smi's name. Cards
+        # of one model share a name, and DXGI lists the primary display's first, whatever nvidia-smi's index: WDDM reports
+        # one VRAM-in-use number to both, so a row goes to the adapter whose dedicated use is its memory.used. Within
+        # 64 MiB (both idle, say) that can't tell them apart: the pairing the last reading found holds, else Fleet's order.
+        model = lambda s: re.sub(r"^nvidia ", "", " ".join(s.lower().split()))
+        near = []
+        for i, g in enumerate(ordered):
+            for j, x in enumerate(nv):
+                if info(g) and model(x[1]) == model(info(g)[1]):
+                    used, ded = num(x[3]), g.get("dedicated")
+                    d = abs(used * MIB - float(ded)) if used is not None and isinstance(ded, (int, float)) else float("inf")
+                    near.append((d if d > 64 * MIB else 0.0, self.nv_pair.get(key(g["luid"])) != x[0], i, j))
+        rows = {}
+        for _, _, i, j in sorted(near):
+            if i not in rows and j not in rows.values():
+                rows[i] = j
+        self.nv_pair = {key(ordered[i]["luid"]): nv[j][0] for i, j in rows.items()}
+        for i, g in enumerate(ordered):
             luid_idx[g["luid"]] = i
             a, videos = info(g), r.get("videoNames", [])
             if a:
-                name, size, row = a[1] or "GPU %d" % i, a[2], nv_row(a[1])
+                name, size, row = a[1] or "GPU %d" % i, a[2], nv[rows[i]] if i in rows else []
             elif lone:
                 row = nv[0] if len(nv) == 1 else []
                 name, size = row[1] if row else videos[0] if len(videos) == 1 else "GPU 0", 0.0
@@ -977,7 +1013,8 @@ class Machine:
         running = [w["name"] for w in r.get("wsl", []) if w.get("state") == "Running"]
         vms = []
         if r.get("wsl"):
-            vms.append({"name": "WSL", "u": vm_u, "gu": vm_g, "running": bool(running), "ifs": [], "distros": r.get("wsl", []), "cpus": ""})
+            vms.append({"name": "WSL", "u": vm_u, "gu": vm_g, "running": bool(running), "ifs": [], "distros": r.get("wsl", []), "cpus": "",
+                        "measured": [0, 1, 2, 3]})   # vmmemWSL's CPU, memory, GPU and I/O; its network isn't seen (#300)
         jobs = []
         for tk in r.get("tasks", []):
             trig = ", ".join(tk.get("triggers") or []) or "on demand"
@@ -997,8 +1034,51 @@ class Machine:
         }
 
     # ------------------------------------------------------------ macOS (already rates)
+    # A Mac's reader sends rates, so its reading is the view. A remote Mac's is data from another machine, like any
+    # host's: every process row must have the types the server and the page take it to have, or the reading is a bad
+    # reading, as on Linux, where derive_linux can't use a PID that isn't a number (#299).
     def derive_generic(self, r):
+        procs = r.get("procs") if isinstance(r, dict) else None
+        if not isinstance(procs, list):
+            raise ValueError("no process list")
+        for i, p in enumerate(procs):
+            if not mac_row_ok(p):
+                raise ValueError("process row %d isn't one" % i)
         return r
+
+
+# A process row from a Mac's reader: pid, ppid, name, user, state, CPU, memory, disk, GPU, threads, command, owner,
+# last CPU, [GPU positions], [disks], [interfaces], network ("num": an int or a float, never a bool)
+MAC_ROW = (int, int, str, str, str, "num", "num", "num", "num", int, str, str, int, (int,), (str,), (str,), "num")
+
+
+def mac_row_ok(p):
+    def ok(v, t):
+        if isinstance(v, bool):
+            return False
+        if t == "num":
+            return isinstance(v, (int, float))
+        if isinstance(t, tuple):
+            return isinstance(v, list) and all(ok(x, t[0]) for x in v)
+        return isinstance(v, t)
+    return isinstance(p, list) and len(p) == len(MAC_ROW) and all(ok(v, t) for v, t in zip(p, MAC_ROW))
+
+
+def vm_hostside_u(v, mm):
+    """What a VM costs its host, [cpu, mem, gpu, disk, net]: what the host measured of it (v["u"]), and for a figure
+    the host can't see (v["measured"] leaves it out: a Mac's VMs' disk and network, WSL's network) what the guest
+    itself reports, while it's live (#300). A host that doesn't say measured all five."""
+    u = list(v["u"])
+    seen = v.get("measured")
+    seen = set(range(5)) if not isinstance(seen, list) else {i for i in seen if isinstance(i, int) and not isinstance(i, bool)}
+    if mm is None or seen >= set(range(5)):
+        return u
+    with mm.lock:
+        guest = mm.view if mm.status == "ok" else None
+    if guest:
+        for i in set(range(5)) - seen:
+            u[i] = guest["host"][i]
+    return u
 
 
 def aslist(x):
@@ -1073,22 +1153,170 @@ def timer_last(line):
 
 
 SHELLS = ("sh", "bash", "dash", "ash", "zsh", "ksh", "mksh", "busybox")
+SH_RESERVED = ("{", "}", "!", "if", "then", "else", "elif", "fi", "do", "done", "while", "until", "exec")
+SH_REDIRECT = re.compile(r"&>>?|\d*(?:>>|>&|>\||<&|<>|<<<|<<-?|>|<)")   # each takes a word: its file, fd or here-doc tag
+
+
+def sh_word(line, i):
+    """The shell word that starts at line[i]: (its pieces, where it ends). A piece is text as the program gets it (quotes
+    gone), or None where the shell expands something ($name, ${...}, $(...), `...`, a glob, a leading ~): any text."""
+    out, n = [], len(line)
+
+    def text(s):
+        if out and out[-1] is not None:
+            out[-1] += s
+        else:
+            out.append(s)
+
+    def expands():
+        if not out or out[-1] is not None:
+            out.append(None)
+
+    def closing(j, open_, close):   # just past what closes the bracket opened before line[j]
+        depth = 1
+        while j < n and depth:
+            depth += (line[j] == open_) - (line[j] == close)
+            j += 2 if line[j] == "\\" else 1
+        return j
+
+    while i < n and line[i] not in " \t\n;&|()<>":
+        c = line[i]
+        if c == "'":
+            j = line.find("'", i + 1)
+            j = n if j < 0 else j
+            text(line[i + 1:j])
+            i = j + 1
+        elif c == "\\":
+            text(line[i + 1:i + 2])
+            i += 2
+        elif c == '"':
+            i += 1
+            while i < n and line[i] != '"':
+                if line[i] == "\\" and line[i + 1:i + 2] in ("$", "`", '"', "\\"):
+                    text(line[i + 1])
+                    i += 2
+                elif line[i] in "$`" and line[i + 1:i + 2] not in ("", '"', " "):
+                    i = sh_expansion(line, i, closing)
+                    expands()
+                else:
+                    text(line[i])
+                    i += 1
+            i += 1
+        elif c in "$`" and line[i + 1:i + 2] not in ("", " ", "\t"):
+            i = sh_expansion(line, i, closing)
+            expands()
+        elif c in "*?[" or (c == "~" and not out):
+            i += 1
+            expands()
+        else:
+            text(c)
+            i += 1
+    return out, i
+
+
+def sh_expansion(line, i, closing):
+    """Where the expansion at line[i] ($name, $1, ${...}, $(...), $((...)), `...`) ends."""
+    if line[i] == "`":
+        j = i + 1
+        while j < len(line) and line[j] != "`":
+            j += 2 if line[j] == "\\" else 1
+        return j + 1
+    if line[i + 1] in "({":
+        return closing(i + 2, line[i + 1], ")" if line[i + 1] == "(" else "}")
+    m = re.compile(r"[A-Za-z_]\w*|[0-9@*#?$!-]").match(line, i + 1)
+    return m.end() if m else i + 1
+
+
+def sh_last_command(line):
+    """The words of the last simple command of a shell line, as the program it runs gets them, or None. Each word is
+    its texts with any text between each two (what the shell expands). A shell execs a line's last command in its
+    own place (dash, cron's /bin/sh on Debian and Ubuntu, does so past a `cd X &&` or a guard, and with
+    redirections applied), so it is what cron's child runs then. The line splits at && || ; | & and brackets;
+    redirections and their words, VAR=value before the command and reserved words go."""
+    cmds, cur, i, n, target = [], [], 0, len(line), False
+    while i < n:
+        c = line[i]
+        m = SH_REDIRECT.match(line, i)
+        if c in " \t":
+            i += 1
+        elif m:
+            i, target = m.end(), True
+        elif line.startswith(("&&", "||"), i) or c in ";&|()\n":
+            cmds.append(cur)
+            cur, target = [], False
+            i += 2 if line.startswith(("&&", "||"), i) else 1
+        elif c == "#":   # a comment, from a word's start to the end of the line
+            break
+        else:
+            start = i
+            pieces, i = sh_word(line, i)
+            raw = line[start:i]
+            if target:
+                target = False
+            elif cur or not (raw in SH_RESERVED or re.match(r"[A-Za-z_]\w*=", raw)):
+                cur.append(pieces)
+    cmds = [c for c in cmds + [cur] if c]
+    if not cmds:
+        return None
+    words = []   # a command line's words are what it holds between spaces: a quoted "7 days" is two of them
+    for pieces in cmds[-1]:
+        w = [""]
+        for p in pieces:
+            if p is None:
+                w.append("")
+                continue
+            segs = re.split(r"\s+", p)
+            w[-1] += segs[0]
+            for seg in segs[1:]:
+                if w != [""]:
+                    words.append(w)
+                w = [seg]
+        if w != [""]:
+            words.append(w)
+    return words or None
+
+
+def sh_runs(words, got):
+    """Whether the command line got (its words) is the command words (from sh_last_command): word for word, where
+    each word's texts come in order and anything may lie between them. Linear: nothing is tried twice."""
+    if len(got) != len(words):
+        return False
+    for w, s in zip(words, got):
+        if len(w) == 1:
+            if s != w[0]:
+                return False
+            continue
+        if len(s) < len(w[0]) + len(w[-1]) or not s.startswith(w[0]) or not s.endswith(w[-1]):
+            return False
+        at, end = len(w[0]), len(s) - len(w[-1])
+        for part in w[1:-1]:
+            at = s.find(part, at, end)
+            if at < 0:
+                return False
+            at += len(part)
+    return True
 
 
 def cron_job(jobs, cmd):
     """Index of the crontab job a process cron started runs, from its command line (cmd), or None. Cron
-    hands the job's line (up to an unescaped %, with \\% as %) to `sh -c`; a shell may exec a lone command
-    in its place, and a script then runs as `<interpreter> <script>`."""
+    hands the job's line (up to an unescaped %, with \\% as %) to `sh -c`; a shell may exec the line's last
+    command in its place (a lone command, or the one after a `cd X &&`, without its redirections), and a
+    script then runs as `<interpreter> <script>`."""
     words = cmd.split()
     shell = len(words) > 2 and os.path.basename(words[0]) in SHELLS and words[1] == "-c"
     got = " ".join(words[2:] if shell else words)
     cut = len(cmd) >= 300  # the collector keeps 300 characters of a command line
-    for exact in (True, False):
-        for i, j in enumerate(jobs):
-            line = " ".join(re.split(r"(?<!\\)%", j["cmd"])[0].replace("\\%", "%").split())
-            if not line:
-                continue
-            if got == line or (cut and line.startswith(got)) or (not exact and not shell and got.endswith(" " + line)):
+    lines = []
+    for j in jobs:
+        line = " ".join(re.split(r"(?<!\\)%", j["cmd"])[0].replace("\\%", "%").split())
+        lines.append((line, sh_last_command(line) if line and not shell else None))
+    gw = got.split()
+    tests = (lambda line, last: got == line or (cut and line.startswith(got)),                  # sh -c <line>, or the line itself
+             lambda line, last: last and sh_runs(last, gw),                                     # the line's last command
+             lambda line, last: not shell and (got.endswith(" " + line) or (last and len(gw) > len(last) and sh_runs(last, gw[-len(last):]))))
+    for test in tests:
+        for i, (line, last) in enumerate(lines):
+            if line and test(line, last):
                 return i
     return None
 
@@ -1456,7 +1684,8 @@ class MacCollector:
                     p[11] = "dockervm"
                     continue
                 name = m.group(1) if m else own or ("UTM VM" if "utm" in anc else "VM %d" % p[0])
-                acc = vms.setdefault(name, {"name": name, "u": [0.0] * 5, "running": True, "ifs": [], "cpus": ""})
+                # measured: a Mac sees its VMs' CPU and memory (their processes), not their disk or network (#300)
+                acc = vms.setdefault(name, {"name": name, "u": [0.0] * 5, "running": True, "ifs": [], "cpus": "", "measured": [0, 1]})
                 acc["u"][0] += p[5]
                 acc["u"][1] += p[6]
                 p[11] = "vm:" + name
@@ -1482,6 +1711,8 @@ class MacCollector:
             except Exception:
                 continue
             labels = dict(kv.split("=", 1) for kv in c.get("Labels", "").split(",") if "=" in kv)
+            if "fleet.helper" in labels:   # Fleet's own throwaway helper (docker_vm_inspect_cmd), not one of yours
+                continue
             cid = c.get("ID", "")[:12]
             s = stats.get(cid, {})
             nrx, ntx = netio(s.get("NetIO"))
@@ -1639,9 +1870,8 @@ class Fleet:
         own = record and live
         spec.update({"os": view["os"] + (" · " + view["arch"] if view.get("arch") else ""), "cpu_model": view.get("cpu_model", ""),
                      "uptime": fmt_uptime(view.get("uptime", 0)), "cap": view["cap"], "cronLabel": view.get("cronLabel", "Cron jobs"),
-                     "gpus": [{"name": g["name"], "mem": g.get("mem", ""),
-                               "m": [[k, lim, self.leaf("%s/gpu%d/%s" % (mid, gi, k), [(g.get("m") or {}).get(k, 0.0)], own)["cpu"]] for k, lim in gpu_metric_order(g)]}
-                              for gi, g in enumerate(view["gpus"])], "ncpu": view["ncpu"],
+                     "gpus": [{"name": g["name"], "mem": g.get("mem", ""), "m": self.gpu_metrics(mid, gi, g, own)} for gi, g in enumerate(view["gpus"])],
+                     "ncpu": view["ncpu"],
                      "groups": view.get("groups", [])})
         if view.get("note"):
             spec["note"] = {"label": "How this is counted.", "text": view["note"]}
@@ -1679,18 +1909,17 @@ class Fleet:
         nested = {mm.cfg.get("domain", mm.name): mm for mm in self.machines.values() if mm.cfg.get("vm_on") == mid}
         listed = set()
         for v in view["vms"]:
-            for i in range(5):
-                vsum[i] += v["u"][i]
             mm = nested.get(v["name"])
+            u = vm_hostside_u(v, mm)
+            for i in range(5):
+                vsum[i] += u[i]
             if mm:
                 listed.add(v["name"])
                 sub = self.machine_spec(mm, record, vm_hostside={"u": v["u"], "cap": vm_cap(view, v)} if live else None, vm_parent=m if live else None)
-                if live:   # what the host gives it (its QEMU process), as a history, and of each of the host's GPUs
-                    sub["hostside"] = self.leaf(sub["id"] + "/hostside", v["u"], own)
-                    sub["hostside_gh"] = self.gpu_leaf(sub["id"] + "/hostside", v.get("gu"), ng, own)
-                elif record:   # not shown while the host isn't live, and kept like the host's own history
-                    for key in [sub["id"] + "/hostside"] + ["%s/hostside/__gpu/%d" % (sub["id"], i) for i in range(ng)]:
-                        HIST.touch(key)
+                # What the host gives it (its QEMU process), as a history, and of each of the host's GPUs. Under a host
+                # that isn't live it waits with the host's own: the host's row is its last reading, Base and this alike.
+                sub["hostside"] = self.leaf(sub["id"] + "/hostside", u, own)
+                sub["hostside_gh"] = self.gpu_leaf(sub["id"] + "/hostside", v.get("gu"), ng, own)
                 vm_ids[v["name"]] = sub["id"]
                 spec["vms"].append(sub)
             else:
@@ -1741,6 +1970,18 @@ class Fleet:
         if record:
             HIST.push(key, u)
         return hist_obj(key)
+
+    def gpu_metrics(self, mid, gi, g, record):
+        """One GPU's tiles: [metric, limit, history] for each metric it reports now. A metric it reported before but
+        not now (Windows' compute and video processing engines are counted only while a process holds them) reads 0
+        while it's away, so its history keeps time with the others and a comeback isn't drawn next to old values (#290)."""
+        m, prefix = g.get("m") or {}, "%s/gpu%d/" % (mid, gi)
+        out = [[k, lim, self.leaf(prefix + k, [m.get(k, 0.0)], record)["cpu"]] for k, lim in gpu_metric_order(g)]
+        if record:
+            for key in HIST.keys(prefix):
+                if key[len(prefix):] not in m:
+                    HIST.push(key, [0.0])
+        return out
 
     def gpu_leaf(self, key, gu, n, record):
         """What a node uses of each of its machine's n GPUs, with history: {"gpu0": [...], "gpu1": [...]}."""
@@ -1801,7 +2042,10 @@ class Fleet:
     def find_machine(self, mid):
         return self.machines.get(mid)
 
-    def api_procs(self, mid):
+    def api_procs(self, mid, scope=None, docker=True):
+        """A machine's processes, each under its tree node. For this Mac, Docker Desktop's containers' too, unless the
+        list is for something they never show in (docker=False: last CPU, disks, interfaces); scope: the node the
+        page shows, whose containers alone are read (see docker_desktop_procs)."""
         m = self.machines.get(mid)
         if not m:
             return {"procs": []}
@@ -1813,9 +2057,13 @@ class Fleet:
             return {"procs": [], "ready": m.status == "disabled"}
         own = spec.get("procs_owner", {"cont": {}, "vm": {}})
         num = lambda x: x if isinstance(x, (int, float)) and not isinstance(x, bool) else 0   # what a host sends is data: numbers only
+        gpus = lambda xs: [i for i in xs if isinstance(i, int) and not isinstance(i, bool)] if isinstance(xs, list) else []   # GPU places
+        lastcpu = lambda x: x if isinstance(x, int) and not isinstance(x, bool) else -1   # a CPU's number, or -1: not reported
         jids = job_ids(mid, view.get("jobs", []))   # job:<n> is a place in this view's own job list
         out = []
         for p in view["procs"]:
+            if not isinstance(p[0], int) or isinstance(p[0], bool):   # a pid that isn't a number names no process
+                continue
             o = p[11]
             if o.startswith("c:"):
                 node = own["cont"].get(o[2:], mid + "/base")
@@ -1829,12 +2077,12 @@ class Fleet:
             else:
                 node = mid + "/base"
             out.append([p[0], p[2], p[3], p[4], round(p[5], 4), round(p[6], 5), round(p[7], 4), round(p[8], 2), num(p[9]), p[10], node, num(p[1]),
-                        p[12] if len(p) > 12 else -1, p[13] if len(p) > 13 else [], p[14] if len(p) > 14 else [],
+                        lastcpu(p[12] if len(p) > 12 else -1), gpus(p[13] if len(p) > 13 else []), p[14] if len(p) > 14 else [],
                         p[15] if len(p) > 15 else [], round(p[16], 4) if len(p) > 16 else -1])
         # p[13]: the GPUs the process uses (positions in this machine's gpus); gpu_procs says whether the
         # host reports that at all (macOS doesn't), so an empty p[13] isn't taken for "on no GPU".
-        if m.cfg.get("kind") == "local" and platform.system() == "Darwin" and view.get("containers"):
-            out.extend(m.docker_desktop_procs(view, own))   # Docker Desktop: its containers' processes, from its VM
+        if docker and m.cfg.get("kind") == "local" and platform.system() == "Darwin" and view.get("containers"):
+            out.extend(m.docker_desktop_procs(view, own, scope=scope))   # Docker Desktop: its containers' processes, from its VM
         return {"procs": out, "t": view["t"], "gpu_procs": bool(view.get("gpu_procs")), "ready": True}
 
     def api_cpus(self, mid):
@@ -2074,6 +2322,7 @@ INSPECT_SECS = 1.5
 INSPECT_LOCK = threading.Lock()
 INSPECT_CACHE = {}   # (machine, pid) -> (time, result)
 INSPECT_BUSY = {}    # (machine, pid) -> Event while a look is running
+REACHES_OUT = {"/api/proc"}   # the GETs that start work on a machine: they need what a write needs (#287)
 
 
 def inspect_mac(pid):
@@ -2148,7 +2397,19 @@ def inspect_mac(pid):
 # A remote Mac runs exactly the reader this Mac runs: its source, with the helpers it calls, streamed to
 # `python3 -` (the system Python 3.9 of a Mac with the Command Line Tools is enough).
 MAC_HELPERS = ["run", "size_bytes", "docker_pct", "netio", "parse_cputime", "fmt_secs", "human_cron", "JOB_GUARDS", "JOB_WRAPPERS", "JOB_ARGS", "job_name",
-               "mac_gpu_stats"]
+               "mac_gpu_stats", "MAC_TOOL_DIRS", "mac_path"]
+# Where Docker Desktop (per user, then system-wide), OrbStack, Rancher Desktop and Homebrew (Colima's docker) put the
+# docker CLI. sshd on a Mac runs a command with PATH=/usr/bin:/bin:/usr/sbin:/sbin and no login shell (path_helper
+# runs only from /etc/zprofile), so none of them is on it; every other tool the reader calls is (#299).
+MAC_TOOL_DIRS = ("~/.docker/bin", "~/.orbstack/bin", "~/.rd/bin", "/opt/homebrew/bin", "/usr/local/bin")
+
+
+def mac_path(path, home):
+    """PATH with MAC_TOOL_DIRS after what it already has (a directory already on it keeps its place)."""
+    have = [d for d in (path or "").split(":") if d]
+    return ":".join(have + [d for d in (home + d[1:] if d.startswith("~") else d for d in MAC_TOOL_DIRS) if d not in have])
+
+
 MAC_IMPORTS = "import base64, collections, ctypes, ctypes.util, glob, json, os, platform, plistlib, re, shlex, shutil, subprocess, sys, tempfile, threading, time, zlib\n"  # the server's own imports but tomllib (3.11+)
 
 
@@ -2171,6 +2432,7 @@ def mac_collector_script(interval):
     parts = [MAC_IMPORTS, "MB = %r\nGB = %r\nINTERVAL = %s\n" % (MB, GB, interval)] + own_source(*(MAC_HELPERS + ["MacCollector"]))
     parts.append('''
 ONCE = globals().get("ONCE", False)
+os.environ["PATH"] = mac_path(os.environ.get("PATH", ""), os.path.expanduser("~"))   # sshd's short PATH has no docker
 c = MacCollector()
 while True:
     began = time.time()
@@ -2191,6 +2453,11 @@ def mac_inspect_script(pid, secs):
     return MAC_IMPORTS + "INSPECT_SECS = %r\n\n" % secs + own_source("inspect_mac")[0] + "\n\nprint(json.dumps(inspect_mac(%d)))\n" % int(pid)
 
 
+def windows_inspect_script(pid):
+    with open(os.path.join(HERE, "inspect_windows.ps1"), encoding="utf-8") as f:
+        return "$FleetPid=%d\n$FleetSecs=%s\n" % (pid, INSPECT_SECS) + ps_compact(f.read())
+
+
 def inspect_process(m, pid):
     key = (m.id, pid)
     with INSPECT_LOCK:
@@ -2208,20 +2475,26 @@ def inspect_process(m, pid):
         return c[1] if c else {"pid": pid, "error": "no answer"}
     cfg = m.cfg
     try:
-        if cfg.get("kind") == "local" and sys.platform == "darwin":
+        # this computer: the inspector of what it runs on, as local_loop picks its collector (validate_config
+        # drops a local machine's os); a machine over SSH: its configured os
+        local = platform.system() if cfg.get("kind") == "local" else None
+        if local == "Darwin":
             out = inspect_mac(pid)
         else:
-            if cfg.get("kind") == "local":
+            if local == "Windows":   # the short starter the local collector uses, the script on stdin (#269)
+                cmd, stdin = ps_launch(windows_inspect_script(pid))
+            elif local:
                 cmd, stdin = [sys.executable, os.path.join(HERE, "inspect_linux.py"), str(pid), str(INSPECT_SECS)], None
             elif cfg.get("os") == "macos":
                 cmd, stdin = ["ssh"] + SSH_MARK + [cfg["ssh"], "python3 -"], mac_inspect_script(pid, INSPECT_SECS).encode()
             elif cfg.get("os") == "windows":
-                script = "$FleetPid=%d\n$FleetSecs=%s\n" % (pid, INSPECT_SECS) + ps_compact(open(os.path.join(HERE, "inspect_windows.ps1"), encoding="utf-8").read())
-                enc = base64.b64encode(script.encode("utf-16-le")).decode()
-                cmd, stdin = ["ssh"] + SSH_MARK + [cfg["ssh"], "powershell -NoProfile -NonInteractive -EncodedCommand " + enc], None
+                # like the collector: a short bootstrap any default shell runs (cmd.exe takes 8,191 characters), the script on stdin
+                argv, stdin = ps_launch(windows_inspect_script(pid))
+                cmd = ["ssh"] + SSH_MARK + [cfg["ssh"], " ".join(argv)]
             else:
                 cmd = ["ssh"] + SSH_MARK + [cfg["ssh"], "python3 - %d %s" % (pid, INSPECT_SECS)]
-                stdin = open(os.path.join(HERE, "inspect_linux.py"), "rb").read()
+                with open(os.path.join(HERE, "inspect_linux.py"), "rb") as f:
+                    stdin = f.read()
             r = subprocess.run(cmd, input=stdin, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
             lines = [l for l in r.stdout.decode("utf-8", "replace").splitlines() if l.startswith("{")]
             if lines:
@@ -2250,9 +2523,13 @@ VM_KEY = re.compile(r"^d:([0-9a-f]{12}):([1-9][0-9]{0,9})$")
 EXEC_PRELUDE = """import json, os, sys
 WANT_CMD = %r
 WANT_AGE = %d
+WANT_I, WANT_N = %d, %d
 def _fleet_find():
-    # the process inside its container: the same command line, started the same number of seconds ago
-    up, hz, best = float(open("/proc/uptime").read().split()[0]), os.sysconf("SC_CLK_TCK"), None
+    # The process inside its container, where its PID isn't the VM's: the same command line (NULs as spaces, as docker
+    # top shows it), started as long ago. Look-alikes (a pre-fork server's master and workers share both) are told
+    # apart by their order: docker top saw it as the WANT_I-th of WANT_N, by PID, and a fork takes the next PID in
+    # the VM and in the container alike. If one came or went since, only an unmistakable match will do.
+    up, hz, same = float(open("/proc/uptime").read().split()[0]), os.sysconf("SC_CLK_TCK"), []
     for d in os.listdir("/proc"):
         if not d.isdigit():
             continue
@@ -2262,12 +2539,20 @@ def _fleet_find():
             age = up - int(st[st.rindex(")") + 2:].split()[19]) / hz
         except Exception:
             continue
-        if cmd == WANT_CMD and (best is None or abs(age - WANT_AGE) < best[0]):
-            best = (abs(age - WANT_AGE), int(d))
-    return best[1] if best and best[0] <= 3 else None
-_p = _fleet_find()
+        if cmd == WANT_CMD:
+            same.append((int(d), age))
+    same.sort()
+    near = [p for p, age in same if abs(age - WANT_AGE) <= 3]
+    if len(same) == WANT_N and abs(same[WANT_I][1] - WANT_AGE) <= 3:
+        return same[WANT_I][0], ""
+    if len(near) == 1:
+        return near[0], ""
+    if near:
+        return None, "Its container runs other processes just like it, and Fleet couldn't tell which one it is. Look with a helper container instead."
+    return None, "Couldn't find that process inside its container."
+_p, _why = _fleet_find()
 if _p is None:
-    print(json.dumps({"pid": 0, "error": "Couldn't find that process inside its container."}))
+    print(json.dumps({"pid": 0, "error": _why}))
     sys.exit(0)
 sys.argv = ["-", str(_p), %r]
 """
@@ -2278,13 +2563,15 @@ def parse_vm_key(k):
     return (m.group(1), int(m.group(2))) if m else None
 
 
-def docker_vm_inspect_cmd(cid, pid, via, args, age):
+def docker_vm_inspect_cmd(cid, pid, via, args, age, i=0, n=1):
+    """How to look at VM process `pid` of container `cid`: through a helper that sees the VM, or (exec) inside the
+    container, where it is found by its command line `args` and `age` (s), the i-th of n such by PID (see EXEC_PRELUDE)."""
     src = open(os.path.join(HERE, "inspect_linux.py"), "rb").read()
     if via == "helper":
         return (["docker", "run", "--rm", "-i", "--pid=host", "--cap-add=SYS_PTRACE", "--network=none", "--label", "fleet.helper=inspect",
                  HELPER_IMAGE, "python3", "-", str(pid), str(INSPECT_SECS)], src)
     if via == "exec":
-        return ["docker", "exec", "-i", cid, "python3", "-"], (EXEC_PRELUDE % (args, int(age), str(INSPECT_SECS))).encode() + src
+        return ["docker", "exec", "-i", cid, "python3", "-"], (EXEC_PRELUDE % (args, int(age), int(i), int(n), str(INSPECT_SECS))).encode() + src
     raise ValueError("no such way to look: %r" % via)
 
 
@@ -2302,15 +2589,18 @@ def inspect_docker_vm(m, cid, pid, via):
         if c and time.time() - c[0] < 1.0:
             return c[1]
     try:
-        args, age = "", 0
-        if via == "exec":   # its command line and age, to find it inside its container
-            for line in run(["docker", "top", cid, "-eo", "pid,etimes,args"], timeout=5).splitlines()[1:]:
-                f = line.split(None, 2)
-                if len(f) == 3 and f[0] == str(pid) and f[1].isdigit():
+        args, age, i, n = "", 0, 0, 1
+        if via == "exec":   # its command line and age, and its place among its look-alikes, to find it inside its container
+            rows = [f for f in (line.split(None, 2) for line in run(["docker", "top", cid, "-eo", "pid,etimes,args"], timeout=5).splitlines()[1:])
+                    if len(f) == 3 and f[0].isdigit() and f[1].isdigit()]
+            for f in rows:
+                if f[0] == str(pid):
                     args, age = f[2], int(f[1])
             if not args:
                 return {"pid": pid, "gone": True}
-        cmd, stdin = docker_vm_inspect_cmd(cid, pid, via, args, age)
+            same = sorted(int(f[0]) for f in rows if f[2] == args)
+            i, n = same.index(pid), len(same)
+        cmd, stdin = docker_vm_inspect_cmd(cid, pid, via, args, age, i, n)
         r = subprocess.run(cmd, input=stdin, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
         lines = [l for l in r.stdout.decode("utf-8", "replace").splitlines() if l.startswith("{")]
         if lines:
@@ -2906,10 +3196,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         return json.loads(self.rfile.read(min(n, 1 << 20)) or b"null")
 
     def do_GET(self):
-        if not self.allowed():
+        u = urllib.parse.urlparse(self.path)
+        # A look at a process opens an SSH session or runs a helper container. A page on any site can send a
+        # no-cors GET with Fleet's own Host, so this GET passes the write gate too (#287).
+        if not self.allowed(write=u.path in REACHES_OUT):
             self.send_error(403)
             return
-        u = urllib.parse.urlparse(self.path)
         if u.path == "/api/inline-terminals":   # #337: the kept terminals, and what this computer has for them
             return self.send_json({"terminals": list_inline(), "tmux": bool(tmux_path()), "ttyd": bool(ttyd_path())})
         if u.path == "/api/config":
@@ -2924,7 +3216,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             LAST_CLIENT[0] = time.time()
             return self.send_json(self.fleet.api_fleet())
         if u.path == "/api/procs":
-            return self.send_json(self.fleet.api_procs(q.get("machine", [""])[0]))
+            return self.send_json(self.fleet.api_procs(q.get("machine", [""])[0], scope=q.get("scope", [None])[0], docker=q.get("docker", ["1"])[0] != "0"))
         if u.path == "/api/cpus":
             return self.send_json(self.fleet.api_cpus(q.get("machine", [""])[0]))
         if u.path == "/api/net":
@@ -3097,8 +3389,12 @@ def reopen_if_unseen(url, since, wait=8.0):
     deadline = max(since + wait, LAST_CLIENT[0] + HIDDEN_POLL_S)
     while LAST_CLIENT[0] < since and time.time() < deadline:
         time.sleep(max(0.0, min(1.0, deadline - time.time())))
-    if LAST_CLIENT[0] < since:
-        open_app_window(url)
+    # Waiters started within a minute of a closed window's last poll share that deadline and wake together:
+    # a window opened since this one started loads the newest files and serves it too.
+    with REOPEN_LOCK:
+        if LAST_CLIENT[0] < since and REOPENED[0] < since:
+            REOPENED[0] = time.time()
+            open_app_window(url)
 
 
 def watch_own_files(url):

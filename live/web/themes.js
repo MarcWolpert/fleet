@@ -112,8 +112,8 @@ function themeLum(c){ const x = themeHex(c).slice(0, 3).map(v => { v /= 255; ret
 function themeContrast(a, b){ const x = themeLum(a), y = themeLum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); }
 // move c toward `to` in small steps until it reads at `min`:1 against `bg`
 // OKLab (x100 distances are the dataviz validator's ΔE) and back, for picking distinct group colours
-function themeOklab(c){
-  const x = themeHex(c).slice(0, 3).map(v => { v /= 255; return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); });
+function themeOklab(c){ return themeLabLin(themeHex(c).slice(0, 3).map(v => { v /= 255; return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); })); }
+function themeLabLin(x){
   const l = Math.cbrt(0.4122214708 * x[0] + 0.5363325363 * x[1] + 0.0514459929 * x[2]), m = Math.cbrt(0.2119034982 * x[0] + 0.6806995451 * x[1] + 0.1073969566 * x[2]),
     s = Math.cbrt(0.0883024619 * x[0] + 0.2817188376 * x[1] + 0.6299787005 * x[2]);
   return [0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s, 1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s, 0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s];
@@ -146,12 +146,75 @@ const CVD_MONO = {
   light: {'t-base':'#c4c4ca', 't-compose':'#1c1c20', 't-container':'#56565d', 't-vm':'#8d8d94', run:'#1c1c20', warn:'#8d8d94', stale:'#56565d',
     'g-fleet':'#1c1c20', 'g-flotilla':'#56565d', 'g-division':'#8d8d94', 'g-section':'#3a3a40', 'g-squadron':'#71717a', 'g-taskforce':'#a6a6ad'}};
 const CVD_KINDS = ['protan', 'deutan', 'tritan', 'mono'];
+// The palettes are checked against Fleet's own surfaces; another theme's can be lighter (a dark theme) or darker (a light
+// one). Statuses are the text of the offline, auth and dns pills and group colours are a desktop tile's glyph and a
+// group's outline, so on every theme each keeps the 3:1 statuses get with the mode off (and non-text UI needs) on the
+// cards, the main view and the side bar. A status keeps its hue and gets lighter (darker on a light theme) until it
+// reads; a group colour that doesn't read is replaced by the one, among those that do, farthest from the other groups
+// as the reader sees them; monochromacy's greys close up toward the end away from the surfaces, in the same order.
+const CVD_FLOOR = 3;
+// Machado, Oliveira & Fernandes (2009) at full severity, on linear RGB
+const CVD_SIM = {
+  protan: [[0.152286, 1.052583, -0.204868], [0.114503, 0.786281, 0.099216], [-0.003882, -0.048116, 1.051998]],
+  deutan: [[0.367322, 0.860646, -0.227968], [0.280085, 0.672501, 0.047413], [-0.011820, 0.042940, 0.968881]],
+  tritan: [[1.255528, -0.076749, -0.178779], [-0.078411, 0.930809, 0.147602], [0.004733, 0.691367, 0.303900]]};
+// a colour in OKLab as a reader with this colour vision sees it
+function themeSeen(c, kind){
+  const m = CVD_SIM[kind]; if (!m) return themeOklab(c);
+  const x = themeHex(c).slice(0, 3).map(v => { v /= 255; return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); });
+  return themeLabLin(m.map(r => Math.min(1, Math.max(0, r[0] * x[0] + r[1] * x[1] + r[2] * x[2]))));
+}
+const themeReads = (x, bgs) => bgs.every(b => themeContrast(x, b) >= CVD_FLOOR);
+function themeReach(c, bgs, dark){
+  const p = themeOklab(c), C = Math.hypot(p[1], p[2]), h = Math.atan2(p[2], p[1]) * 180 / Math.PI;
+  let x = c;
+  for (let L = p[0]; !themeReads(x, bgs) && L > 0 && L < 1;){ L = Math.min(1, Math.max(0, L + (dark ? 0.01 : -0.01))); x = themeFromOklch(L, C, h); }
+  return x;
+}
+// the colours a replaced group colour is picked from (worked out once: the page applies its theme on every poll)
+let CVD_GRID = null;
+function themeApart(others, bgs, kind){
+  if (!CVD_GRID){
+    CVD_GRID = [];
+    for (let L = 0.2; L <= 0.98; L += 0.03) for (const C of [0.06, 0.12, 0.18]) for (let h = 0; h < 360; h += 15){
+      const x = themeFromOklch(L, C, h), seen = {};
+      for (const k of Object.keys(CVD_SIM)) seen[k] = themeSeen(x, k);
+      CVD_GRID.push({x, lum: themeLum(x), lab: themeOklab(x), seen});
+    }
+  }
+  const lums = bgs.map(themeLum), far = others.map(o => [themeSeen(o, kind), themeOklab(o)]);
+  let best = null, bd = -1;
+  for (const g of CVD_GRID){
+    if (!lums.every(b => (Math.max(b, g.lum) + 0.05) / (Math.min(b, g.lum) + 0.05) >= CVD_FLOOR)) continue;
+    const d = Math.min(...far.map(([s, t]) => Math.min(themeDE(g.seen[kind], s), themeDE(g.lab, t))));
+    if (d > bd){ bd = d; best = g.x; }
+  }
+  return best;
+}
+function themeCloseUp(greys, bgs, dark){
+  if (greys.every(x => themeReads(x, bgs))) return greys;
+  const p = greys.map(themeOklab), end = (dark ? Math.max : Math.min)(...p.map(q => q[0]));
+  for (let t = 0.98; t > 0; t -= 0.02){
+    const xs = greys.map((x, i) => p[i][0] === end ? x : themeFromOklch(end - (end - p[i][0]) * t, Math.hypot(p[i][1], p[i][2]), Math.atan2(p[i][2], p[i][1]) * 180 / Math.PI));
+    if (xs.every(x => themeReads(x, bgs))) return xs;
+  }
+  return greys.map(x => themeReach(x, bgs, dark));
+}
 // A theme's tokens with the reader's needs on top: o.cvd (a colour vision kind) and o.contrast (higher contrast, #220:
 // secondary text as strong as body text, the faintest at 7:1 or more, stronger lines). Every value stays a plain hex.
 function themeAccess(tk, o){
   o = o || {};
   const vars = Object.assign({}, tk.vars);
-  if (CVD_KINDS.includes(o.cvd)) Object.assign(vars, (o.cvd === 'mono' ? CVD_MONO : CVD_SAFE)[tk.dark ? 'dark' : 'light']);
+  if (CVD_KINDS.includes(o.cvd)){
+    Object.assign(vars, (o.cvd === 'mono' ? CVD_MONO : CVD_SAFE)[tk.dark ? 'dark' : 'light']);
+    const bgs = [vars.card, vars.win, vars.side];
+    for (const k of ['run', 'warn', 'stale']) vars[k] = themeReach(vars[k], bgs, tk.dark);
+    if (o.cvd === 'mono') themeCloseUp(GROUP_KEYS.map(k => vars[k]), bgs, tk.dark).forEach((x, i) => { vars[GROUP_KEYS[i]] = x; });
+    else {
+      const done = GROUP_KEYS.filter(k => themeReads(vars[k], bgs));
+      for (const k of GROUP_KEYS) if (!done.includes(k)){ vars[k] = themeApart(done.map(d => vars[d]), bgs, o.cvd) || themeReach(vars[k], bgs, tk.dark); done.push(k); }
+    }
+  }
   if (o.contrast){
     const ink = themeFlat(vars.ink, vars.win), win = vars.win;
     vars['ink-2'] = ink;

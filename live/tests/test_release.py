@@ -51,6 +51,87 @@ class Packages(unittest.TestCase):
         r = subprocess.run(["sh", os.path.join(LIVE, "packaging", "macos", "build_macos.sh"), "--arch", "arm64", "--check"], capture_output=True, text=True, timeout=300)
         self.assertEqual((r.returncode, [l for l in r.stderr.splitlines() if "error" in l.lower()]), (0, []))
 
+    @unittest.skipUnless(sys.platform == "darwin" and shutil.which("swiftc"), "needs macOS and swiftc")
+    def test_the_mac_build_works_from_a_folder_with_a_space_in_its_name(self):
+        # a checkout under "My Code", and a TMPDIR with a space: --check, and a whole build, app and zip
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, work = os.path.join(tmp, "My Code"), os.path.join(tmp, "tmp dir")
+            live = os.path.join(repo, "live")
+            os.makedirs(os.path.join(live, "web")); os.makedirs(os.path.join(live, "packaging", "icon")); os.makedirs(work)
+            shutil.copy(os.path.join(os.path.dirname(LIVE), "COPYING"), repo)
+            shutil.copytree(os.path.join(LIVE, "packaging", "macos"), os.path.join(live, "packaging", "macos"))
+            shutil.copy(os.path.join(LIVE, "packaging", "icon", "Fleet.icns"), os.path.join(live, "packaging", "icon"))
+            for f in ("fleet_live.py", "collect_linux.py", "collect_windows.ps1", "inspect_linux.py", "inspect_windows.ps1", "machines.example.toml"):
+                shutil.copy(os.path.join(LIVE, f), live)
+            for f in ("index.html", "app.js", "themes.js", "icon.svg"):
+                shutil.copy(os.path.join(LIVE, "web", f), os.path.join(live, "web"))
+            build = os.path.join(live, "packaging", "macos", "build_macos.sh")
+            env = dict(os.environ, TMPDIR=work)
+            r = subprocess.run(["sh", build, "--arch", "arm64", "--check"], capture_output=True, text=True, timeout=300, env=env)
+            self.assertEqual((r.returncode, [l for l in r.stderr.splitlines() if "error" in l.lower()]), (0, []), "--check")
+            r = subprocess.run(["sh", build, "--arch", "arm64"], capture_output=True, text=True, timeout=600, env=env)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            app = os.path.join(live, "dist", "Fleet.app", "Contents", "MacOS", "Fleet")
+            self.assertEqual(subprocess.run(["lipo", "-archs", app], capture_output=True, text=True).stdout.split(), ["arm64"])
+            self.assertEqual(sorted(os.listdir(os.path.join(live, "dist"))), ["Fleet-%s-macos-arm64.zip" % version(), "Fleet.app"])
+            self.assertEqual(os.listdir(work), [], "the build cleans up after itself")
+
+
+class ReleaseNotes(unittest.TestCase):
+    """The changelog section becomes the release notes word for word, so it promises only the Macs the release
+    builds for, and the release script and RELEASING.md count the packages it publishes."""
+    RELEASE = os.path.join(LIVE, "packaging", "release.sh")
+    RELEASING = os.path.join(os.path.dirname(LIVE), "docs", "fleet", "RELEASING.md")
+    MACS = {"arm64": "Apple silicon", "x86_64": "Intel"}
+    COUNT = {2: "two", 3: "three", 4: "four"}
+
+    def notes(self):
+        # the section release.sh passes to gh as --notes-file
+        log = open(os.path.join(LIVE, "CHANGELOG.md"), encoding="utf-8").read().splitlines()
+        start = log.index("## Fleet " + version()) + 1
+        end = next((i for i in range(start, len(log)) if log[i].startswith("## ")), len(log))
+        return " ".join(log[start:end])
+
+    def assets(self):
+        text = open(self.RELEASE, encoding="utf-8").read()
+        line = [l for l in text.splitlines() if l.strip().startswith("gh release create")][0]
+        # gh release create "$TAG" <the files> --title …
+        return [w for w in line.split()[4:] if w.startswith('"$') and not w.startswith('"$NOTES')]
+
+    def test_the_notes_name_exactly_the_macs_the_release_builds_for(self):
+        text = open(self.RELEASE, encoding="utf-8").read()
+        built = set(re.findall(r'build_macos\.sh" --arch (\w+)', text))
+        self.assertEqual(built, {"arm64"})
+        m = re.search(r"For macOS \(Fleet\.app, ([^)]*)\)", self.notes())
+        self.assertIsNotNone(m, "the notes say which Macs Fleet.app runs on")
+        self.assertEqual(set(x.strip() for x in re.split(r",| and ", m.group(1))), {self.MACS[a] for a in built})
+
+    def test_the_script_and_releasing_md_count_the_packages_a_release_publishes(self):
+        n = len(self.assets())
+        self.assertEqual(n, 3)
+        said = []
+        for path in (self.RELEASE, self.RELEASING):
+            text = open(path, encoding="utf-8").read()
+            said += [(os.path.basename(path), w.lower()) for w in re.findall(r"\b(both|two|three|four)\s+packages\b", text, re.I)]
+        self.assertTrue(said, "they say how many packages a release has")
+        self.assertEqual([w for _, w in said if w != self.COUNT[n]], [], said)
+
+
+class MacInstall(unittest.TestCase):
+    """The release's Fleet.app is signed ad hoc and isn't notarized, so a downloaded copy is quarantined and
+    Gatekeeper stops its first launch: the README's Install row for macOS says how to get past that."""
+    def test_the_readme_says_how_to_open_the_app_gatekeeper_stops(self):
+        build = open(os.path.join(LIVE, "packaging", "macos", "build_macos.sh"), encoding="utf-8").read()
+        release = open(os.path.join(LIVE, "packaging", "release.sh"), encoding="utf-8").read()
+        self.assertRegex(build, r"codesign [^\n]*--sign - ", "signed ad hoc")
+        self.assertFalse(any(w in build + release for w in ("notarytool", "stapler")), "not notarized (if it is, this row needs no help)")
+        readme = open(os.path.join(os.path.dirname(LIVE), "README.md"), encoding="utf-8").read().splitlines()
+        rows = [l for l in readme if l.startswith("| **macOS** (Apple silicon) |")]
+        self.assertEqual(len(rows), 1, "one macOS row in Install")
+        for words in ("isn't notarized", "System Settings › Privacy & Security", "Open Anyway", "xattr -dr com.apple.quarantine /Applications/Fleet.app"):
+            self.assertIn(words, rows[0])
+
 
 if __name__ == "__main__":
     unittest.main()

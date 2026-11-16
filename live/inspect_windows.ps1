@@ -52,7 +52,7 @@ if ($p.StartTime) { $started = ([DateTimeOffset]$p.StartTime).ToUnixTimeMillisec
 $out = [ordered]@{
   pid = $FleetPid; name = $p.ProcessName; state = 'R'; ppid = [int]$w1.ParentProcessId; nice = 0; priority = [int]$p.BasePriority
   priority_class = [string]$p.PriorityClass; threads_n = $p.Threads.Count; started = $started; last_cpu = -1; user = $owner
-  cmdline = [string]$w1.CommandLine; exe = [string]$w1.ExecutablePath; cwd = ''; affinity = [string]$p.ProcessorAffinity
+  cmdline = [string]$w1.CommandLine; exe = [string]$w1.ExecutablePath; cwd = ''; affinity_mask = [string]$p.ProcessorAffinity
   cpu = [ordered]@{ user = ($p.UserProcessorTime.TotalSeconds - $usr0) / $dt; system = (($p.TotalProcessorTime.TotalSeconds - $cpu0) - ($p.UserProcessorTime.TotalSeconds - $usr0)) / $dt }
   mem = [ordered]@{ rss = $p.WorkingSet64; private = $p.PrivateMemorySize64; peak = $p.PeakWorkingSet64; paged = $p.PagedMemorySize64; virt = $p.VirtualMemorySize64
     faults = ([double]$w1.PageFaults - [double]$w0.PageFaults) / $dt }

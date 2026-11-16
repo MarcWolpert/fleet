@@ -124,8 +124,17 @@ class Attribution(unittest.TestCase):
 
     def test_vms(self):
         self.assertEqual([dict(x, u=r3(x["u"])) for x in self.v["vms"]], [
-            {"name": "fleet-lab", "u": [2.0, 4.0, 0.0, 0.0, 0.45], "gu": [], "running": True, "cpus": "4-7",
+            {"name": "fleet-lab", "u": [2.0, 4.0, 0.0, 0.0, 0.45], "gu": [], "running": True, "cpus": "4-7", "measured": [0, 1, 2, 3, 4],
              "ifs": [{"if": "vnet0", "source": "br0", "mac": "52:54:00:00:00:01"}]}])
+
+    def test_a_vm_without_an_interface_the_host_sees_leaves_its_network_unmeasured(self):
+        # a VM whose NIC is passed through (or macvtap) has no tap on the host: its traffic isn't seen there (#300)
+        m = fleet_live.Machine({"id": "nas", "name": "nas"}, 3)
+        r0, r1 = nas(0), nas(1)
+        for r in (r0, r1):
+            r["vms"] = [{"name": "fleet-lab", "ifs": []}]
+        m.derive_linux(r0)
+        self.assertEqual([(x["name"], r3(x["u"]), x["measured"]) for x in m.derive_linux(r1)["vms"]], [("fleet-lab", [2.0, 4.0, 0.0, 0.0, 0.0], [0, 1, 2, 3])])
 
     def test_each_process(self):
         # owner, disks it uses (its own and its container's), interfaces it talks through, network MB/s

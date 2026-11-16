@@ -82,3 +82,44 @@ test('from inside a pinned space, the All machines row goes to the top level: Al
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
 });
+
+// Esc closes the innermost thing first: an open Details drop-down closes before the tree lets go of its selection,
+// even when the tree was the last thing touched, and the space stays. A drop-down that isn't on screen doesn't take
+// the Esc (#292).
+for (const [name, over] of [['Details', {view: 'details'}], ['docked Details', {view: 'overview', detailsDocked: true}]])
+  test(`Esc after touching the tree closes an open drop-down in ${name} first, and keeps the space; the next Esc selects nothing`, async () => {
+    const fx = fixture(); fx.fleet.pins = ['lx']; fx.proc = () => ({pid: 103, error: 'not needed here'});
+    const p = await browser.page(fx, {ui: ui(Object.assign({space: 'lx', sel: 'lx'}, over))});
+    try {
+      await p.waitFor(`document.querySelector('tr[data-pid="103"]') && document.querySelector('#tree [data-toggle="lx"]')`);
+      await p.click('tr[data-pid="103"]');
+      await p.waitFor(`document.querySelector('tr.pinsp') && INSP.pid === 103`);
+      await p.click('#tree [data-toggle="lx"]');
+      await p.waitFor(`PANEL === 'tree'`);
+      await p.key('Escape');
+      await p.waitFor(`!document.querySelector('tr.pinsp')`).catch(() => null);
+      assert.deepEqual(await p.eval(`({pid: INSP.pid, drop: !!document.querySelector('tr.pinsp'), sel: S.sel, space: S.space})`), {pid: 0, drop: false, sel: 'lx', space: 'lx'});
+      await p.key('Escape');
+      await p.waitFor(`S.sel === 'fleet'`).catch(() => null);
+      assert.deepEqual(await p.eval(`({pid: INSP.pid, sel: S.sel, space: S.space})`), {pid: 0, sel: 'fleet', space: 'fleet'});
+      assert.deepEqual(p.errors, []);
+    } finally { await p.close(); }
+  });
+
+test('Esc in the tree still selects nothing when the drop-down left open is not on screen (Details closed)', async () => {
+  const fx = fixture(); fx.fleet.pins = ['lx']; fx.proc = () => ({pid: 103, error: 'not needed here'});
+  const p = await browser.page(fx, {ui: ui({space: 'lx', sel: 'lx', view: 'details'})});
+  try {
+    await p.waitFor(`document.querySelector('tr[data-pid="103"]')`);
+    await p.click('tr[data-pid="103"]');
+    await p.waitFor(`INSP.pid === 103`);
+    await p.eval(`(() => { S.view = 'overview'; save(); lastMainHTML = ''; renderAll(); return true; })()`);
+    await p.waitFor(`!document.querySelector('.ptbl') && document.querySelector('#tree [data-toggle="lx"]')`);
+    await p.click('#tree [data-toggle="lx"]');
+    await p.waitFor(`PANEL === 'tree'`);
+    await p.key('Escape');
+    await p.waitFor(`S.sel === 'fleet'`).catch(() => null);
+    assert.deepEqual(await p.eval(`({sel: S.sel, space: S.space})`), {sel: 'fleet', space: 'fleet'});
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});

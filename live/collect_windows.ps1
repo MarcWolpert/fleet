@@ -168,18 +168,21 @@ $o.nvidia = $nv
 $o.videoNames = @(Get-CimInstance Win32_VideoController | ForEach-Object { $_.Name })
 $o.gproc = @($pidGpu.Keys | ForEach-Object { $gp = $_.Split('|'); ,@([int]$gp[0], $gp[1], $pidGpu[$_]) })
 
-# A running process's parent and command line never change: ask WMI for just those, about PIDs not seen before (or
-# now under another name: a reused PID), and forget PIDs that are gone. Re-reading every process took seconds.
+# A running process's parent and command line never change: ask WMI for just those, about PIDs not seen before, and
+# forget PIDs that are gone. Re-reading every process took seconds. Windows reuses freed PIDs, often for the same
+# program, so each process is known by its name and its start time: a new process on an old PID is asked about too.
+# (A protected process's start time can't be read; it is known by its name alone, the same every reading.)
 $gps = @(Get-Process | Where-Object { $_.Id -ne 0 })
-$live = @{}; foreach ($gp in $gps) { $live[[int]$gp.Id] = $gp.ProcessName }
+$live = @{}; foreach ($gp in $gps) { $st = ''; try { $st = $gp.StartTime.Ticks } catch {}; $live[[int]$gp.Id] = $gp.ProcessName + '|' + $st }
 foreach ($k in @($cmdCache.Keys)) { if (-not $live.ContainsKey($k)) { $cmdCache.Remove($k) } }
-$miss = @($gps | Where-Object { $wc = $cmdCache[[int]$_.Id]; -not $wc -or $wc[2] -ne $_.ProcessName })
+$miss = @($gps | Where-Object { $wc = $cmdCache[[int]$_.Id]; -not $wc -or $wc[2] -ne $live[[int]$_.Id] })
 if ($miss.Count) {
   $q = @{ ClassName = 'Win32_Process'; Property = @('ProcessId', 'ParentProcessId', 'CommandLine') }
   if ($miss.Count -le 100) { $q.Filter = ($miss | ForEach-Object { "Handle='$($_.Id)'" }) -join ' OR ' }
   $res = @(Get-CimInstance @q)
   if ($res.Count) {
-    foreach ($gp in $miss) { $cmdCache[[int]$gp.Id] = @(0, '', $gp.ProcessName) }   # gone before WMI saw it: don't ask again
+    # one gone before WMI saw it: don't ask again
+    foreach ($gp in $miss) { $cmdCache[[int]$gp.Id] = @(0, '', $live[[int]$gp.Id]) }
     foreach ($wp in $res) { $id = [int]$wp.ProcessId; if ($live.ContainsKey($id)) { $cmdCache[$id] = @([int]$wp.ParentProcessId, [string]$wp.CommandLine, $live[$id]) } }
   }
 }
