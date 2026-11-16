@@ -370,11 +370,20 @@ def disk_info(procs, containers):
 
 # ---- Network: which interface each process talks through, and its TCP bytes (from ss -ti) ----
 CONNS, PNET_B = {}, {}  # each connection's bytes at the last reading; each process's TCP bytes, added up over readings
+OWNERS, NETSCAN = {}, {"n": 0, "cost": 0.0}  # each connection's processes, from the last ss -p
 
 
 def net_users(ifaddr):
+    # ss -p finds each socket's process by reading every open file of every process: only as often as it's cheap
+    NETSCAN["n"] += 1
+    walk = NETSCAN["cost"] < 0.15 or NETSCAN["n"] % 10 == 1
+    began = time.time()
+    text = run(["ss", "-tinpH" if walk else "-tinH", "state", "established"], timeout=8)
+    if walk:
+        NETSCAN["cost"] = time.time() - began
+        OWNERS.clear()
     users, cur, seen = {}, None, {}
-    for line in run(["ss", "-tinpH", "state", "established"], timeout=8).splitlines():
+    for line in text.splitlines():
         if line[:1] not in (" ", "\t"):
             addrs = [x for x in line.split() if ":" in x and not x.startswith("users:")]
             ifn = ""
@@ -383,8 +392,12 @@ def net_users(ifaddr):
                 if "%" in ip:
                     ip, ifn = ip.split("%", 1)
                 ifn = ifn or ifaddr.get(ip.replace("::ffff:", ""), "")
-            pids = re.findall(r"pid=(\d+)", line)
-            cur, key = pids, " ".join(addrs[:2])
+            key = " ".join(addrs[:2])
+            if walk:
+                pids = OWNERS[key] = re.findall(r"pid=(\d+)", line)
+            else:  # a connection newer than the last walk has no owner yet: its bytes all count once it has one
+                pids = OWNERS.get(key, [])
+            cur = pids
             for pid in pids:
                 u = users.setdefault(pid, {"ifs": [], "b": PNET_B.get(pid, 0)})
                 if ifn and ifn not in u["ifs"]:

@@ -3,7 +3,7 @@
 cgroup did I/O on, and which interfaces and how many TCP bytes each process has, read from a /proc and /sys tree and
 ss / mdcmd output shaped like a real Linux host's (hand-made: no machine is read, no command is run).
 Every assertion is the exact result."""
-import importlib.util, os, re, shutil, sys, tempfile, unittest
+import importlib.util, os, re, shutil, sys, tempfile, types, unittest
 from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -409,11 +409,11 @@ class NetUsers(unittest.TestCase):
 
 
 
-def conn(local, peer, comm, pid, fd, sent, received):
-    """One established connection as ss -tinpH prints it."""
-    return ('0      0   %s   %s users:(("%s",pid=%d,fd=%d))\n'
+def conn(local, peer, comm, pid, fd, sent, received, pids=True):
+    """One established connection as ss -tinpH prints it (ss -tinH: without the process)."""
+    return ("0      0   %s   %s%s\n"
             "\t cubic wscale:7,7 rto:204 rtt:0.4/0.2 mss:1448 cwnd:10 bytes_sent:%d bytes_acked:%d bytes_received:%d segs_out:9 segs_in:9\n"
-            % (local, peer, comm, pid, fd, sent, sent, received))
+            % (local, peer, ' users:(("%s",pid=%d,fd=%d))' % (comm, pid, fd) if pids else "", sent, sent, received))
 
 
 A = ("192.168.1.20:8096", "192.168.1.31:40112")   # a stream, open throughout
@@ -467,6 +467,44 @@ class NetBytes(unittest.TestCase):
                 "vms": [], "cron": [], "timers": [], "gpus": [], "gproc": [], "os": "Linux", "pnet": pnet})
             rates.append({p[0]: round(p[16], 6) for p in view["procs"]})
         self.assertEqual(rates, [{2200: 0.0, 300: 0.0}, {2200: 1.006667, 300: 0.0}, {2200: 1.01, 300: 0.0}])   # MB/s
+
+
+
+G = ("192.168.1.20:41522", "198.51.100.7:443")    # opens before reading 4
+
+
+class SocketOwners(unittest.TestCase):
+    """ss -p finds each socket's process by reading every open file of every process. Like the GPU scan, that runs only
+    as often as it's cheap: when it costs 0.15 s or more, every 10th reading; the readings between use its last answer."""
+    def readings(self, cost):
+        m, clock, ran, out = load(), [1000.0], [], []
+        m.time = types.SimpleNamespace(time=lambda: clock[0])
+        for i in range(1, 13):
+            def run(cmd, timeout=8, i=i):
+                ran.append(" ".join(cmd))
+                walk = cmd[1] == "-tinpH"
+                clock[0] += cost if walk else 0.01
+                text = conn(*A, "nginx", 2200, 21, i * 1000000 - 1000, 1000, walk)   # 1 MB a reading
+                return text + (conn(*G, "curl", 2300, 3, i * 1000 - 100, 100, walk) if i >= 4 else "")  # 1 kB a reading
+            m.run = run
+            out.append(m.net_users(IFADDR))
+            clock[0] += 3
+        return ran, out
+
+    def test_a_host_where_it_is_costly(self):
+        ran, out = self.readings(0.4)
+        p, no_p = "ss -tinpH state established", "ss -tinH state established"
+        self.assertEqual(ran, [p] + [no_p] * 9 + [p, no_p])
+        nginx = lambda i: {"2200": {"ifs": ["eth0"], "b": i * 1000000}}
+        self.assertEqual(out, [nginx(i) for i in range(1, 11)] +    # curl's connection is newer than the last walk: no owner yet
+                         [dict(nginx(11), **{"2300": {"ifs": ["eth0"], "b": 11000}}),     # its owner, with all its bytes
+                          dict(nginx(12), **{"2300": {"ifs": ["eth0"], "b": 12000}})])
+
+    def test_a_host_where_it_is_cheap(self):
+        ran, out = self.readings(0.02)
+        self.assertEqual(ran, ["ss -tinpH state established"] * 12)
+        self.assertEqual(out, [dict({"2200": {"ifs": ["eth0"], "b": i * 1000000}}, **({"2300": {"ifs": ["eth0"], "b": i * 1000}} if i >= 4 else {}))
+                               for i in range(1, 13)])
 
 
 if __name__ == "__main__":
