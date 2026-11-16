@@ -68,7 +68,7 @@ if (S.tree === 'pins'){ S.tree = 'machines'; S.pinsOnly = true; }  // pins-only 
 function save(){ try { const {hover, mx, my, ...keep} = S; localStorage.setItem('fleet-live-ui', JSON.stringify(keep)); } catch (e) {} }
 
 /* ---------- model ---------- */
-let TPINS = {};
+let TPINS = {}, PREFS = {}, prefsBusy = false;
 let DATA = null, PINS = [], WINDOW = 180, INTERVAL = 3, CPUS = {}, PROCS = {machine:null, list:[]}, NET = null, DISKS = {}, IFS = {};
 const nodes = {}, roots = [];
 const zero = () => new Array(H).fill(0);
@@ -1228,7 +1228,7 @@ async function refreshNow(){
   try {
     const r = await fetch('/api/fleet', {cache:'no-store'});
     DATA = await r.json();
-    INTERVAL = DATA.interval || 3; WINDOW = DATA.window_s || INTERVAL * H; PINS = DATA.pins || []; if (!tpinBusy) TPINS = DATA.tilepins || {};
+    INTERVAL = DATA.interval || 3; WINDOW = DATA.window_s || INTERVAL * H; PINS = DATA.pins || []; if (!prefsBusy){ PREFS = DATA.prefs || {}; applyTheme(currentTheme()); } if (!tpinBusy) TPINS = DATA.tilepins || {};
     build(DATA);
     if (S.sel !== 'fleet' && !nodes[S.sel]) { /* keep selection; it may come back */ }
     const n = S.sel === 'fleet' ? null : nodes[S.sel];
@@ -1325,6 +1325,7 @@ function renderSettings(){
       <section><h3>Machines</h3><p class="sub">Fleet reaches each machine over SSH, read-only; nothing is installed on them. Destinations use your <code>~/.ssh/config</code>, keys and Tailscale as they are.</p>
         <div class="mcards">${d.machines.map(machineCard).join('')}</div>
         <button type="button" class="btn" data-addmachine="1">${icon('plus', 2)}Add a machine</button></section>
+      ${appearanceSection()}
       <section><h3>Terminal</h3><p class="sub">Used by <b>Open terminal</b> on a machine or container.</p><label class="inline">Open in <select data-field="-1:terminal" aria-label="Terminal app"><option value="auto"${d.terminal === 'auto' ? ' selected' : ''}>Automatic${SET.termAuto ? ' (' + esc(SET.termAuto) + ')' : ''}</option>${SET.terminals.map(([k, l]) => `<option value="${esc(k)}"${d.terminal === k ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select></label></section>
       <section><h3>Refresh</h3><label class="inline">Read every machine every <input type="number" min="1" max="60" step="1" data-field="-1:interval" value="${esc(d.interval)}" aria-label="Seconds between readings"> seconds</label></section>
       <p class="sub">Saved to <code>${esc(SET.path)}</code>; the previous version is kept beside it as <code>machines.toml.bak</code>.</p>
@@ -1355,6 +1356,9 @@ $('sheet').addEventListener('click', async e => {
   if (e.target.closest('[data-savesettings]')){ saveSettings(); return; }
   const tc = e.target.closest('[data-togglecard]'); if (tc){ const i = +tc.dataset.togglecard; SET.expanded.has(i) ? SET.expanded.delete(i) : SET.expanded.add(i); renderSettings(); const h = $('sheet').querySelector(`[data-togglecard="${i}"]`); if (h) h.focus(); return; }
   if (e.target.closest('[data-addmachine]')){ SET.draft.machines.push({id:'', name:'', ssh:'', os:'linux', tile:'terminal'}); SET.expanded.add(SET.draft.machines.length - 1); renderSettings(); const c = $('sheet').querySelector(`[data-field="${SET.draft.machines.length - 1}:name"]`); if (c) c.focus(); return; }
+  const th = e.target.closest('[data-themeid]'); if (th){ pickTheme(th.dataset.themeid); return; }
+  const rt = e.target.closest('[data-rmtheme]'); if (rt){ removeTheme(rt.dataset.rmtheme); return; }
+  if (e.target.closest('[data-importtheme]')){ const f = $('themefile'); if (f) f.click(); return; }
   const rm = e.target.closest('[data-rmmachine]'); if (rm){ const i = +rm.dataset.rmmachine; SET.draft.machines.splice(i, 1); SET.tests = {}; SET.expanded = new Set([...SET.expanded].filter(j => j !== i).map(j => j > i ? j - 1 : j)); renderSettings(); return; }
   const tb = e.target.closest('[data-testmachine]');
   if (tb){
@@ -1374,7 +1378,7 @@ function setField(t){
   if (card && k === 'name'){ const l = card.querySelector('.mlabel'); if (l) l.textContent = v || 'New machine'; }
 }
 $('sheet').addEventListener('input', e => setField(e.target));
-$('sheet').addEventListener('change', e => { setField(e.target); });
+$('sheet').addEventListener('change', e => { if (e.target.id === 'themefile'){ importTheme(e.target.files && e.target.files[0]); return; } setField(e.target); });
 $('sheet').addEventListener('keydown', e => { if (e.key === 'Escape'){ e.preventDefault(); closeSettings(); } });
 
 
@@ -1433,7 +1437,7 @@ document.addEventListener('pointerdown', e => {
 });
 
 
-/* ---------- Details columns: a layout per detail type ---------- */
+/* ---------- Details columns: a layout per detail type, arranged from a right-click menu ---------- */
 const COL_LABELS = {name:'Name', pid:'PID', owner:'Runs in', user:'User', state:'Status', cpu:'CPU', mem:'Memory', disk:'Disk', gpu:'GPU', net:'Network',
   threads:'Threads', cpugroup:'CPU group', cmd:'Command line', ppid:'Parent PID', lastcpu:'Last CPU', gpus:'Which GPU', disks:'Disks used', ifaces:'Interfaces'};
 const COL_DEFAULTS = {
@@ -1444,6 +1448,147 @@ const COL_DEFAULTS = {
   net:['name', 'pid', 'owner', 'net', 'ifaces', 'cpu', 'mem', 'cmd']
 };
 function colType(){ return COL_DEFAULTS[S.metric] ? S.metric : 'cpu'; }
-function colLayout(){ return COL_DEFAULTS[colType()]; }
+function colLayout(){ const l = ((PREFS.columns || {})[colType()] || []).filter(k => COL_LABELS[k]); return l.length ? l : COL_DEFAULTS[colType()]; }
 // A header click sorts that detail type; until then every type keeps the usual default (CPU, highest first).
 function detailSort(){ const s0 = (S.sorts || {})[colType()]; return s0 && COL_LABELS[s0.k] ? s0 : (S.sort && COL_LABELS[S.sort.k] ? S.sort : {k:'cpu', dir:-1}); }
+async function setColLayout(list){
+  PREFS = Object.assign({}, PREFS, {columns:Object.assign({}, PREFS.columns, {[colType()]:list})});
+  lastMainHTML = ''; renderMain(); if (COLMENU.open) renderColMenu();
+  await savePrefs('the column layout');
+}
+// PREFS (~/.config/fleet/ui.json) is saved whole; while a save is on its way, polls don't overwrite it.
+let prefsSaves = 0;
+async function savePrefs(what){
+  prefsSaves++; prefsBusy = true;
+  try { const d = await api('/api/prefs', PREFS); if (prefsSaves === 1 && d.prefs) PREFS = d.prefs; }
+  catch (e) { toast('Couldn’t save ' + what); }
+  if (--prefsSaves === 0) prefsBusy = false;
+}
+const COLMENU = {open:false, x:0, y:0, focus:''};
+function renderColMenu(){
+  let el = $('colmenu');
+  if (!el){ el = document.createElement('div'); el.id = 'colmenu'; el.className = 'colmenu'; el.setAttribute('role', 'dialog'); el.setAttribute('aria-label', 'Columns'); document.body.appendChild(el); }
+  const vis = colLayout(), hidden = Object.keys(COL_LABELS).filter(k => !vis.includes(k));
+  const f = COLMENU.focus && vis.includes(COLMENU.focus) ? COLMENU.focus : '';
+  const quick = f ? `<div class="cm-quick"><b>${esc(COL_LABELS[f])}</b><button type="button" data-colact="hide|${f}">Hide</button><button type="button" data-colact="left|${f}"${vis.indexOf(f) === 0 ? ' disabled' : ''}>Move left</button><button type="button" data-colact="right|${f}"${vis.indexOf(f) === vis.length - 1 ? ' disabled' : ''}>Move right</button></div>` : '';
+  const row = (k, on) => `<li class="cm-row${on ? '' : ' off'}" draggable="${on}" data-colrow="${k}"><span class="cm-grip" aria-hidden="true">${on ? icon('grip') : ''}</span><label><input type="checkbox" data-colvis="${k}"${on ? ' checked' : ''}${on && vis.length === 1 ? ' disabled' : ''}> ${esc(COL_LABELS[k])}</label>${on ? `<button type="button" class="iconbtn" data-colact="left|${k}" aria-label="Move ${esc(COL_LABELS[k])} earlier"${vis.indexOf(k) === 0 ? ' disabled' : ''}>↑</button><button type="button" class="iconbtn" data-colact="right|${k}" aria-label="Move ${esc(COL_LABELS[k])} later"${vis.indexOf(k) === vis.length - 1 ? ' disabled' : ''}>↓</button>` : ''}</li>`;
+  el.innerHTML = `<div class="cm-h">Columns · ${esc(mlabel(colType()))} details<span>each detail type keeps its own</span></div>${quick}<ul class="cm-list">${vis.map(k => row(k, true)).join('')}${hidden.map(k => row(k, false)).join('')}</ul><div class="cm-f"><button type="button" class="btn" data-colact="reset|">Reset to default</button><button type="button" class="btn primary" data-colact="close|">Done</button></div>`;
+  el.hidden = false;
+  const r = el.getBoundingClientRect();
+  el.style.left = Math.max(8, Math.min(COLMENU.x, innerWidth - r.width - 8)) + 'px';
+  el.style.top = Math.max(8, Math.min(COLMENU.y, innerHeight - r.height - 8)) + 'px';
+}
+function closeColMenu(){ COLMENU.open = false; const el = $('colmenu'); if (el) el.hidden = true; }
+document.addEventListener('contextmenu', e => {
+  const th = e.target.closest && e.target.closest('.ptbl thead th');
+  if (!th) return;
+  e.preventDefault();
+  Object.assign(COLMENU, {open:true, x:e.clientX, y:e.clientY, focus:th.dataset.colk || ''});
+  renderColMenu();
+});
+document.addEventListener('click', e => {
+  const el = $('colmenu'); if (!COLMENU.open || !el) return;
+  if (!el.contains(e.target)){ closeColMenu(); return; }
+  const a = e.target.closest('[data-colact]'); if (!a) return;
+  const [act, k] = a.dataset.colact.split('|'), vis = colLayout().slice(), i = vis.indexOf(k);
+  if (act === 'close') return closeColMenu();
+  if (act === 'reset') return setColLayout(COL_DEFAULTS[colType()].slice());
+  if (act === 'hide' && vis.length > 1){ vis.splice(i, 1); COLMENU.focus = ''; }
+  if (act === 'left' && i > 0) [vis[i - 1], vis[i]] = [vis[i], vis[i - 1]];
+  if (act === 'right' && i >= 0 && i < vis.length - 1) [vis[i + 1], vis[i]] = [vis[i], vis[i + 1]];
+  setColLayout(vis);
+}, true);
+document.addEventListener('change', e => {
+  const c = e.target.dataset && e.target.dataset.colvis; if (!c) return;
+  const vis = colLayout().slice();
+  if (e.target.checked && !vis.includes(c)) vis.push(c);
+  if (!e.target.checked && vis.length > 1) vis.splice(vis.indexOf(c), 1);
+  setColLayout(vis);
+});
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && COLMENU.open) closeColMenu(); });
+// Drag a row in the menu to reorder.
+let colDrag = '';
+document.addEventListener('dragstart', e => { const r = e.target.closest && e.target.closest('[data-colrow]'); if (r && COLMENU.open){ colDrag = r.dataset.colrow; e.dataTransfer.setData('text/plain', colDrag); } });
+document.addEventListener('dragover', e => { if (colDrag && e.target.closest && e.target.closest('[data-colrow]')) e.preventDefault(); });
+document.addEventListener('drop', e => {
+  const r = colDrag && e.target.closest && e.target.closest('[data-colrow]'); if (!r) return;
+  e.preventDefault();
+  const vis = colLayout().slice(), from = vis.indexOf(colDrag), to = vis.indexOf(r.dataset.colrow);
+  colDrag = '';
+  if (from < 0 || to < 0 || from === to) return;
+  vis.splice(to, 0, vis.splice(from, 1)[0]);
+  setColLayout(vis);
+});
+
+
+/* ---------- Themes (themes.js has the list and the colour maths) ---------- */
+// The theme is a UI pref (prefs.theme), so it follows you across restarts and into every Fleet window;
+// imported themes live in prefs.themes. The page applies the last one before its first paint (index.html).
+function customThemes(){ return (PREFS.themes || []).filter(t => t && typeof t.id === 'string' && t.c && typeof t.c === 'object'); }
+function allThemes(){ return FLEET_THEMES.concat(customThemes()); }
+function currentTheme(){ const id = PREFS.theme || 'fleet'; return allThemes().find(t => t.id === id) || FLEET_THEMES[0]; }
+let appliedTheme = '';
+function applyTheme(th){
+  const tk = themeTokens(th), key = th.id + JSON.stringify(tk);
+  if (key === appliedTheme) return;
+  appliedTheme = key;
+  const st = document.documentElement.style;
+  for (const [k, v] of Object.entries(tk.vars)) st.setProperty('--' + k, v);
+  st.colorScheme = tk.dark ? 'dark' : 'light';
+  document.documentElement.dataset.fleetTheme = th.id;
+  try { localStorage.setItem('fleet-theme', JSON.stringify({id:th.id, dark:tk.dark, vars:tk.vars})); } catch (e) {}
+  // Fleet.app paints its window (behind the page, and while it loads) in the same colour
+  try { window.webkit.messageHandlers.fleet.postMessage({bg:tk.vars.chrome, dark:tk.dark}); } catch (e) {}
+}
+const THEME_MSG = {text:'', bad:false};
+function themeSwatch(th, on){
+  const v = themeTokens(th).vars, custom = !FLEET_THEMES.some(t => t.id === th.id);
+  return `<div class="thsw${on ? ' on' : ''}"><button type="button" class="thsw-b" data-themeid="${esc(th.id)}" aria-pressed="${on}" title="${esc(th.name)}${custom ? ' (imported)' : ''}">`
+    + `<span class="thsw-p" style="background:${v.chrome}"><span class="thsw-a" style="background:${v['accent-bg']}"></span><span class="thsw-w" style="background:${v.win}">`
+    + `<span class="thsw-c" style="background:${v.card}"><i style="background:${v.ink}"></i><i style="background:${v['ink-3']}"></i></span>`
+    + `<span class="thsw-s">${SERIES_KEYS.map(k => `<i style="background:${v[k]}"></i>`).join('')}</span></span></span>`
+    + `<span class="thsw-n">${on ? icon('check', 2.4) : ''}${esc(th.name)}</span></button>`
+    + (custom ? `<button type="button" class="thsw-x" data-rmtheme="${esc(th.id)}" aria-label="Remove ${esc(th.name)}" title="Remove">${icon('x', 2.4)}</button>` : '') + `</div>`;
+}
+function appearanceSection(){
+  const cur = currentTheme().id;
+  return `<section><h3>Appearance</h3><p class="sub">Pick a theme; it applies right away and is kept for next time.</p>
+    <div class="thgrid" role="group" aria-label="Themes">${allThemes().map(t => themeSwatch(t, t.id === cur)).join('')}</div>
+    <div class="throw"><button type="button" class="btn" data-importtheme="1">${icon('upload')}Import theme</button><input type="file" id="themefile" accept=".json,.jsonc,application/json" hidden>
+    <span class="thmsg${THEME_MSG.bad ? ' bad' : ''}" role="status">${esc(THEME_MSG.text || 'A VS Code colour theme (.json), or a Fleet theme.')}</span></div></section>`;
+}
+function rerenderAppearance(focusSel){
+  if (!SET.open || !SET.draft) return;
+  const sec = $('sheet').querySelector('.thgrid'); if (!sec) return;
+  sec.closest('section').outerHTML = appearanceSection();
+  const f = focusSel && $('sheet').querySelector(focusSel); if (f) f.focus();
+}
+async function pickTheme(id){
+  if (!allThemes().some(t => t.id === id)) return;
+  PREFS = Object.assign({}, PREFS, {theme:id});
+  THEME_MSG.text = ''; THEME_MSG.bad = false;
+  applyTheme(currentTheme()); rerenderAppearance(`[data-themeid="${CSS.escape(id)}"]`);
+  await savePrefs('the theme');
+}
+async function removeTheme(id){
+  const list = customThemes().filter(t => t.id !== id);
+  PREFS = Object.assign({}, PREFS, {themes:list}, PREFS.theme === id ? {theme:'fleet'} : {});
+  applyTheme(currentTheme()); rerenderAppearance('[data-importtheme]');
+  await savePrefs('the theme list');
+}
+async function importTheme(file){
+  if (!file) return;
+  try {
+    if (file.size > 2e6) throw new Error('it’s too big to be a theme');
+    const th = readThemeFile(await file.text(), file.name);
+    if (FLEET_THEMES.some(t => t.id === th.id)) th.id += '-imported';
+    const list = customThemes().filter(t => t.id !== th.id).concat([th]).slice(-24);
+    PREFS = Object.assign({}, PREFS, {themes:list, theme:th.id});
+    THEME_MSG.text = `Imported ${th.name}.`; THEME_MSG.bad = false;
+    applyTheme(currentTheme()); rerenderAppearance(`[data-themeid="${CSS.escape(th.id)}"]`);
+    await savePrefs('the imported theme');
+  } catch (e) {
+    THEME_MSG.text = `Couldn’t import ${file.name}: ${e.message}.`; THEME_MSG.bad = true;
+    rerenderAppearance('[data-importtheme]');
+  }
+}
