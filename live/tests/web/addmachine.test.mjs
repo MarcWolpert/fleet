@@ -67,3 +67,28 @@ test('an empty SSH destination is not added', async () => {
     assert.deepEqual(posts(fx, '/api/config'), []);
   } finally { await p.close(); }
 });
+
+test('a Mac can be added too (#181): macOS in the form, its steps, and a laptop icon', async () => {
+  const fx = fixture();
+  const p = await browser.page(fx, {ui: ui()});
+  try {
+    await p.waitFor(`document.querySelector('[data-addmachinedlg]')`);
+    await p.eval(`(() => { document.querySelector('[data-addmachinedlg]').click(); return true; })()`);
+    await p.waitFor(`document.querySelector('#addm [name=os]')`);
+    assert.deepEqual(await p.eval(`[...document.querySelectorAll('#addm [name=os] option')].map(o => o.value)`), ['linux', 'windows', 'macos']);
+    const text = await p.eval(`document.getElementById('addm').textContent`);
+    for (const s of ['Remote Login', 'xcode-select --install']) assert.ok(text.includes(s), s);
+    await set(p, '#addm [name=ssh]', 'me@studio.local');
+    await set(p, '#addm [name=os]', 'macos');
+    await p.eval(`(() => { document.querySelector('#addm [data-addmsave]').click(); return true; })()`);
+    await p.waitFor(`!document.getElementById('addm')`);
+    assert.deepEqual(posts(fx, '/api/config').pop().machines[0], {id: 'me-studio-local', name: 'me@studio.local', ssh: 'me@studio.local', os: 'macos', tile: 'laptop'});
+    // Settings offers macOS for a machine as well
+    await p.eval(`(() => { document.querySelector('[data-settings]').click(); return true; })()`);
+    await p.waitFor(`document.querySelector('[data-addmachine]')`);
+    await p.eval(`(() => { document.querySelector('[data-addmachine]').click(); return true; })()`);
+    await p.waitFor(`document.querySelector('[data-field$=":os"]')`);
+    assert.deepEqual(await p.eval(`[...document.querySelector('[data-field$=":os"]').options].map(o => o.value)`), ['linux', 'windows', 'macos']);
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});

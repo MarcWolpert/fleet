@@ -892,7 +892,8 @@ function diagnose(m){
   if (/timed out|no route|unreachable|connection closed|broken pipe|connection reset/.test(e)) return {kind:'down', ic:'wifi', title:`${name} isn’t answering`,
     text:`Nothing came back from <code>${host}</code>. It may be asleep or off, off your tailnet, or SSH may be on another port.`, steps:['Check that it’s on and connected to Tailscale.', 'If SSH uses another port, set it in <code>~/.ssh/config</code>.', retry]};
   if (/python3/.test(e)) return {kind:'py', ic:'terminal', title:`${name} needs Python 3`,
-    text:'Fleet reads Linux machines with a small read-only Python script and installs nothing, but it needs <code>python3</code> there.', steps:['Install Python 3 on that machine, e.g. <code>sudo apt install python3</code>.', retry]};
+    text:'Fleet reads Linux machines and Macs with a small read-only Python script and installs nothing, but it needs <code>python3</code> there.',
+    steps:[/mac/i.test(m.os || '') ? 'On that Mac, run <code>xcode-select --install</code> once (the Command Line Tools bring <code>python3</code>).' : 'Install Python 3 on that machine, e.g. <code>sudo apt install python3</code>.', retry]};
   return {kind:'other', ic:'info', title:`Fleet can’t reach ${name}`, text:'The connection ended before the first reading.', steps:['Check the details below, or the machine’s entry in <b>Settings</b>.', retry]};
 }
 function termBtn(n){
@@ -1451,7 +1452,7 @@ function machineCard(m, i){
   const stn = st ? {status:st.status, error:st.error, name:m.name, ssh:m.ssh, kind:'machine', hasData:st.status === 'ok'} : null;
   const t = SET.tests[i];
   const tile = m.tile || (local ? 'laptop' : 'terminal');
-  const summary = local ? 'This computer' : [m.ssh || 'no SSH destination yet', m.os === 'windows' ? 'Windows' : 'Linux'].join(' · ') + (m.vm_on ? ' · VM' : '');
+  const summary = local ? 'This computer' : [m.ssh || 'no SSH destination yet', m.os === 'windows' ? 'Windows' : m.os === 'macos' ? 'macOS' : 'Linux'].join(' · ') + (m.vm_on ? ' · VM' : '');
   const pill = stn ? `<span class="spill ${stn.status === 'ok' ? 'okp' : ''}">${esc(stn.status === 'ok' ? 'live' : stn.status)}</span>` : '<span class="spill">new</span>';
   const sel = (field, opts, val) => `<select data-field="${i}:${field}">${opts.map(([v, l]) => `<option value="${esc(v)}"${(val || '') === v ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select>`;
   const head = `<button type="button" class="mcard-h" data-togglecard="${i}" aria-expanded="${open}"><span class="chev${open ? ' open' : ''}">${icon('chev', 2.4)}</span><span class="tile ${esc(tile)}">${icon(tile)}</span><span class="mtitle"><span class="mlabel" data-label="${i}">${esc(m.name || 'New machine')}</span><span class="msum">${esc(summary)}</span></span>${pill}</button>`;
@@ -1461,7 +1462,7 @@ function machineCard(m, i){
       <label class="wide">Name<input data-field="${i}:name" value="${esc(m.name || '')}" placeholder="What Fleet calls it"></label>
       ${local ? `<label class="wide">Connection<span class="static">This computer, read directly</span></label>` : `
       <label class="wide">SSH destination<input data-field="${i}:ssh" value="${esc(m.ssh || '')}" placeholder="user@host, a ~/.ssh/config alias, or a Tailscale name" spellcheck="false" autocapitalize="off"></label>
-      <label>System${sel('os', [['linux', 'Linux'], ['windows', 'Windows']], m.os || 'linux')}</label>`}
+      <label>System${sel('os', [['linux', 'Linux'], ['windows', 'Windows'], ['macos', 'macOS']], m.os || 'linux')}</label>`}
       <label>Icon${sel('tile', Object.entries(TILE_NAMES), tile)}</label>
       <label>Runs on${sel('vm_on', [['', 'its own hardware']].concat(others.map(x => [x.id, 'a VM on ' + (x.name || x.id)])), m.vm_on || '')}</label>
     </div>
@@ -2538,12 +2539,13 @@ async function openAddMachine(){
       <section><h3>Before you add it</h3><p class="sub">Fleet reads a machine over SSH from this computer, read-only, and installs nothing there.</p><ol>
         <li>Check you can log in without a password: <code>ssh user@host</code>. If it asks for one, copy your key there with <code>ssh-copy-id user@host</code>.</li>
         <li><b>Linux</b> needs <code>python3</code> (most have it). <b>Windows</b> needs OpenSSH Server (Settings, System, Optional features) and your key in <code>C:\\Users\\you\\.ssh\\authorized_keys</code>, or for an administrator account in <code>C:\\ProgramData\\ssh\\administrators_authorized_keys</code>.</li>
+        <li><b>macOS</b> needs Remote Login on (System Settings, General, Sharing, Remote Login) and <code>python3</code> from the Command Line Tools: run <code>xcode-select --install</code> there once.</li>
         <li>The host can be an IP, a name from your <code>~/.ssh/config</code>, or a Tailscale name (MagicDNS on).</li>
         <li>A VM on one of your machines? Add it here, then set <b>Runs on</b> in Settings to nest it under its host.</li></ol></section>
       <section><h3>Then add it</h3><div class="mgrid">
         <label class="wide">SSH destination<input name="ssh" placeholder="user@host, an ~/.ssh/config name, or a Tailscale name" spellcheck="false" autocapitalize="off"></label>
         <label>Name<input name="name" placeholder="what Fleet calls it"></label>
-        <label>System<select name="os"><option value="linux">Linux</option><option value="windows">Windows</option></select></label></div>
+        <label>System<select name="os"><option value="linux">Linux</option><option value="windows">Windows</option><option value="macos">macOS</option></select></label></div>
         <div class="mtest"><button type="button" class="btn" data-addmtest="1">${icon('refresh')}Test connection</button><span class="tres"></span></div>
         <div class="addm-err" role="alert"></div></section>
     </div>
@@ -2567,7 +2569,7 @@ async function openAddMachine(){
       err.textContent = '';
       try {
         const cfg = await (await fetch('/api/config', {cache:'no-store'})).json(), machines = (cfg.machines || []).map(m => Object.assign({}, m));
-        const m = {id:slugId(name, new Set(machines.map(x => x.id))), name, ssh, os, tile:os === 'windows' ? 'desktop' : 'server'};
+        const m = {id:slugId(name, new Set(machines.map(x => x.id))), name, ssh, os, tile:os === 'windows' ? 'desktop' : os === 'macos' ? 'laptop' : 'server'};
         const r = await api('/api/config', {interval:Number(cfg.interval) || 3, terminal:cfg.terminal || 'auto', machines:machines.concat([m])});
         if (r.ok === false){ err.textContent = (r.errors || ['Couldn’t save.']).join(' '); return; }
         close(); toast(`Added ${name}. Connecting…`); setTimeout(refreshNow, 2500);

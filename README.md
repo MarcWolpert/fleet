@@ -149,7 +149,7 @@ tile = "desktop"
 |---|---|
 | `kind = "local"` | the computer running Fleet Live (macOS, Linux or Windows) |
 | `ssh` | how to reach it; uses your `~/.ssh/config`, keys and Tailscale as they are |
-| `os` | `linux` (the host needs `python3`) or `windows` (OpenSSH + PowerShell) |
+| `os` | `linux` (the host needs `python3`), `windows` (OpenSSH + PowerShell) or `macos` (Remote Login on, and `python3` from the Command Line Tools: `xcode-select --install`) |
 | `vm_on`, `domain` | this machine is a VM on another one; `domain` is its libvirt name when it differs |
 | `tile` | icon: `laptop`, `desktop`, `terminal`, `server`, `globe`, `vm` |
 
