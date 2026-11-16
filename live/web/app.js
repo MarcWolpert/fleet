@@ -1421,6 +1421,8 @@ function select(id){
 }
 document.addEventListener('click', e => {
   if (e.target === $('tree')){ selectNone(); return; }
+  // a click in a group's rename box moves the caret; the row around it doesn't take it as a select (#297)
+  if (e.target.closest('#tree input.tg-name')) return;
   // a machine's dot (or Connect on its page) turns its connection off or on; it doesn't select the row
   const cn = e.target.closest('[data-conn]'); if (cn){ e.stopPropagation(); setConnected(cn.dataset.conn, cn.getAttribute('aria-pressed') !== 'true'); return; }
   if (e.target.closest('[data-autoconn]')){ openAutoConn(e.target.closest('[data-autoconn]')); return; }
@@ -2600,7 +2602,9 @@ function renameGroup(key, id){
   const inp = document.createElement('input'); inp.className = 'tg-name'; inp.value = n.textContent; inp.setAttribute('aria-label', 'Group name');
   n.replaceWith(inp); inp.focus(); inp.select();
   let done = false;
-  const commit = ok => { if (done) return; done = true; const v = inp.value.trim().slice(0, 60); if (ok && v) updGroup(key, id, g => Object.assign({}, g, {name:v})); else renderTree(); };
+  // saved once the code running now is done: a redraw that takes the box away (its blur fires mid-render) would
+  // otherwise put the old name back over the new one (#297)
+  const commit = ok => { if (done) return; done = true; const v = inp.value.trim().slice(0, 60); queueMicrotask(() => { if (ok && v) updGroup(key, id, g => Object.assign({}, g, {name:v})); else renderTree(); }); };
   inp.addEventListener('keydown', e => { if (e.key === 'Enter'){ e.preventDefault(); commit(true); } if (e.key === 'Escape'){ e.preventDefault(); e.stopPropagation(); commit(false); } });
   inp.addEventListener('blur', () => commit(true));
 }
