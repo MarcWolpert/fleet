@@ -31,15 +31,16 @@ def view(**over):
     return v
 
 
-def job(name, cmd=None, sched="*/5 * * * *", src="crontab", u=None, running=None):
+def job(name, cmd=None, sched="*/5 * * * *", src="crontab", u=None, running=None, gu=()):
+    """A scheduled job as derive_* list it; gu: what it uses of each of the machine's GPUs."""
     u = list(u or [0.0] * 5)
     return {"name": name, "sched": sched, "human": "", "cmd": cmd if cmd is not None else "/usr/local/bin/" + name, "src": src,
-            "last": "", "running": bool(u[0]) if running is None else running, "u": u}
+            "last": "", "running": bool(u[0]) if running is None else running, "u": u, "gu": list(gu)}
 
 
-def timer(name, u=None):
+def timer(name, u=None, gu=()):
     """A systemd timer as derive_linux lists it."""
-    j = job(name, cmd=name + ".service", sched="systemd timer", src="systemd", u=u)
+    j = job(name, cmd=name + ".service", sched="systemd timer", src="systemd", u=u, gu=gu)
     j["human"] = "timer"
     return j
 
@@ -144,16 +145,23 @@ def gpu(name, util):
     return {"name": name, "mem": "", "util": util, "m": {"util": util}, "lim": {}}
 
 
-def container(cid, name, u, gkeys=(), project="", service=""):
+def container(cid, name, u, gu=(), project="", service=""):
+    """A container as derive_* list it; gu: what it uses of each of the machine's GPUs."""
     return {"id": cid, "name": name, "image": name + ":1", "status": "Up 1 hour", "project": project, "service": service,
-            "file": "", "networks": "", "u": list(u), "gkeys": list(gkeys)}
+            "file": "", "networks": "", "u": list(u), "gu": list(gu)}
+
+
+def on_gpus(n):
+    """The GPUs a node uses now, from what it uses of each (gh, #122)."""
+    return sorted(k for k, h in (n.get("gh") or {}).items() if h[-1] > 0)
 
 
 TWO_GPUS = [gpu("RTX A4000", 50.0), gpu("RTX A2000", 100.0)]
 
 
 class GpuTags(TreeTest):
-    """#116: Base and scheduled jobs name the GPUs they run on, and Base is counted on each GPU by what's left there."""
+    """#116: Base and scheduled jobs are on the GPUs they run on, and Base is counted on each GPU by what's left there
+    (since #122 each workload's use of each GPU is measured, gu, and every node sends it as gh)."""
 
     def gpu_view(self, gpus, procs, containers=(), jobs=(), gpu_procs=True):
         host_gpu = sum(g["util"] for g in gpus)
@@ -161,9 +169,9 @@ class GpuTags(TreeTest):
                     host=[2.0, 6.0, host_gpu, 1.0, 0.5], cap=[4, 16.0, 100.0 * len(gpus), 500.0, 125.0])
 
     def tags(self, spec):
-        return {"base": spec["base"]["g"], "gh": {k: v[-1] for k, v in spec["base"].get("gh", {}).items()}, "base_gpu": spec["base"]["h"]["gpu"][-1],
-                "jobs": {j["name"]: j["g"] for j in spec["baseCron"]},
-                "containers": {c["name"]: c["g"] for c in spec["containers"]}}
+        return {"base": on_gpus(spec["base"]), "gh": {k: v[-1] for k, v in spec["base"].get("gh", {}).items()}, "base_gpu": spec["base"]["h"]["gpu"][-1],
+                "jobs": {j["name"]: on_gpus(j) for j in spec["baseCron"]},
+                "containers": {c["name"]: on_gpus(c) for c in spec["containers"]}}
 
     def test_base_on_two_gpus_is_counted_on_each_by_what_it_uses_there(self):
         f = make_fleet({"id": "lx", "name": "lx", "ssh": "lx", "os": "linux"})
@@ -176,8 +184,8 @@ class GpuTags(TreeTest):
         f = make_fleet({"id": "lx", "name": "lx", "ssh": "lx", "os": "linux"})
         procs = [prow(10, "python3", "base", 50.0, [0]), prow(11, "ffmpeg", "base", 20.0, [1]), prow(20, "trainer", "c:abc123", 60.0, [1]),
                  prow(30, "encode.sh", "job:0", 20.0, [1]), prow(31, "rotate.sh", "job:1"), prow(32, "scrub", "unit:scrub.service", 0.0, [])]
-        jobs = [job("encode.sh", u=[0.1, 0.05, 20.0, 0, 0]), job("rotate.sh", u=[0.1, 0.05, 0, 0, 0]), timer("scrub")]
-        give(f, "lx", self.gpu_view(TWO_GPUS, procs, [container("abc123", "trainer", [0.1, 0.05, 60.0, 0, 0], ["gpu1"])], jobs))
+        jobs = [job("encode.sh", u=[0.1, 0.05, 20.0, 0, 0], gu=[0.0, 20.0]), job("rotate.sh", u=[0.1, 0.05, 0, 0, 0], gu=[0.0, 0.0]), timer("scrub", gu=[0.0, 0.0])]
+        give(f, "lx", self.gpu_view(TWO_GPUS, procs, [container("abc123", "trainer", [0.1, 0.05, 60.0, 0, 0], [0.0, 60.0])], jobs))
         self.assertEqual(self.tags(self.record(f, "lx")),
                          {"base": ["gpu0", "gpu1"], "gh": {"gpu0": 50.0, "gpu1": 20.0}, "base_gpu": 70.0,
                           "jobs": {"encode.sh": ["gpu1"], "rotate.sh": [], "scrub": []}, "containers": {"trainer": ["gpu1"]}})
@@ -185,14 +193,14 @@ class GpuTags(TreeTest):
     def test_a_timer_names_the_gpu_its_unit_runs_on(self):
         f = make_fleet({"id": "lx", "name": "lx", "ssh": "lx", "os": "linux"})
         procs = [prow(32, "scrub", "unit:scrub.service", 30.0, [1]), prow(10, "python3", "base", 50.0, [0])]
-        give(f, "lx", self.gpu_view([gpu("RTX A4000", 50.0), gpu("RTX A2000", 30.0)], procs, jobs=[timer("scrub", u=[0.1, 0.05, 30.0, 0, 0])]))
+        give(f, "lx", self.gpu_view([gpu("RTX A4000", 50.0), gpu("RTX A2000", 30.0)], procs, jobs=[timer("scrub", u=[0.1, 0.05, 30.0, 0, 0], gu=[0.0, 30.0])]))
         self.assertEqual(self.tags(self.record(f, "lx")),
                          {"base": ["gpu0"], "gh": {"gpu0": 50.0, "gpu1": 0.0}, "base_gpu": 50.0, "jobs": {"scrub": ["gpu1"]}, "containers": {}})
 
     def test_base_names_no_gpu_when_a_container_uses_all_of_it(self):
         f = make_fleet({"id": "lx", "name": "lx", "ssh": "lx", "os": "linux"})
         give(f, "lx", self.gpu_view([gpu("RTX A4000", 30.0)], [prow(20, "trainer", "c:abc123", 30.0, [0]), prow(12, "sshd", "base")],
-                                    [container("abc123", "trainer", [0.1, 0.05, 30.0, 0, 0], ["gpu0"])]))
+                                    [container("abc123", "trainer", [0.1, 0.05, 30.0, 0, 0], [30.0])]))
         self.assertEqual(self.tags(self.record(f, "lx")),
                          {"base": [], "gh": {"gpu0": 0.0}, "base_gpu": 0.0, "jobs": {}, "containers": {"trainer": ["gpu0"]}})
 
@@ -349,8 +357,9 @@ class OnlyLiveReadingsAreRecorded(TreeTest):
             self.record(f, "nas")
         before = snapshot()
         self.assertEqual(sorted(before), ["nas/__cpu/0", "nas/__cpu/1", "nas/__cpu/2", "nas/__cpu/3", "nas/__disk/sda", "nas/__host", "nas/__if/eth0",
-                                          "nas/base", jid("nas", "rotate.sh", "crontab", "*/5 * * * *", "/usr/local/bin/rotate.sh"),
-                                          "nas/base/gpu0", "nas/containers/web", "nas/gpu0/util"])
+                                          "nas/base", "nas/base/__gpu/0", jid("nas", "rotate.sh", "crontab", "*/5 * * * *", "/usr/local/bin/rotate.sh"),
+                                          jid("nas", "rotate.sh", "crontab", "*/5 * * * *", "/usr/local/bin/rotate.sh") + "/__gpu/0",
+                                          "nas/containers/web", "nas/containers/web/__gpu/0", "nas/gpu0/util"])
         m.status, m.error = "offline", "connection closed (exit 255)"
         for _ in range(3):
             spec = self.record(f, "nas")
@@ -415,9 +424,10 @@ class GoneNodesAreForgotten(TreeTest):
                          containers=[container("c" + veth[-5:], "run-" + veth[-5:], [0.5, 1.0, 0, 0, 0])])
 
     def keys(self, mid, veth):
+        rotate = jid(mid, "rotate.sh", "crontab", "*/5 * * * *", "/usr/local/bin/rotate.sh")
         return sorted(["%s/__cpu/%d" % (mid, n) for n in range(4)] + ["%s/__disk/sda" % mid, "%s/__host" % mid, "%s/__if/eth0" % mid,
-                       "%s/__if/%s" % (mid, veth), mid + "/base", jid(mid, "rotate.sh", "crontab", "*/5 * * * *", "/usr/local/bin/rotate.sh"),
-                       mid + "/base/gpu0", "%s/containers/run-%s" % (mid, veth[-5:]), mid + "/gpu0/util"])
+                       "%s/__if/%s" % (mid, veth), mid + "/base", rotate, rotate + "/__gpu/0", mid + "/base/__gpu/0",
+                       "%s/containers/run-%s" % (mid, veth[-5:]), "%s/containers/run-%s/__gpu/0" % (mid, veth[-5:]), mid + "/gpu0/util"])
 
     def test_a_restarted_container_and_its_old_veth_are_dropped_after_a_sweep(self):
         f = make_fleet(HOST_CFG)
@@ -466,8 +476,8 @@ class GoneNodesAreForgotten(TreeTest):
         self.assertEqual(sorted(f.specs), ["lx", "nas"])
 
 
-def compose(cid, project, service, u, name=None, gkeys=()):
-    c = container(cid, name or "%s-%s-1" % (project, service), u, gkeys, project, service)
+def compose(cid, project, service, u, name=None, gu=()):
+    c = container(cid, name or "%s-%s-1" % (project, service), u, gu, project, service)
     c["file"] = "/srv/%s/compose.yaml,/srv/%s/compose.override.yaml" % (project, project)
     return c
 
@@ -476,11 +486,11 @@ class TheTree(TreeTest):
     """#179: the whole tree for a machine, as an exact set, with the nothing-else controls."""
 
     def shape(self, spec):
-        node = lambda n: (n["id"], n["name"], n.get("status", ""), n.get("g", []), n["h"]["cpu"][-1], n["h"]["mem"][-1])
-        return {"base": (spec["base"]["id"], spec["base"]["g"], [spec["base"]["h"][k][-1] for k in fleet_live.METRICS]),
+        node = lambda n: (n["id"], n["name"], n.get("status", ""), on_gpus(n), n["h"]["cpu"][-1], n["h"]["mem"][-1])
+        return {"base": (spec["base"]["id"], on_gpus(spec["base"]), [spec["base"]["h"][k][-1] for k in fleet_live.METRICS]),
                 "compose": [(p["id"], p["name"], p["file"], [node(s) for s in p["services"]]) for p in spec["compose"]],
                 "containers": [node(c) for c in spec["containers"]],
-                "jobs": [(j["id"], j["name"], j["running"], j["g"], j["h"]["cpu"][-1]) for j in spec["baseCron"]],
+                "jobs": [(j["id"], j["name"], j["running"], on_gpus(j), j["h"]["cpu"][-1]) for j in spec["baseCron"]],
                 "vms": [(v["id"], v["status"], [v["base"]["h"][k][-1] for k in fleet_live.METRICS]) for v in spec["vms"]],
                 "owners": spec["procs_owner"]}
 
