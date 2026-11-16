@@ -387,6 +387,7 @@ SS = """0      0           192.168.1.20:22         192.168.1.10:51234 users:(("s
 """
 IFADDR = {"192.168.1.20": "eth0", "fe80::1": "eth0", "127.0.0.1": "lo", "::1": "lo", "172.17.0.1": "docker0"}
 SS_CMD = ("ss", "-tinpH", "state", "established")
+LIVE_PIDS = [proc(pid, "x") for pid in (300, 320, 400, 1180, 1201, 1300, 2200, 2300)]   # the processes running now
 
 
 class NetUsers(unittest.TestCase):
@@ -395,7 +396,7 @@ class NetUsers(unittest.TestCase):
         self.m.run = commands({SS_CMD: SS})
 
     def test_each_process_with_its_interfaces_and_tcp_bytes(self):
-        self.assertEqual(self.m.net_users(IFADDR), {
+        self.assertEqual(self.m.net_users(IFADDR, LIVE_PIDS), {
             "1201": {"ifs": ["eth0"], "b": 61152}, "1180": {"ifs": ["eth0"], "b": 61152},   # one connection, two processes
             "2200": {"ifs": ["eth0", "lo"], "b": 900040600},                                # IPv4-mapped IPv6, and loopback
             "1300": {"ifs": ["eth0"], "b": 3000},                                           # link-local: the interface is in the address
@@ -405,7 +406,7 @@ class NetUsers(unittest.TestCase):
 
     def test_no_connections(self):
         self.m.run = commands({SS_CMD: ""})
-        self.assertEqual(self.m.net_users(IFADDR), {})
+        self.assertEqual(self.m.net_users(IFADDR, LIVE_PIDS), {})
 
 
 
@@ -438,7 +439,7 @@ class NetBytes(unittest.TestCase):
         out = []
         for text in READINGS:
             m.run = commands({SS_CMD: text})
-            out.append(m.net_users(IFADDR))
+            out.append(m.net_users(IFADDR, LIVE_PIDS))
         return out
 
     def test_closed_connections_keep_their_bytes_in_the_total(self):
@@ -446,7 +447,8 @@ class NetBytes(unittest.TestCase):
             {"2200": 6000000, "300": 1000},              # what's open now counts once, as the baseline
             {"2200": 9020000, "300": 1000},              # +3 MB on the stream, +20 kB from a new one; the download closed
             {"2200": 12050000, "300": 1000},
-            {"300": 1200},                               # a new connection on the same ports: all its bytes are new
+            {"2200": 12050000, "300": 1200},             # nginx has nothing open but keeps its count; postgres's
+                                                         # new connection on the same ports: all its bytes are new
             {"2200": 12050500, "300": 2000},             # nginx picks up where it left off
         ])
 
@@ -487,7 +489,7 @@ class SocketOwners(unittest.TestCase):
                 text = conn(*A, "nginx", 2200, 21, i * 1000000 - 1000, 1000, walk)   # 1 MB a reading
                 return text + (conn(*G, "curl", 2300, 3, i * 1000 - 100, 100, walk) if i >= 4 else "")  # 1 kB a reading
             m.run = run
-            out.append(m.net_users(IFADDR))
+            out.append(m.net_users(IFADDR, LIVE_PIDS))
             clock[0] += 3
         return ran, out
 

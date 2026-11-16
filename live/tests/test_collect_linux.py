@@ -378,8 +378,8 @@ NGINX, SSHD, SSHD_USER, CURL = ("nginx", 300), ("sshd", 400), ("sshd", 401), ("c
 
 
 class ProcessNetwork(unittest.TestCase):
-    """pnet[pid]["b"] counts the bytes a process's TCP connections moved since the collector started, so it
-    only grows: connections that close keep what they moved, and a new one counts in full."""
+    """pnet[pid]["b"] counts the bytes a process's TCP connections moved (those open when the collector started,
+    in full), so it only grows: connections that close keep what they moved, and a new one counts in full."""
 
     def readings(self, *steps):
         """steps: (ss output, live pids); returns pnet per step as {pid: (interfaces, bytes)}."""
@@ -398,7 +398,7 @@ class ProcessNetwork(unittest.TestCase):
         s = ("198.51.100.5:22", "192.0.2.20:60000")
         d = ("198.51.100.6:40000", "192.0.2.30:443")
         got = self.readings(
-            # the first reading only sets where counting starts
+            # what's open at the first reading counts once, as the baseline
             (ss(a + ([NGINX], 1000, 500), b + ([NGINX], 4000, 1000), s + ([SSHD, SSHD_USER], 1500, 500)), (300, 400, 401)),
             # a grew 600, b closed, c is new (300 in full); the ssh session grew 500, for both of its processes
             (ss(a + ([NGINX], 1400, 700), c + ([NGINX], 200, 100), s + ([SSHD, SSHD_USER], 1800, 700)), (300, 400, 401)),
@@ -412,18 +412,18 @@ class ProcessNetwork(unittest.TestCase):
             (ss(s + ([SSHD], 1900, 750), d + ([CURL], 200, 900)), (300, 400, 500)),
         )
         self.assertEqual(got, [
-            {"300": (["eth0"], 0), "400": (["eth0"], 0), "401": (["eth0"], 0)},
-            {"300": (["eth0"], 900), "400": (["eth0"], 500), "401": (["eth0"], 500)},
-            {"300": ([], 900), "400": (["eth0"], 600), "401": (["eth0"], 600), "500": (["br0"], 700)},
-            {"300": ([], 900), "400": (["eth0"], 600), "500": (["br0"], 1000)},
-            {"300": ([], 900), "400": ([], 600), "500": ([], 1000)},
-            {"300": ([], 900), "400": (["eth0"], 650), "500": (["br0"], 1100)},
+            {"300": (["eth0"], 6500), "400": (["eth0"], 2000), "401": (["eth0"], 2000)},
+            {"300": (["eth0"], 7400), "400": (["eth0"], 2500), "401": (["eth0"], 2500)},
+            {"300": ([], 7400), "400": (["eth0"], 2600), "401": (["eth0"], 2600), "500": (["br0"], 700)},
+            {"300": ([], 7400), "400": (["eth0"], 2600), "500": (["br0"], 1000)},
+            {"300": ([], 7400), "400": ([], 2600), "500": ([], 1000)},
+            {"300": ([], 7400), "400": (["eth0"], 2650), "500": (["br0"], 1100)},
         ])
 
     def test_a_process_with_no_connection_is_not_listed(self):
         s = ("198.51.100.5:22", "192.0.2.20:60000")
         got = self.readings((ss(s + ([SSHD], 100, 100)), (400, 600)), (ss(s + ([SSHD], 150, 100)), (400, 600)))
-        self.assertEqual(got, [{"400": (["eth0"], 0)}, {"400": (["eth0"], 50)}])
+        self.assertEqual(got, [{"400": (["eth0"], 200)}, {"400": (["eth0"], 250)}])
 
 
 if __name__ == "__main__":
