@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Custom groups in the trees (issue #8): drag a box over siblings to group them; each group has a coloured
+// Divisions: custom groups in the trees (issue #8, named in #23): drag a box over siblings to group them; each group has a coloured
 // outline and a name; only items at the same level group; Pins only and the network tree keep their own.
 import {test, before, after} from 'node:test';
 import assert from 'node:assert/strict';
@@ -30,7 +30,7 @@ test('a box over 3 of 4 machines groups exactly those 3, outlined, and saves it;
   try {
     await drag(p, ROW('lx'), ROW('mac'));
     await p.waitFor(`document.querySelector('#tree .tgroup')`);
-    assert.deepEqual(await p.eval(GROUPS), [{name: 'Group 1', rows: ['lx', 'lx2', 'mac']}]);
+    assert.deepEqual(await p.eval(GROUPS), [{name: 'Division 1', rows: ['lx', 'lx2', 'mac']}]);
     assert.deepEqual(await p.eval(ORDER), ['lx', 'lx2', 'mac', 'win']);
     assert.notEqual(await p.eval(`getComputedStyle(document.querySelector('#tree .tgroup')).getPropertyValue('--gc').trim()`), '');
     assert.equal(await p.eval(`S.sel`), 'fleet');
@@ -72,7 +72,7 @@ test('Pins only keeps its own groups, and any pins can be grouped', async () => 
   try {
     await drag(p, ROW('mac'), ROW('win'));
     await p.waitFor(`document.querySelector('#tree .tgroup')`);
-    assert.deepEqual(await p.eval(GROUPS), [{name: 'Group 1', rows: ['mac', 'win']}]);
+    assert.deepEqual(await p.eval(GROUPS), [{name: 'Division 1', rows: ['mac', 'win']}]);
     assert.deepEqual(Object.keys(saved(fx)), ['pins|root']);
     await p.eval(`(() => { document.querySelector('[data-pinsonly="0"]').click(); return true; })()`);
     await p.waitFor(`${ORDER}.length === 4`);
@@ -83,13 +83,13 @@ test('Pins only keeps its own groups, and any pins can be grouped', async () => 
 
 test('a group\'s right-click menu renames it, recolours it, and ungroups it', async () => {
   const fx = fixture();
-  fx.fleet.prefs = {tgroups: {'machines|root': [{id: 'g1', name: 'Group 1', c: 0, ids: ['lx', 'lx2']}]}};
+  fx.fleet.prefs = {tgroups: {'machines|root': [{id: 'g1', name: 'Division 1', c: 0, ids: ['lx', 'lx2']}]}};
   const p = await open({sel: 'fleet', open: CLOSED}, fx);
   const menu = () => p.eval(`(() => { const h = document.querySelector('#tree .tg-h'), r = h.getBoundingClientRect(); h.dispatchEvent(new MouseEvent('contextmenu', {bubbles: true, cancelable: true, clientX: r.left + 10, clientY: r.top + 5})); return [...document.querySelectorAll('#ctxmenu [role=menuitem]')].map(e => e.textContent.trim()); })()`);
   const pick = label => p.eval(`(() => { [...document.querySelectorAll('#ctxmenu [role=menuitem]')].find(e => e.textContent.trim() === ${JSON.stringify(label)}).click(); return true; })()`);
   try {
     await p.waitFor(`document.querySelector('#tree .tg-h')`);
-    assert.deepEqual(await menu(), ['Rename', 'Next colour', 'Ungroup']);
+    assert.deepEqual(await menu(), ['Rename', 'Next colour', 'Disband division']);
     await pick('Rename');
     await p.waitFor(`document.activeElement && document.activeElement.classList.contains('tg-name')`);
     await p.eval(`(() => { const i = document.activeElement; i.value = 'Media boxes'; i.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', bubbles: true})); return true; })()`);
@@ -98,7 +98,7 @@ test('a group\'s right-click menu renames it, recolours it, and ungroups it', as
     await menu(); await pick('Next colour');
     for (let i = 0; i < 100 && saved(fx)['machines|root'][0].c !== 1; i++) await new Promise(r => setTimeout(r, 30));
     assert.equal(saved(fx)['machines|root'][0].c, 1);
-    await menu(); await pick('Ungroup');
+    await menu(); await pick('Disband division');
     await p.waitFor(`!document.querySelector('#tree .tgroup')`);
     assert.deepEqual(saved(fx)['machines|root'], []);
     assert.deepEqual(p.errors, []);

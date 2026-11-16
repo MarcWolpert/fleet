@@ -45,7 +45,7 @@ test('dropping on empty space takes it out of its group; on an ungrouped sibling
     assert.deepEqual(await p.eval(GROUPS), [{name: 'Linux', rows: ['lx']}]);
     await dnd(p, 'win', ROW('mac'));
     await p.waitFor(`${GROUPS}.length === 2`);
-    assert.deepEqual(await p.eval(GROUPS), [{name: 'Linux', rows: ['lx']}, {name: 'Group 1', rows: ['mac', 'win']}]);
+    assert.deepEqual(await p.eval(GROUPS), [{name: 'Linux', rows: ['lx']}, {name: 'Division 1', rows: ['mac', 'win']}]);
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
 });

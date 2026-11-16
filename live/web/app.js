@@ -365,7 +365,7 @@ function renderTree(){
     const st = n.kind === 'machine' ? ' ' + statusClass(n) : '';
     const pin = (n.kind === 'machine' || n.kind === 'project' || n.kind === 'service' || n.kind === 'container' || n.kind === 'group') ? pinBtn(n.id) : '<span style="width:22px;flex:none"></span>';
     return `<div class="row ${n.kind}${st}${S.sel===n.id?' sel':''}" style="--d:${d}" role="treeitem" aria-level="${d+1}" ${kids?`aria-expanded="${open}"`:''} aria-selected="${S.sel===n.id}" data-select="${esc(n.id)}" data-pk="${esc(pk)}">`
-      + `<span class="tdrag" draggable="true" title="Drag into a group" aria-hidden="true">${icon('grip')}</span>`
+      + `<span class="tdrag" draggable="true" title="Drag into a division" aria-hidden="true">${icon('grip')}</span>`
       + `<button type="button" class="chev${open?' open':''}${kids?'':' leaf'}" ${kids?`data-toggle="${esc(n.id)}" aria-label="${open?'Collapse':'Expand'} ${esc(n.name)}"`:'tabindex="-1" aria-hidden="true"'}>${icon('chev', 2.4)}</button>`
       + `<span class="ico" style="color:${n.kind==='cronfolder'||n.kind==='cron'?'var(--ink-3)':colOf(n)}">${icon(iconOf(n))}</span>`
       + `<button type="button" class="nm" data-select="${esc(n.id)}">${esc(n.name)}</button>${count}${gtag}${dot}${pin}`
@@ -435,7 +435,7 @@ function renderNetTree(){
     const sub = n.kind === 'nmachine' ? `<i class="sdot ${n.status}" title="${esc(n.status)}"></i>` : n.vm ? `<span class="count">${esc(n.vm)}</span>` : n.dnet && n.kind === 'if' ? `<span class="count">${esc(n.dnet)}</span>` : '';
     const rate = `<span>↓ ${rateText(n.rx)}</span><span>↑ ${n.kind === 'ncontainer' ? '—' : rateText(n.tx)}</span>`;
     return `<div class="row${S.netSel===n.id?' sel':''}" style="--d:${d}" role="treeitem" aria-level="${d+1}" ${kids?`aria-expanded="${open}"`:''} data-netsel="${esc(n.id)}" data-pk="${esc(pk)}">`
-      + `<span class="tdrag" draggable="true" title="Drag into a group" aria-hidden="true">${icon('grip')}</span>`
+      + `<span class="tdrag" draggable="true" title="Drag into a division" aria-hidden="true">${icon('grip')}</span>`
       + `<button type="button" class="chev${open?' open':''}${kids?'':' leaf'}" ${kids?`data-toggle="${esc(n.id)}" aria-label="${open?'Collapse':'Expand'} ${esc(n.name)}"`:'tabindex="-1" aria-hidden="true"'}>${icon('chev', 2.4)}</button>`
       + `<span class="ico" style="color:var(--ink-2)">${icon(ic)}</span><button type="button" class="nm" data-netsel="${esc(n.id)}">${esc(n.name)}</button>${sub}<span class="nrate">${rate}</span></div>`;
   }
@@ -2115,7 +2115,7 @@ function ctxFor(t){
     const box = tgh.closest('.tgroup'), key = box.dataset.tgkey, id = box.dataset.tgroup, g = ((PREFS.tgroups || {})[key] || []).find(x => x.id === id);
     if (!g) return null;
     return {title:g.name, items:[{label:'Rename', run:() => renameGroup(key, id)}, {label:'Next colour', run:() => updGroup(key, id, x => Object.assign({}, x, {c:(x.c + 1) % TG_COLORS.length}))},
-      {label:'Ungroup', run:() => updGroup(key, id, null)}]};
+      {label:'Disband division', run:() => updGroup(key, id, null)}]};
   }
   const pr = t.closest('.ptbl tbody tr[data-pid]');
   if (pr){
@@ -2212,7 +2212,7 @@ function selectNone(){
 }
 
 
-/* ---------- Custom groups in the trees (issue #8) ---------- */
+/* ---------- Divisions: custom groups in the trees (issues #8, #23) ---------- */
 // Drag a box over items at the same level to group them. Groups live in ui.json (prefs.tgroups), keyed by
 // tree (machines, pins, network) and parent, so Pins only and the network tree keep their own.
 const TG_COLORS = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#6250d6', '#e34948'];
@@ -2236,16 +2236,16 @@ function groupedWalk(roots, kidsOf, openFn, shownFn, scope){
 }
 function tgroupOpen({open:g, key, d}){
   return `<div class="tgroup" data-tgroup="${esc(g.id)}" data-tgkey="${esc(key)}" role="group" aria-label="${esc(g.name)}" style="--gc:${TG_COLORS[(g.c || 0) % TG_COLORS.length]};--d:${d}">`
-    + `<div class="tg-h" title="Right-click to rename, recolour or ungroup"><i></i><span class="tg-n">${esc(g.name)}</span></div>`;
+    + `<div class="tg-h" title="Right-click to rename, recolour or disband"><i></i><span class="tg-n">${esc(g.name)}</span></div>`;
 }
 function updGroup(key, id, f){
   const all = Object.assign({}, PREFS.tgroups || {});
   all[key] = (all[key] || []).map(g => g.id === id ? (f ? f(g) : null) : g).filter(Boolean);
-  PREFS = Object.assign({}, PREFS, {tgroups:all}); renderTree(); savePrefs('the groups');
+  PREFS = Object.assign({}, PREFS, {tgroups:all}); renderTree(); savePrefs('the divisions');
 }
 function renameGroup(key, id){
   const n = document.querySelector(`#tree .tgroup[data-tgroup="${CSS.escape(id)}"] .tg-n`); if (!n) return;
-  const inp = document.createElement('input'); inp.className = 'tg-name'; inp.value = n.textContent; inp.setAttribute('aria-label', 'Group name');
+  const inp = document.createElement('input'); inp.className = 'tg-name'; inp.value = n.textContent; inp.setAttribute('aria-label', 'Division name');
   n.replaceWith(inp); inp.focus(); inp.select();
   let done = false;
   const commit = ok => { if (done) return; done = true; const v = inp.value.trim().slice(0, 60); if (ok && v) updGroup(key, id, g => Object.assign({}, g, {name:v})); else renderTree(); };
@@ -2277,17 +2277,17 @@ addEventListener('click', e => { if (Date.now() < MQ.until && e.target.closest &
 function finishMarquee(hits){
   if (!hits.length) return;
   const ids = hits.map(r => r.dataset.select || r.dataset.netsel), pks = new Set(hits.map(r => r.dataset.pk));
-  if (pks.size > 1){ toast('Only items at the same level can be grouped: draw the box over siblings'); return; }
-  if (hits.length < 2){ toast('Draw the box over two or more items at the same level to group them'); return; }
+  if (pks.size > 1){ toast('Only items at the same level can form a division: draw the box over siblings'); return; }
+  if (hits.length < 2){ toast('Draw the box over two or more items at the same level to make a division'); return; }
   const scope = S.tree === 'network' ? 'network' : S.pinsOnly ? 'pins' : 'machines', key = scope + '|' + [...pks][0];
   const all = Object.assign({}, PREFS.tgroups || {});
   const list = (all[key] || []).map(g => Object.assign({}, g, {ids:g.ids.filter(id => !ids.includes(id))})).filter(g => g.ids.length);
   const names = new Set(list.map(g => g.name)), cs = new Set(list.map(g => g.c));
-  let k = 1; while (names.has('Group ' + k)) k++;
+  let k = 1; while (names.has('Division ' + k)) k++;
   let c = 0; while (cs.has(c) && c < TG_COLORS.length - 1) c++;
-  list.push({id:'g' + Date.now().toString(36), name:'Group ' + k, c, ids});
+  list.push({id:'g' + Date.now().toString(36), name:'Division ' + k, c, ids});
   all[key] = list;
-  PREFS = Object.assign({}, PREFS, {tgroups:all}); renderTree(); savePrefs('the groups');
+  PREFS = Object.assign({}, PREFS, {tgroups:all}); renderTree(); savePrefs('the divisions');
 }
 
 // Moving items between groups: by the drag handle on every row, or from the row's menu (issue #22).
@@ -2301,12 +2301,12 @@ function moveToGroup(key, id, gid, withId){
   list = list.filter(g => g.ids.length);
   if (withId){
     const names = new Set(list.map(g => g.name)), cs = new Set(list.map(g => g.c));
-    let k = 1; while (names.has('Group ' + k)) k++;
+    let k = 1; while (names.has('Division ' + k)) k++;
     let c = 0; while (cs.has(c) && c < TG_COLORS.length - 1) c++;
-    list.push({id:'g' + Date.now().toString(36), name:'Group ' + k, c, ids:[withId, id]});
+    list.push({id:'g' + Date.now().toString(36), name:'Division ' + k, c, ids:[withId, id]});
   }
   all[key] = list;
-  PREFS = Object.assign({}, PREFS, {tgroups:all}); renderTree(); savePrefs('the groups');
+  PREFS = Object.assign({}, PREFS, {tgroups:all}); renderTree(); savePrefs('the divisions');
 }
 function groupMoveItems(id, pk){
   const key = treeScope() + '|' + pk, gs = (PREFS.tgroups || {})[key] || [], mine = gs.find(g => g.ids.includes(id));
@@ -2333,7 +2333,7 @@ $('tree').addEventListener('drop', e => {
   const {id, pk} = TDRAG, key = treeScope() + '|' + pk;
   TDRAG.id = null;
   const row = e.target.closest && e.target.closest('.row'), box = e.target.closest && e.target.closest('.tgroup');
-  const other = () => toast('Only items at the same level can share a group: drag it among its siblings');
+  const other = () => toast('Only items at the same level can share a division: drag it among its siblings');
   if (row && (row.dataset.select || row.dataset.netsel) !== id){
     if (row.dataset.pk !== pk) return other();
     const g = groupOf(key, row.dataset.select || row.dataset.netsel);
