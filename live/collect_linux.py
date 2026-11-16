@@ -39,6 +39,33 @@ def netdev(text):
     return out
 
 
+def cpulist(s):
+    """A sysfs CPU list ("0-3,8,10-11") -> the set of CPU numbers."""
+    got = set()
+    for part in s.strip().split(","):
+        if "-" in part:
+            a, b = part.split("-")
+            got.update(range(int(a), int(b) + 1))
+        elif part.isdigit():
+            got.add(int(part))
+    return got
+
+
+def add_cron(cron, text, src, users=()):
+    """Append the jobs of one crontab (`crontab -l`, /etc/crontab or a file of /etc/cron.d) to cron. A system crontab
+    has a user column before the command, but dcron's per-user crontabs, which Unraid keeps in /etc/cron.d, have
+    none: the column is there when it names one of the users."""
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or re.match(r"^[A-Z_]+=", line):
+            continue
+        f = line.split()
+        if f[0].startswith("@"):
+            user_col = src != "crontab" and len(f) >= 3 and f[1] in users
+            cron.append({"sched": f[0], "cmd": " ".join(f[2:] if user_col else f[1:]), "src": src})
+        elif len(f) >= 6:
+            user_col = src != "crontab" and len(f) >= 7 and f[5] in users
+            cron.append({"sched": " ".join(f[:5]), "cmd": " ".join(f[6:] if user_col else f[5:]), "src": src})
 
 
 # ---- GPUs from every vendor: the kernel's DRM devices, per-process engine time from fdinfo ----
@@ -121,6 +148,17 @@ def node_pdev(path):
     return os.path.basename(os.path.realpath("/sys/class/drm/%s/device" % os.path.basename(path)))
 
 
+def debugfs_pids(text):
+    """The pids in a DRM debugfs clients file. Its first column is the process name, which may hold spaces ("Plex
+    Transcoder", "Web Content"), so the pid is the number before the minor and the y/n master and auth flags."""
+    pids = set()
+    for line in text.splitlines()[1:]:
+        m = re.match(r"^.*? (\d+) +\d+ +[yn] +[yn] ", line)
+        if m:
+            pids.add(m.group(1))
+    return pids
+
+
 def gpu_clients(cards):
     """[pid, pdev, client id, {engine: busy ns}, {engine: capacity}, memory bytes] for every process using a GPU."""
     want = {c["pdev"] for c in cards if c.get("card")}
@@ -130,10 +168,7 @@ def gpu_clients(cards):
     debug = [d for d in ("/sys/kernel/debug/dri/" + p for p in want) if os.path.exists(d + "/clients")]
     if debug:  # cheap: the kernel lists each GPU's clients (root + debugfs)
         for d in debug:
-            for line in rd(d + "/clients").splitlines()[1:]:
-                f = line.split()
-                if len(f) > 1 and f[1].isdigit():
-                    pids.add(f[1])
+            pids |= debugfs_pids(rd(d + "/clients"))
         fds = []
         for pid in pids:
             try:
@@ -350,6 +385,99 @@ def guest_mem(meminfo, vmstat, balloon_features, page):
     return [total, avail]
 
 
+def netns(pid):
+    """The network namespace a process is in ("net:[4026531840]"), or "" if it can't be read."""
+    try:
+        return os.readlink("/proc/%s/ns/net" % pid)
+    except Exception:
+        return ""
+
+
+def docker_containers(first_pid_of, started):
+    """Docker: containers with compose labels; per-container network from its namespace."""
+    containers, by_ns = [], {}
+    for line in run(["docker", "ps", "--no-trunc", "--format", "{{json .}}"]).splitlines():
+        try:
+            c = json.loads(line)
+        except Exception:
+            continue
+        labels = dict(kv.split("=", 1) for kv in c.get("Labels", "").split(",") if "=" in kv)
+        cid = c.get("ID", "")[:12]
+        host_ns = netns(1)
+        own_ns = netns(first_pid_of[cid]) if cid in first_pid_of else ""
+        # network_mode: host shares the host's namespace; its traffic is the host's, so don't count it again here
+        net = netdev(rd("/proc/%s/net/dev" % first_pid_of[cid])) if cid in first_pid_of and own_ns and own_ns != host_ns else {}
+        rx = sum(v[0] for k, v in net.items() if k != "lo")
+        tx = sum(v[1] for k, v in net.items() if k != "lo")
+        containers.append({"id": cid, "name": c.get("Names", ""), "image": c.get("Image", ""), "status": c.get("Status", ""),
+                           "project": labels.get("com.docker.compose.project", ""),
+                           "service": labels.get("com.docker.compose.service", ""),
+                           "file": labels.get("com.docker.compose.project.config_files", ""),
+                           "networks": c.get("Networks", ""), "rx": rx, "tx": tx})
+        if net:
+            by_ns.setdefault(own_ns, []).append(containers[-1])
+    # network_mode: service:<name> or container:<name> joins another container's namespace, whose counters are the same
+    # again: only its owner counts them, the container that started first (Docker starts a joiner once its owner runs)
+    for group in by_ns.values():
+        owner = min(group, key=lambda c: started.get(c["id"], 0))
+        for c in group:
+            if c is not owner:
+                c["rx"] = c["tx"] = 0
+    return containers
+
+
+def qemu_vm(cmdline):
+    """The libvirt VM a QEMU process runs: the guest= key of its -name argument (guest=Windows 10,debug-threads=on),
+    from the NUL-separated command line /proc/<pid>/cmdline has. A name may hold spaces; QEMU writes a comma in it as two."""
+    argv = cmdline.split("\0")
+    for i, a in enumerate(argv[:-1]):
+        if a == "-name":
+            for kv in argv[i + 1].replace(",,", "\1").split(","):
+                if kv.startswith("guest="):
+                    return kv[6:].replace("\1", ",")
+    return ""
+
+
+def libvirt_vms():
+    """Libvirt VMs and the tap interfaces they use. virsh list --name prints one VM per line, and a name may hold
+    spaces ("Windows 10") or start with a dash, so it goes to virsh whole, as --domain's value."""
+    vms = []
+    for name in run(["virsh", "list", "--name"]).splitlines():
+        if not name.strip():
+            continue
+        ifaces = []
+        for line in run(["virsh", "domiflist", "--domain", name]).splitlines()[2:]:
+            f = line.split()
+            if len(f) >= 5:
+                ifaces.append({"if": f[0], "source": f[2], "mac": f[4]})
+        vms.append({"name": name, "ifs": ifaces})
+    return vms
+
+
+def nvidia_gpus():
+    """NVIDIA GPUs from nvidia-smi --query-gpu."""
+    gpus = []
+    # the newer fields fail the whole query on old drivers, so fall back to the basic one
+    q = "index,name,utilization.gpu,memory.used,memory.total,pci.bus_id"
+    extra = ",utilization.memory,temperature.gpu,power.draw,power.limit,clocks.gr,clocks.max.gr,clocks.mem,fan.speed,utilization.encoder,utilization.decoder"
+    rows = run(["nvidia-smi", "--query-gpu=" + q + extra, "--format=csv,noheader,nounits"]).splitlines()
+    if not any(line.count(",") >= 15 for line in rows):
+        rows = run(["nvidia-smi", "--query-gpu=" + q, "--format=csv,noheader,nounits"]).splitlines()
+    num = lambda x: float(x) if re.match(r"^-?\d+(\.\d+)?$", x) else None   # "[N/A]", "[Not Supported]" -> None
+    for line in rows:
+        f = [x.strip() for x in line.split(",")]
+        if len(f) in (6, 16):
+            bus = f[5].lower()
+            bus = bus[4:] if re.match(r"^0000[0-9a-f]{4}:", bus) else bus  # 00000000:83:00.0 -> 0000:83:00.0
+            # a field it can't read (utilization in MIG mode, memory on unified-memory parts) counts as 0, like an empty one
+            g = {"index": int(f[0]), "name": f[1], "util": num(f[2]) or 0.0, "memUsed": num(f[3]) or 0.0, "memTotal": num(f[4]) or 0.0, "pdev": bus}
+            if len(f) == 16:
+                for k, x in zip(("memUtil", "temp", "power", "powerLimit", "clock", "clockMax", "memClock", "fan", "enc", "dec"), f[6:]):
+                    g[k] = num(x)
+            gpus.append(g)
+    return gpus
+
+
 def snapshot():
     global out
     out = {"t": time.time(), "hz": HZ, "ncpu": os.cpu_count(), "host": os.uname()[1], "kernel": os.uname()[2]}
@@ -383,18 +511,6 @@ def snapshot():
                       "core": rd(base + "topology/core_id").strip(), "pkg": rd(base + "topology/physical_package_id").strip(),
                       "die": rd(base + "topology/die_id").strip(), "l3": l3})
     out["lcpus"] = lcpus
-
-
-    def cpulist(s):
-        got = set()
-        for part in s.strip().split(","):
-            if "-" in part:
-                a, b = part.split("-")
-                got.update(range(int(a), int(b) + 1))
-            elif part.isdigit():
-                got.add(int(part))
-        return got
-
 
     # Hybrid CPUs (Intel P/E cores) list their CPUs under cpu_core and cpu_atom.
     p_cpus, e_cpus = cpulist(rd("/sys/devices/cpu_core/cpus")), cpulist(rd("/sys/devices/cpu_atom/cpus"))
@@ -436,7 +552,7 @@ def snapshot():
         if len(f) > 2:
             users[f[2]] = f[0]
 
-    procs, first_pid_of = [], {}
+    procs, first_pid_of, started = [], {}, {}
     for pid in os.listdir("/proc"):
         if not pid.isdigit():
             continue
@@ -459,43 +575,23 @@ def snapshot():
         rb = re.search(r"read_bytes: (\d+)", io)
         wb = re.search(r"write_bytes: (\d+)", io)
         iob = (int(rb.group(1)) + int(wb.group(1))) if rb and wb else -1
-        cmd = rd("/proc/%s/cmdline" % pid).replace("\0", " ").strip()
+        argv = rd("/proc/%s/cmdline" % pid)
+        cmd = argv.replace("\0", " ").strip()
         vm = ""
         if comm.startswith("qemu"):
-            m = re.search(r"guest=([^,\s]+)", cmd)
-            vm = m.group(1) if m else ""
+            vm = qemu_vm(argv)
             if vm:
                 m = re.search(r"Cpus_allowed_list:\s*(\S+)", rd("/proc/%s/status" % pid))
                 out.setdefault("vm_cpus", {})[vm] = m.group(1) if m else ""
         if cid and cid not in first_pid_of:
             first_pid_of[cid] = pid
+        if cid:  # when the container's first process started (ticks since boot)
+            started[cid] = min(started.get(cid, int(f[19])), int(f[19]))
         procs.append([int(pid), int(f[1]), comm, f[0], int(f[11]) + int(f[12]), int(f[21]) * PAGE,
                       int(f[17]), users.get(uid, uid), iob, cid, vm, unit, cmd[:300], int(f[36]) if len(f) > 36 else -1])
     out["procs"] = procs
 
-    # Docker: containers with compose labels; per-container network from its namespace.
-    containers = []
-    for line in run(["docker", "ps", "--no-trunc", "--format", "{{json .}}"]).splitlines():
-        try:
-            c = json.loads(line)
-        except Exception:
-            continue
-        labels = dict(kv.split("=", 1) for kv in c.get("Labels", "").split(",") if "=" in kv)
-        cid = c.get("ID", "")[:12]
-        host_ns = os.readlink("/proc/1/ns/net") if os.path.exists("/proc/1/ns/net") else ""
-        try:
-            own_ns = os.readlink("/proc/%s/ns/net" % first_pid_of[cid]) if cid in first_pid_of else ""
-        except Exception:
-            own_ns = ""
-        # network_mode: host shares the host's namespace; its traffic is the host's, so don't count it again here
-        net = netdev(rd("/proc/%s/net/dev" % first_pid_of[cid])) if cid in first_pid_of and own_ns and own_ns != host_ns else {}
-        rx = sum(v[0] for k, v in net.items() if k != "lo")
-        tx = sum(v[1] for k, v in net.items() if k != "lo")
-        containers.append({"id": cid, "name": c.get("Names", ""), "image": c.get("Image", ""), "status": c.get("Status", ""),
-                           "project": labels.get("com.docker.compose.project", ""),
-                           "service": labels.get("com.docker.compose.service", ""),
-                           "file": labels.get("com.docker.compose.project.config_files", ""),
-                           "networks": c.get("Networks", ""), "rx": rx, "tx": tx})
+    containers = docker_containers(first_pid_of, started)
     out["containers"] = containers
     try:
         out["pnet"] = net_users(ifaddr)
@@ -514,35 +610,15 @@ def snapshot():
             pass
     out["dockernets"] = nets
 
-    # Libvirt VMs and the tap interfaces they use.
-    vms = []
-    for name in run(["virsh", "list", "--name"]).split():
-        ifaces = []
-        for line in run(["virsh", "domiflist", name]).splitlines()[2:]:
-            f = line.split()
-            if len(f) >= 5:
-                ifaces.append({"if": f[0], "source": f[2], "mac": f[4]})
-        vms.append({"name": name, "ifs": ifaces})
-    out["vms"] = vms
+    out["vms"] = libvirt_vms()
 
     # Scheduled jobs: crontabs and systemd timers.
-    cron = []
-    def add_cron(text, src):
-        for line in text.splitlines():
-            line = line.strip()
-            if not line or line.startswith("#") or re.match(r"^[A-Z_]+=", line):
-                continue
-            f = line.split()
-            if f[0].startswith("@"):
-                cron.append({"sched": f[0], "cmd": " ".join(f[1:]), "src": src})
-            elif len(f) >= 6:
-                user_col = src != "crontab" and len(f) >= 7
-                cron.append({"sched": " ".join(f[:5]), "cmd": " ".join(f[6:] if user_col else f[5:]), "src": src})
-    add_cron(run(["crontab", "-l"]), "crontab")
-    add_cron(rd("/etc/crontab"), "/etc/crontab")
+    cron, names = [], set(users.values())
+    add_cron(cron, run(["crontab", "-l"]), "crontab")
+    add_cron(cron, rd("/etc/crontab"), "/etc/crontab", names)
     try:
         for n in sorted(os.listdir("/etc/cron.d")):
-            add_cron(rd("/etc/cron.d/" + n), "/etc/cron.d/" + n)
+            add_cron(cron, rd("/etc/cron.d/" + n), "/etc/cron.d/" + n, names)
     except Exception:
         pass
     out["cron"] = cron
@@ -554,24 +630,7 @@ def snapshot():
     out["timers"] = timers
 
     # NVIDIA GPUs and which processes use them.
-    gpus = []
-    # the newer fields fail the whole query on old drivers, so fall back to the basic one
-    q = "index,name,utilization.gpu,memory.used,memory.total,pci.bus_id"
-    extra = ",utilization.memory,temperature.gpu,power.draw,power.limit,clocks.gr,clocks.max.gr,clocks.mem,fan.speed,utilization.encoder,utilization.decoder"
-    rows = run(["nvidia-smi", "--query-gpu=" + q + extra, "--format=csv,noheader,nounits"]).splitlines()
-    if not any(line.count(",") >= 15 for line in rows):
-        rows = run(["nvidia-smi", "--query-gpu=" + q, "--format=csv,noheader,nounits"]).splitlines()
-    num = lambda x: float(x) if re.match(r"^-?\d+(\.\d+)?$", x) else None   # "[N/A]", "[Not Supported]" -> None
-    for line in rows:
-        f = [x.strip() for x in line.split(",")]
-        if len(f) in (6, 16):
-            bus = f[5].lower()
-            bus = bus[4:] if re.match(r"^0000[0-9a-f]{4}:", bus) else bus  # 00000000:83:00.0 -> 0000:83:00.0
-            g = {"index": int(f[0]), "name": f[1], "util": float(f[2] or 0), "memUsed": float(f[3] or 0), "memTotal": float(f[4] or 0), "pdev": bus}
-            if len(f) == 16:
-                for k, x in zip(("memUtil", "temp", "power", "powerLimit", "clock", "clockMax", "memClock", "fan", "enc", "dec"), f[6:]):
-                    g[k] = num(x)
-            gpus.append(g)
+    gpus = nvidia_gpus()
     try:
         cards = drm_gpus()
     except Exception:
@@ -601,16 +660,17 @@ def snapshot():
     return out
 
 
-try:
-    INTERVAL
-except NameError:
-    INTERVAL = 3.0
-while True:
-    began = time.time()
-    data = json.dumps(snapshot(), separators=(",", ":")).encode()
+if __name__ == "__main__":  # piped to `python3 -` by Fleet Live; importing it (the tests) takes no reading
     try:
-        sys.stdout.write(base64.b64encode(zlib.compress(data, 3)).decode() + "\n")
-        sys.stdout.flush()
-    except (BrokenPipeError, OSError):
-        os._exit(0)  # Fleet Live went away: stop
-    time.sleep(max(0.2, INTERVAL - (time.time() - began)))
+        INTERVAL
+    except NameError:
+        INTERVAL = 3.0
+    while True:
+        began = time.time()
+        data = json.dumps(snapshot(), separators=(",", ":")).encode()
+        try:
+            sys.stdout.write(base64.b64encode(zlib.compress(data, 3)).decode() + "\n")
+            sys.stdout.flush()
+        except (BrokenPipeError, OSError):
+            os._exit(0)  # Fleet Live went away: stop
+        time.sleep(max(0.2, INTERVAL - (time.time() - began)))
