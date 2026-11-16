@@ -709,7 +709,9 @@ class Machine:
         for s in topo:
             n, core, eff, l3 = (int(x) for x in s.split(":"))
             tmap[n] = (core, eff, l3)
-        lcpus = [{"n": c["n"], "pct": c["pct"], "mhz": c.get("mhz", 0), "core": str(tmap.get(c["n"], ("",))[0]),
+        def mhz(c):   # Task Manager's Speed: frequency x % Processor Performance / % of Maximum Frequency
+            return round(c.get("mhz", 0) * c["perf"] / (c.get("maxf") or 100.0)) if c.get("perf", 0) > 0 else c.get("mhz", 0)
+        lcpus = [{"n": c["n"], "pct": c["pct"], "mhz": mhz(c), "core": str(tmap.get(c["n"], ("",))[0]),
                   "eff": tmap.get(c["n"], (0, 0, -1))[1], "l3": str(tmap.get(c["n"], (0, 0, -1))[2])} for c in lc]
         groups = group_lcpus_windows(lcpus)
         host_cpu = sum(c["pct"] for c in lc) / 100.0

@@ -258,6 +258,37 @@ class EachCounterHasItsOwnClock(unittest.TestCase):
         self.assertEqual(self.between("$o.tn = ", "Get-NetAdapterStatistics"), "UnixNow; foreach ($st in ")
         self.assertEqual(self.between("Invoke-Bounded 'docker' 'stats", "$o.td = "), ' --no-stream --format "{{json .}}"\'; ')
 
+class ClockLikeTaskManager(unittest.TestCase):
+    """#152: Processor Frequency is the nominal clock (or the P-state's); Task Manager's Speed scales it by
+    % Processor Performance, which goes over 100 in turbo. Fleet shows frequency x performance / % of maximum frequency."""
+
+    def mhz(self, lcpus):
+        r = reading(1000.0, 1.0, 0, 0, 0, 0)
+        r["ncpu"], r["lcpus"] = len(lcpus), [dict(c, n=n) for n, c in enumerate(lcpus)]
+        return [c["mhz"] for c in fl.Machine({"id": "w", "name": "w", "os": "windows"}, 3).derive_windows(r)["lcpus"]]
+
+    def test_turbo_throttled_and_idle_processors(self):
+        self.assertEqual(self.mhz([{"pct": 100.0, "mhz": 3600, "perf": 141.6666666666667, "maxf": 100.0},   # turbo, 5.1 GHz
+                                   {"pct": 30.0, "mhz": 1800, "perf": 40.0, "maxf": 50.0},                   # held at half the base
+                                   {"pct": 1.0, "mhz": 3600, "perf": 100.0, "maxf": 100.0}]),
+                         [5100, 1440, 3600])
+
+    def test_without_the_performance_counter_the_frequency_stands(self):
+        self.assertEqual(self.mhz([{"pct": 5.0, "mhz": 3600}, {"pct": 5.0, "mhz": 3600, "perf": 0.0, "maxf": 0.0},
+                                   {"pct": 5.0, "mhz": 3600, "perf": 120.0}]),
+                         [3600, 3600, 4320])
+
+    def test_the_collector_reads_every_counter_it_needs(self):
+        src = fl.ps_compact(open(os.path.join(LIVE, "collect_windows.ps1"), encoding="utf-8").read())
+        paths = re.search(r"\$paths = @\((.*?)\)\n", src, re.S).group(1)
+        self.assertEqual(re.findall(r"'([^']+)'", paths), [
+            "\\Processor(*)\\% Processor Time", "\\Processor Information(*)\\Processor Frequency",
+            "\\Processor Information(*)\\% Processor Performance", "\\Processor Information(*)\\% of Maximum Frequency",
+            "\\PhysicalDisk(*)\\Disk Bytes/sec", "\\PhysicalDisk(*)\\Disk Read Bytes/sec", "\\PhysicalDisk(*)\\Disk Write Bytes/sec",
+            "\\PhysicalDisk(*)\\% Idle Time", "\\GPU Engine(*)\\Utilization Percentage", "\\GPU Adapter Memory(*)\\Dedicated Usage",
+            "\\GPU Adapter Memory(*)\\Shared Usage", "\\Memory\\Available Bytes"])
+        self.assertIn("mhz = [int]$freq[$_]; perf = [double]$perf[$_]; maxf = [double]$maxf[$_]", src)
+
 
 if __name__ == "__main__":
     unittest.main()

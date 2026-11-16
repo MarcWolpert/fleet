@@ -55,15 +55,18 @@ $o.ncpu = [int]$cs.NumberOfLogicalProcessors
 $o.cpu_model = (@(Get-CimInstance Win32_Processor)[0].Name).Trim()
 $o.mem = @([double]$cs.TotalPhysicalMemory, [double]$os.FreePhysicalMemory * 1024)
 
+# Task Manager's Speed: the frequency scaled by % Processor Performance (over 100 in turbo); fleet_live.py does the sum
 $paths = @('\Processor(*)\% Processor Time', '\Processor Information(*)\Processor Frequency',
+  '\Processor Information(*)\% Processor Performance', '\Processor Information(*)\% of Maximum Frequency',
   '\PhysicalDisk(*)\Disk Bytes/sec', '\PhysicalDisk(*)\Disk Read Bytes/sec', '\PhysicalDisk(*)\Disk Write Bytes/sec', '\PhysicalDisk(*)\% Idle Time',
   '\GPU Engine(*)\Utilization Percentage', '\GPU Adapter Memory(*)\Dedicated Usage', '\GPU Adapter Memory(*)\Shared Usage', '\Memory\Available Bytes')
 $samples = (Get-Counter -Counter $paths -SampleInterval 1 -MaxSamples 1).CounterSamples
-$lcpu = @{}; $freq = @{}; $procs = @{}; $eng = @{}; $pidGpu = @{}; $adMem = @{}; $adShared = @{}; $pd = @{}
+$lcpu = @{}; $freq = @{}; $perf = @{}; $maxf = @{}; $procs = @{}; $eng = @{}; $pidGpu = @{}; $adMem = @{}; $adShared = @{}; $pd = @{}
 foreach ($s in $samples) {
   $parts = $s.Path.Split('\'); $counter = $parts[-1]; $set = $parts[-2]; $inst = $s.InstanceName; $v = $s.CookedValue
   if ($set -like 'processor(*') { if ($inst -ne '_total') { $lcpu[[int]$inst] = $v } }
-  elseif ($set -like 'processor information(*') { if ($inst -match '^(\d+),(\d+)$') { $freq[[int]$Matches[2] + 64 * [int]$Matches[1]] = $v } }
+  elseif ($set -like 'processor information(*') { if ($inst -match '^(\d+),(\d+)$') { $lp = [int]$Matches[2] + 64 * [int]$Matches[1]
+    if ($counter -eq 'processor frequency') { $freq[$lp] = $v } elseif ($counter -eq '% processor performance') { $perf[$lp] = $v } else { $maxf[$lp] = $v } } }
   elseif ($set -like 'physicaldisk(*') {
     if ($inst -eq '_total') { if ($counter -eq 'disk bytes/sec') { $o.diskBps = $v } }
     else { if (-not $pd.ContainsKey($inst)) { $pd[$inst] = @{} }; $pd[$inst][$counter] = $v }
@@ -83,7 +86,7 @@ foreach ($s in $samples) {
   }
   elseif ($set -like 'gpu adapter memory(*') { if ($inst -match 'luid_(0x[0-9a-f]+_0x[0-9a-f]+)_phys') { if ($counter -like 'shared*') { $adShared[$Matches[1]] = $v } else { $adMem[$Matches[1]] = $v } } }
 }
-$o.lcpus = @($lcpu.Keys | Sort-Object | ForEach-Object { @{ n = $_; pct = $lcpu[$_]; mhz = [int]$freq[$_] } })
+$o.lcpus = @($lcpu.Keys | Sort-Object | ForEach-Object { @{ n = $_; pct = $lcpu[$_]; mhz = [int]$freq[$_]; perf = [double]$perf[$_]; maxf = [double]$maxf[$_] } })
 
 # GPUs: real adapters are the ones with dedicated memory, in LUID order; NVIDIA names and totals from nvidia-smi.
 $gpuUtil = @{}
