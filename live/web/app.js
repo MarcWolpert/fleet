@@ -477,7 +477,7 @@ function buildNet(){
     Object.values(ifn).forEach(n => {
       if (!n.dnet) return;
       (m.containers || []).filter(c => (c.networks || '').split(',').includes(n.dnet)).forEach(c => {
-        n.children.push(mkn('net:c:' + m.id + ':' + c.name, {name:c.name, kind:'ncontainer', rx:c.net, tx:0, dnet:n.dnet}));
+        n.children.push(mkn('net:c:' + m.id + ':' + c.name, {name:c.name, kind:'ncontainer', rx:c.rx, tx:c.tx, dnet:n.dnet}));   // received, sent (#177)
       });
     });
     mn.children.sort((a, b) => COLL.compare(a.name, b.name));
@@ -520,7 +520,7 @@ function updateNetTree(){
   if (!netDrawn || html !== netDrawn.html || $('tree').firstElementChild !== netDrawn.first) return renderNetTree(html);
   netRates();
 }
-function netRates(){ document.querySelectorAll('#tree [data-nrate]').forEach(e => { const n = netNodes[e.dataset.nrate]; if (n) e.innerHTML = `<span>↓ ${rateText(n.rx)}</span><span>↑ ${n.kind === 'ncontainer' ? '—' : rateText(n.tx)}</span>`; }); }
+function netRates(){ document.querySelectorAll('#tree [data-nrate]').forEach(e => { const n = netNodes[e.dataset.nrate]; if (n) e.innerHTML = `<span>↓ ${rateText(n.rx)}</span><span>↑ ${rateText(n.tx)}</span>`; }); }
 
 /* ---------- cards ---------- */
 function whereRows(key){
@@ -1159,8 +1159,8 @@ function netView(){
   if (n.kind === 'if'){ facts.push(n.ifkind); if (n.state) facts.push(n.state); if (n.speed && n.speed !== '-1') facts.push(/^\d+$/.test(n.speed) ? n.speed + ' Mb/s' : n.speed); facts.push(...n.addrs); if (n.desc) facts.push(n.desc); if (n.vm) facts.push('VM: ' + n.vm); if (n.dnet) facts.push('Docker network: ' + n.dnet); }
   let graph = '';
   if (n.hrx && n.htx) graph = graphCard('Traffic', '↓ received and ↑ sent, stacked', [{label:'received', color:'var(--t-compose)', data:n.hrx}, {label:'sent', color:'var(--t-vm)', data:n.htx}], graphMax(0, [{data:n.hrx}, {data:n.htx}], 'net'), 'net');
-  const rows = n.children.map(c => `<tr><td><button type="button" class="namebtn" data-netsel="${esc(c.id)}">${esc(c.name)}</button></td><td class="l">${esc(c.kind === 'if' ? c.ifkind : c.kind === 'nmachine' ? statusText({status:c.status}) : c.kind === 'ncontainer' ? 'container' : '')}</td><td class="l">${esc((c.addrs || []).join(', ') || (c.ts && c.ts.ip) || '')}</td><td>${rateText(c.rx)}</td><td>${c.kind === 'ncontainer' ? '—' : rateText(c.tx)}</td></tr>`).join('');
-  return `<div class="hero"><span class="tile fleet">${icon(n.kind === 'tailnet' ? 'net' : n.kind === 'if' ? (n.ifkind === 'bridge' ? 'bridge' : 'nic') : 'desktop')}</span><div><h1>${esc(n.name)}</h1><div class="facts">${facts.filter(Boolean).map(f => `<span>${esc(f)}</span>`).join('')}</div></div>${heroStats([{k:'In', v:rateText(n.rx), s:'received'}, {k:'Out', v:n.kind === 'ncontainer' ? '—' : rateText(n.tx), s:'sent'}])}</div>`
+  const rows = n.children.map(c => `<tr><td><button type="button" class="namebtn" data-netsel="${esc(c.id)}">${esc(c.name)}</button></td><td class="l">${esc(c.kind === 'if' ? c.ifkind : c.kind === 'nmachine' ? statusText({status:c.status}) : c.kind === 'ncontainer' ? 'container' : '')}</td><td class="l">${esc((c.addrs || []).join(', ') || (c.ts && c.ts.ip) || '')}</td><td>${rateText(c.rx)}</td><td>${rateText(c.tx)}</td></tr>`).join('');
+  return `<div class="hero"><span class="tile fleet">${icon(n.kind === 'tailnet' ? 'net' : n.kind === 'if' ? (n.ifkind === 'bridge' ? 'bridge' : 'nic') : 'desktop')}</span><div><h1>${esc(n.name)}</h1><div class="facts">${facts.filter(Boolean).map(f => `<span>${esc(f)}</span>`).join('')}</div></div>${heroStats([{k:'In', v:rateText(n.rx), s:'received'}, {k:'Out', v:rateText(n.tx), s:'sent'}])}</div>`
     + (n.error ? noteHTML(`<b>${esc(statusText({status:n.status}))}.</b> ${esc(n.error)}`, 'warn') : '')
     + graph
     + (rows ? `<section class="card"><div class="card-h"><h2>${n.kind === 'tailnet' ? 'Machines' : n.kind === 'nmachine' ? 'Interfaces' : 'Attached'}</h2></div><div class="scroll-x"><table class="tbl"><thead><tr><th>Name</th><th style="text-align:left">Kind</th><th style="text-align:left">Address</th><th>In</th><th>Out</th></tr></thead><tbody>${rows}</tbody></table></div></section>` : '');
