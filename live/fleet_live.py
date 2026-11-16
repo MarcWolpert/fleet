@@ -1249,7 +1249,7 @@ class Fleet:
             if mm:
                 listed.add(v["name"])
                 sub = self.machine_spec(mm, record, vm_hostside={"u": v["u"], "vcpus": 0, "mem": 0}, vm_parent=m)
-                sub["hostside"] = v["u"]
+                sub["hostside"] = self.leaf(sub["id"] + "/__hostside", v["u"], record)  # its share of this host, as the host sees it
                 vm_ids[v["name"]] = sub["id"]
                 spec["vms"].append(sub)
             else:
