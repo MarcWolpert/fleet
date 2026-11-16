@@ -4,10 +4,10 @@
 # Runs as a loop: one compact JSON line every $FleetInterval seconds (prepended
 # by the collector) until the SSH connection closes. The first line also carries
 # the logical-processor topology (P/E efficiency class, L3 groups); scheduled
-# tasks and adapter addresses refresh every 10th line.
+# tasks, adapter addresses and the GPU adapter list refresh every 10th line.
 $ErrorActionPreference = 'SilentlyContinue'; $ProgressPreference = 'SilentlyContinue'
 if (-not $FleetInterval) { $FleetInterval = 3 }
-$loop = 0; $taskCache = @(); $addrCache = @{}; $cmdCache = @{}; $diskInfo = @{}; $pnetCache = @{}
+$loop = 0; $taskCache = @(); $addrCache = @{}; $cmdCache = @{}; $diskInfo = @{}; $pnetCache = @{}; $adapters = @()
 # External programs get 8 seconds (like collect_linux.py's run(..., timeout=8)) and are killed after that: a wedged
 # WSL service, Docker engine or GPU driver must not hold up the loop, or the checks that end it never run again.
 function Start-Bounded($exe, $argline) {
@@ -38,6 +38,52 @@ for ($k = 0; $k -lt 8 -and -not $sshd; $k++) {
   $pn = (Get-Process -Id $pp -ErrorAction SilentlyContinue).ProcessName
   if ($pn -like 'sshd*') { $sshd = $pp } else { $anc = $pp }
 }
+# The GPU counters know adapters only by LUID; DXGI's adapter list gives each LUID its name and VRAM size.
+try { Add-Type -TypeDefinition @'
+using System; using System.Runtime.InteropServices; using System.Collections.Generic;
+public static class FleetDxgi {
+  [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+  public struct Desc {   // DXGI_ADAPTER_DESC1
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)] public string Description;
+    public uint VendorId, DeviceId, SubSysId, Revision;
+    public UIntPtr DedicatedVideoMemory, DedicatedSystemMemory, SharedSystemMemory;
+    public uint LuidLow; public int LuidHigh; public uint Flags;
+  }
+  // Only the methods called are typed; the others keep their vtable slots (IDXGIObject 4, IDXGIAdapter 3, IDXGIFactory 5).
+  [ComImport, Guid("29038f61-3839-4626-91fd-086879011a05"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  public interface IAdapter1 {
+    void SetPrivateData(); void SetPrivateDataInterface(); void GetPrivateData(); void GetParent();
+    void EnumOutputs(); void GetDesc(); void CheckInterfaceSupport();
+    [PreserveSig] int GetDesc1(out Desc desc);
+  }
+  [ComImport, Guid("770aae78-f26f-4dba-a829-253c83d1b387"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  public interface IFactory1 {
+    void SetPrivateData(); void SetPrivateDataInterface(); void GetPrivateData(); void GetParent();
+    void EnumAdapters(); void MakeWindowAssociation(); void GetWindowAssociation(); void CreateSwapChain(); void CreateSoftwareAdapter();
+    [PreserveSig] int EnumAdapters1(uint index, out IAdapter1 adapter);
+  }
+  [DllImport("dxgi.dll")]
+  static extern int CreateDXGIFactory1(ref Guid riid, [MarshalAs(UnmanagedType.IUnknown)] out object factory);
+  // Returns "luid|dedicated VRAM bytes|name" for every adapter, the LUID written as the GPU counters write it.
+  public static string[] Read() {
+    var res = new List<string>();
+    Guid iid = typeof(IFactory1).GUID; object o;
+    if (CreateDXGIFactory1(ref iid, out o) != 0) return res.ToArray();
+    var f = (IFactory1)o;
+    try {
+      IAdapter1 a;
+      for (uint i = 0; f.EnumAdapters1(i, out a) == 0; i++) {
+        try {
+          Desc d;
+          if (a.GetDesc1(out d) == 0)
+            res.Add(string.Format("0x{0:x8}_0x{1:x8}|{2}|{3}", d.LuidHigh, d.LuidLow, (ulong)d.DedicatedVideoMemory, d.Description));
+        } finally { Marshal.ReleaseComObject(a); }
+      }
+    } finally { Marshal.ReleaseComObject(f); }
+    return res.ToArray();
+  }
+}
+'@ } catch {}
 $born = Get-Date
 while ($true) {
 if ($lifeline -and $lifeline.IsCompleted) { exit 0 }
@@ -97,7 +143,8 @@ foreach ($s in $samples) {
 }
 $o.lcpus = @($lcpu.Keys | Sort-Object | ForEach-Object { @{ n = $_; pct = $lcpu[$_]; mhz = [int]$freq[$_]; perf = [double]$perf[$_]; maxf = [double]$maxf[$_] } })
 
-# GPUs: real adapters are the ones with dedicated memory, in LUID order; NVIDIA names and totals from nvidia-smi.
+# GPUs: real adapters are the ones with dedicated memory in use, listed in LUID order; Fleet names and orders them by
+# LUID (DXGI's adapter list) and pairs nvidia-smi's rows by name.
 $gpuUtil = @{}
 foreach ($k in $eng.Keys) { $l = $k.Split('|')[0]; if ($eng[$k] -gt [double]$gpuUtil[$l]) { $gpuUtil[$l] = $eng[$k] } }
 # each engine type (3d, copy, videodecode, ...) at its busiest engine, per adapter, like Task Manager
@@ -106,6 +153,10 @@ foreach ($k in $eng.Keys) { $p = $k.Split('|'); $tk = $p[0] + '|' + $p[2]; if ($
 $o.gpus = @($adMem.Keys | Where-Object { $adMem[$_] -gt 0 } | Sort-Object | ForEach-Object {
   $l = $_; $e = @{}; foreach ($tk in $engT.Keys) { $p = $tk.Split('|', 2); if ($p[0] -eq $l) { $e[$p[1]] = $engT[$tk] } }
   @{ luid = $l; util = [double]$gpuUtil[$l]; dedicated = $adMem[$l]; shared = [double]$adShared[$l]; eng = $e } })
+# again when an adapter is new (a driver restart gives it a new LUID)
+if ($loop % 10 -eq 0 -or @($o.gpus | Where-Object { $adapters.luid -notcontains $_.luid }).Count) {
+  $adapters = @(try { [FleetDxgi]::Read() | ForEach-Object { $f = $_.Split('|', 3); @{ luid = $f[0]; vram = [double]$f[1]; name = $f[2] } } } catch {}) }
+$o.adapters = $adapters
 # NVIDIA's own numbers; drivers without the newer fields fail the whole query, so fall back to the basic one
 $nv = @(Invoke-Bounded 'nvidia-smi' '--query-gpu=index,name,utilization.gpu,memory.used,memory.total,utilization.memory,temperature.gpu,power.draw,power.limit,clocks.gr,clocks.max.gr,clocks.mem,fan.speed,utilization.encoder,utilization.decoder --format=csv,noheader,nounits')
 if (-not ($nv | Where-Object { $_ -match ',' })) { $nv = @(Invoke-Bounded 'nvidia-smi' '--query-gpu=index,name,utilization.gpu,memory.used,memory.total --format=csv,noheader,nounits') }

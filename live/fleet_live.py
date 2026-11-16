@@ -245,8 +245,8 @@ def stop_collectors(fleet):
 def ps_compact(script):
     """A PowerShell script without full-line comments, blank lines or indentation: -EncodedCommand doubles
     its size (UTF-16) and grows it by a third (base64), and a Windows command line holds 32,767 characters.
-    (The collector's one here-string is C#, where indentation doesn't matter and no line starts with #;
-    its closing '@ must start a line, which stripping keeps true.)"""
+    (The collector's here-strings are C#, where indentation doesn't matter and no line starts with #;
+    each closing '@ must start a line, which stripping keeps true.)"""
     return "\n".join(l.strip() for l in script.splitlines() if l.strip() and not l.strip().startswith("#"))
 
 
@@ -314,6 +314,7 @@ class Machine:
         self.lock = threading.Lock()
         self.proc = None
         self.last_ok = 0.0          # when the last good reading arrived
+        self.stall = max(60.0, 10.0 * interval)   # a collector session that brings nothing for this long is ended
         self.wake = threading.Event()  # Retry now
         self.on = threading.Event()    # connect (set) or stay disconnected (clear)
         self.on.set()
@@ -328,16 +329,18 @@ class Machine:
                     self.view, self.status, self.error, self.fresh = None, "disabled", "", False
                 self.on.wait()
                 backoff = 5
+            began = self.last_ok
             try:
                 if self.cfg.get("kind") == "local":
                     self.local_loop()
                 else:
                     self.ssh_loop()
-                backoff = 5
             except Exception as e:  # never die; show it
                 self.set_status("offline", "collector error: %s" % e)
             if not self.on.is_set():
                 continue
+            if self.last_ok > began:
+                backoff = 5   # that session brought a reading: start over; a machine that's down or refuses the key waits longer each time
             self.wake.wait(backoff)
             self.wake.clear()
             backoff = min(60, backoff * 2)
@@ -377,7 +380,7 @@ class Machine:
 
     def ssh_loop(self):
         cmd, stdin = self.ssh_cmd()
-        self.set_status("connecting")
+        self.set_status("connecting", self.error)   # the last failure stays on the offline card until a reading or the next failure
         p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         self.proc = p
         if not self.on.is_set():   # turned off while it was starting
@@ -390,6 +393,15 @@ class Machine:
                 p.stdin.close()  # Linux: the script itself; python3 - runs it at EOF
         err_tail = collections.deque(maxlen=5)
         threading.Thread(target=lambda: [err_tail.append(l.decode("utf-8", "replace").strip()) for l in p.stderr], daemon=True).start()
+        heard, stalled, bad = [time.time()], [], [False]   # when the last good reading came; whether the watchdog ended the session; bad readings since
+        def watchdog():   # a hung docker, wsl.exe or nvidia-smi call leaves SSH up (sshd answers keepalives) and the read blocked
+            while p.poll() is None:
+                if time.time() - heard[0] > self.stall:
+                    stalled.append(True)
+                    p.kill()
+                    return
+                time.sleep(min(1.0, self.stall / 4))
+        threading.Thread(target=watchdog, daemon=True).start()
         for line in p.stdout:
             line = line.strip()
             if not line:
@@ -406,11 +418,17 @@ class Machine:
                     view = self.derive_generic(raw) if self.cfg.get("os") == "macos" else self.derive_linux(raw)
             except Exception as e:
                 err_tail.append("bad reading: %s" % e)
+                bad[0] = True   # not a reading: the deadline keeps running
                 continue
             if view:
+                heard[0], bad[0] = time.time(), False
                 self.got(view)
         p.wait()
-        msg = " ".join(x for x in err_tail if x) or "connection closed (exit %s)" % p.returncode
+        tail = " ".join(dict.fromkeys(x for x in err_tail if x))
+        if stalled:
+            msg = ("no good reading in %g s" if bad[0] else "timed out: no reading in %g s") % self.stall + ("; " + tail if tail else "")
+        else:
+            msg = tail or "connection closed (exit %s)" % p.returncode
         self.set_status("offline", msg[:300])
 
     def local_loop(self):
@@ -730,28 +748,36 @@ class Machine:
 
     # ------------------------------------------------------------ windows
     def windows_gpus(self, r):
-        """Adapters in LUID order (it stays put while VRAM use moves), each with its engines by type (the GPU
-        Engine counters), dedicated and shared memory, and NVIDIA's own numbers from the nvidia-smi row whose
-        memory.used is that adapter's dedicated usage (WDDM reports one number to both)."""
+        """Adapters by VRAM size, largest first, each named by its LUID (DXGI's adapter list), with its engines by
+        type (the GPU Engine counters), dedicated and shared memory, and NVIDIA's own numbers from the nvidia-smi
+        row of the same name (two cards of one model pair in order: nvidia-smi's index, DXGI's)."""
         nv = [[x.strip() for x in line.split(",")] for line in r.get("nvidia", []) if line and line.count(",") >= 4]
-        others = [n for n in r.get("videoNames", []) if not any(n == x[1] for x in nv)]
         num = lambda x: float(x) if re.match(r"^-?\d+(\.\d+)?$", x or "") else None
-
-        def luid_key(g):
-            try:
-                return tuple(int(x, 16) for x in g["luid"].split("_"))
-            except (KeyError, AttributeError, ValueError):
-                return (float("inf"),)
-        adapters = sorted(r.get("gpus", []), key=luid_key)
-        rows, pairs = {}, sorted((abs((num(x[3]) or 0) * MIB - float(g.get("dedicated") or 0)), j, i)
-                                 for j, x in enumerate(nv) for i, g in enumerate(adapters))
-        for _, j, i in pairs:
-            if i not in rows and j not in rows.values():
-                rows[i] = j
+        key = lambda s: tuple(int(x, 16) for x in s.split("_")) if re.match(r"^0x[0-9a-fA-F]+_0x[0-9a-fA-F]+$", str(s)) else str(s).lower()
+        dx = {}   # LUID -> (DXGI's position, name, VRAM bytes)
+        for i, a in enumerate(r.get("adapters", [])):
+            dx.setdefault(key(a.get("luid")), (i, str(a.get("name") or ""), float(a.get("vram") or 0)))
+        info = lambda g: dx.get(key(g.get("luid")))
+        lone = len(r.get("gpus", [])) == 1 and not dx   # no adapter list: a lone adapter can only be the one nvidia-smi or Windows names
+        free = list(nv)
+        def nv_row(name):
+            for x in free:
+                if x[1].lower() == name.lower():
+                    free.remove(x)
+                    return x
+            return []
         gpus, luid_idx = [], {}
-        for i, g in enumerate(adapters):
+        order = lambda g: (-info(g)[2], info(g)[0], "") if info(g) else (0.0, len(dx), str(g.get("luid")).lower())
+        for i, g in enumerate(sorted(r.get("gpus", []), key=order)):
             luid_idx[g["luid"]] = i
-            row = nv[rows[i]] if i in rows else []
+            a, videos = info(g), r.get("videoNames", [])
+            if a:
+                name, size, row = a[1] or "GPU %d" % i, a[2], nv_row(a[1])
+            elif lone:
+                row = nv[0] if len(nv) == 1 else []
+                name, size = row[1] if row else videos[0] if len(videos) == 1 else "GPU 0", 0.0
+            else:
+                name, size, row = "GPU %d" % i, 0.0, []
             total = num(row[4]) if len(row) > 4 else None
             m = {"util": min(100.0, g.get("util", 0))}
             for e, v in (g.get("eng") or {}).items():
@@ -764,8 +790,8 @@ class Machine:
                 m["vram"] = g["dedicated"]
             if g.get("shared") is not None:
                 m["shared"] = g["shared"]
-            if total:
-                lim["vram"] = total * MIB
+            if total or size:
+                lim["vram"] = total * MIB if total else size
             if len(row) >= 15:   # index,name,util,mem used,total,mem util,temp,power,power limit,clock,max clock,mem clock,fan,enc,dec
                 for k, j in (("memctl", 5), ("temp", 6), ("power", 7), ("clock", 9), ("memclock", 11), ("fan", 12)):
                     if num(row[j]) is not None:
@@ -778,9 +804,8 @@ class Machine:
                         lim[k] = num(row[j])
             for k in ("3d", "copy", "encode", "decode"):   # Task Manager's four, there even when idle
                 m.setdefault(k, 0.0)
-            name = row[1] if row else others.pop(0) if others else "GPU %d" % i
-            gpus.append({"name": name, "mem": "%d GB VRAM" % round(total / 1024) if total else "",
-                         "util": m["util"], "m": m, "lim": lim})
+            vram = lim.get("vram", 0)
+            gpus.append({"name": name, "mem": "%d GB VRAM" % round(vram / GB) if vram >= GB / 2 else "", "util": m["util"], "m": m, "lim": lim})
         gpu_by_pid = {}
         for pid, luid, pct in r.get("gproc", []):
             if luid in luid_idx:
@@ -788,7 +813,7 @@ class Machine:
         return gpus, gpu_by_pid
 
     def derive_windows(self, r):
-        for k in ("lcpus", "topo", "gpus", "nvidia", "videoNames", "gproc", "procs", "ifs", "wsl", "containers", "dstats", "tasks", "disks"):
+        for k in ("lcpus", "topo", "gpus", "adapters", "nvidia", "videoNames", "gproc", "procs", "ifs", "wsl", "containers", "dstats", "tasks", "disks"):
             r[k] = aslist(r.get(k))
         for a in r["ifs"]:
             a["addrs"] = [x for x in aslist(a.get("addrs")) if isinstance(x, str) and x]  # an empty list arrives as {}
@@ -847,6 +872,9 @@ class Machine:
                 s = json.loads(line)
             except Exception:
                 continue
+            cpu = s.get("CPUPerc", "0%").rstrip("%")
+            if not re.match(r"^\d+(\.\d+)?$", cpu):
+                continue   # "--": docker stats couldn't read it in time; idle this reading, its I/O counters wait for the next
             nio = s.get("NetIO", "0B / 0B").split("/")
             bio = s.get("BlockIO", "0B / 0B").split("/")
             stats[s.get("ID", "")[:12]] = (docker_pct(s.get("CPUPerc")),
@@ -859,8 +887,8 @@ class Machine:
                 continue
             labels = dict(kv.split("=", 1) for kv in c.get("Labels", "").split(",") if "=" in kv)
             cid = c.get("ID", "")[:12]
-            st = stats.get(cid, (0, 0, 0, 0))
-            u = [st[0], st[1], 0.0, self.rate("cb." + cid, st[2], td) / MB, self.rate("cn." + cid, st[3], td) / MB]
+            st = stats.get(cid)
+            u = [st[0], st[1], 0.0, self.rate("cb." + cid, st[2], td) / MB, self.rate("cn." + cid, st[3], td) / MB] if st else [0.0] * 5
             containers.append({"id": cid, "name": c.get("Names", ""), "image": c.get("Image", ""), "status": c.get("Status", ""),
                                "project": labels.get("com.docker.compose.project", ""), "service": labels.get("com.docker.compose.service", ""),
                                "file": labels.get("com.docker.compose.project.config_files", ""), "networks": c.get("Networks", ""), "u": u})
@@ -1607,6 +1635,7 @@ class Fleet:
         if not view or not spec or not m.fresh:   # not read yet (connecting, or just restarted): the page keeps what it shows
             return {"procs": [], "ready": m.status == "disabled"}
         own = spec.get("procs_owner", {"cont": {}, "vm": {}})
+        num = lambda x: x if isinstance(x, (int, float)) and not isinstance(x, bool) else 0   # what a host sends is data: numbers only
         out = []
         for p in view["procs"]:
             o = p[11]
@@ -1620,7 +1649,7 @@ class Fleet:
                 node = mid + "/base"
             else:
                 node = mid + "/base"
-            out.append([p[0], p[2], p[3], p[4], round(p[5], 4), round(p[6], 5), round(p[7], 4), round(p[8], 2), p[9], p[10], node, p[1],
+            out.append([p[0], p[2], p[3], p[4], round(p[5], 4), round(p[6], 5), round(p[7], 4), round(p[8], 2), num(p[9]), p[10], node, num(p[1]),
                         p[12] if len(p) > 12 else -1, p[13] if len(p) > 13 else [], p[14] if len(p) > 14 else [],
                         p[15] if len(p) > 15 else [], round(p[16], 4) if len(p) > 16 else -1])
         # p[13]: the GPUs the process uses (positions in this machine's gpus); gpu_procs says whether the
