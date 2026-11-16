@@ -46,7 +46,7 @@ plus an app window.
 | ✅ | Logical processors: one live graph per CPU, grouped by CCD, P/E cores or Apple core clusters |
 | ✅ | Network tree: tailnet → machines → interfaces and bridges → VMs and containers, with traffic on each |
 | ✅ | Pinned spaces: pin any machine, VM, project or container from the tree; **All machines** is always there |
-| ✅ | Divisions: drag a box over items at the same level in either tree (or drag a row by its handle) to group them into a division, with a coloured outline and a name (right-click to rename, recolour or disband); Pins only keeps its own; click empty space for the all-up view |
+| ✅ | Divisions: drag a box over items at the same level in either tree (or drag a row by its handle) to group them into a division, with a coloured outline and a name (right-click to rename, recolour or disband); pin a division as a space from **+** (a division of machines gets its own All machines view); Pins only keeps its own; click empty space for the all-up view |
 | ✅ | Offline machines explain why in plain language, with the steps to fix it and Retry; reconnecting machines keep their last reading |
 | ✅ | Settings: add and edit machines, test a connection, pick the terminal app and refresh rate |
 | ✅ | Open terminal: ssh to any machine, or a shell inside any container, in your preferred terminal |
