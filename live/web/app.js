@@ -1364,7 +1364,7 @@ function renderMain(){
   if (ends){ const x = selAt(main, ends[0]), y = selAt(main, ends[1]); if (x && y) try { sel.setBaseAndExtent(x[0], x[1], y[0], y[1]); } catch (e) {} }
   if (refocus){ const all = main.querySelectorAll(refocus), e = all[refocusAt] || all[0]; if (e){ e.focus({preventScroll:true}); if (selStart != null && e.setSelectionRange) try { e.setSelectionRange(selStart, selStop, selDir); } catch (x) {} } }
 }
-function renderAll(){ renderSpaces(); renderToolbar(); renderTree(); renderMain(); refreshTip(); }
+function renderAll(){ renderSpaces(); renderToolbar(); renderTree(); renderMain(); refreshTip(); renderFold(); }
 // Scrolled panes, each known by what it is (not where it sits in a list, which changes when a table comes or goes)
 const SCROLLERS = '.split > .wrap, .dpanel, .pscroll, .scroll-x';
 function scrollKey(e){
@@ -3129,6 +3129,39 @@ function vmInspectPanel(p){
     + `<span class="sub"><code>docker exec</code> runs the same inspector in the process’s own container. It needs python3 there.</span></div>`
     + (node && termOk(node) ? `<div>${termBtn(node)}</div>` : '') + `</div></div>`;
 }
+
+// Folding the whole tree (#333), from its own row above Auto and Add a machine. ~ collapses every node and group and
+// pushes what was open on a stack (one per tree, kept); pressed again it pops that back, whatever you opened since.
+// F~ (force) opens every node at every depth, or closes every one when all are open, and leaves the stack alone.
+function foldNodes(){ return Object.values(S.tree === 'network' ? netNodes : nodes).filter(n => n.children && n.children.length); }
+function foldIsOpen(n){ return S.tree === 'network' ? netOpen(n) : isOpen(n); }
+function foldGroups(){ const net = S.tree === 'network'; return Object.entries(PREFS.tgroups || {}).filter(([k]) => k.startsWith('network|') === net).flatMap(([, l]) => (l || []).map(g => g.id)); }
+function foldStack(){ const k = S.tree === 'network' ? 'network' : 'machines'; S.foldStack = Object.assign({}, S.foldStack); return S.foldStack[k] = S.foldStack[k] || []; }
+function foldAll(open){
+  const o = Object.assign({}, S.open); foldNodes().forEach(n => { o[n.id] = open; }); S.open = o;
+  const g = Object.assign({}, S.gfold); foldGroups().forEach(id => { g[id] = !open; }); S.gfold = g;
+}
+function foldPress(which){
+  if (which === 'F~'){ foldAll(!(foldNodes().every(foldIsOpen) && foldGroups().every(id => !(S.gfold && S.gfold[id])))); }
+  else {
+    const st = foldStack();
+    if (st.length){ const was = st.pop(); S.open = Object.assign({}, S.open, was.open); S.gfold = Object.assign({}, S.gfold, was.gfold); }
+    else {
+      st.push({open:Object.fromEntries(foldNodes().map(n => [n.id, foldIsOpen(n)])), gfold:Object.fromEntries(foldGroups().map(id => [id, !!(S.gfold && S.gfold[id])]))});
+      foldAll(false);
+    }
+  }
+  save(); renderTree(); renderFold();
+}
+function renderFold(){
+  const t = $('treefold'); if (!t) return;
+  const b = t.querySelector('[data-fold="~"]'), f = t.querySelector('[data-fold="F~"]'), back = foldStack().length > 0;
+  const allOpen = foldNodes().every(foldIsOpen) && foldGroups().every(id => !(S.gfold && S.gfold[id]));
+  b.setAttribute('aria-pressed', String(back));
+  b.setAttribute('aria-label', back ? 'Expand all: back to what was open before' : 'Collapse all (what’s open is kept for ~ again)'); b.title = b.getAttribute('aria-label');
+  f.setAttribute('aria-label', allOpen ? 'Force collapse all: every node, at every depth' : 'Force expand all: every node, at every depth'); f.title = f.getAttribute('aria-label');
+}
+document.addEventListener('click', e => { const b = e.target.closest('#treefold [data-fold]'); if (b) foldPress(b.dataset.fold); });
 
 // The super button (#331): Fleet's logo at the top right opens Go to anything, its key in the platform's notation
 (function(){ const b = document.querySelector('[data-super]'); if (!b) return;

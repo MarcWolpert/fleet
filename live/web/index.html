@@ -757,6 +757,10 @@ tr.fmatch>td{background:color-mix(in srgb, var(--stale) 16%, transparent)!import
 .prow2 .pv{font:500 12px var(--mono);color:var(--ink);text-align:right}
 
 /* + Add a machine: the foot of the tree panel, and its dialog */
+.treefold{flex:none;display:flex;gap:6px;align-items:center;padding:6px 12px;border-top:1px solid var(--line)}
+.treefold button{min-width:34px;height:26px;padding:0 8px;border-radius:7px;border:1px solid var(--line-2);background:none;color:var(--ink-2);font:600 13px/1 var(--mono);cursor:pointer}
+.treefold button:hover{color:var(--ink);background:var(--hover)}
+.treefold button[aria-pressed="true"]{background:var(--sel);color:var(--ink);border-color:color-mix(in srgb,var(--accent) 45%,transparent)}
 .side-foot{flex:none;padding:10px 12px;border-top:1px solid var(--line);display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 button.sdot{border:0;padding:0;cursor:pointer;position:relative;font:inherit}
 button.sdot::after{content:'';position:absolute;inset:-7px}
@@ -842,6 +846,7 @@ html.hc .sub,html.hc .facts{color:var(--ink-2)}
       <div class="tfind" id="tfind" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg><input type="search" id="tfq" placeholder="Filter the tree" aria-label="Filter the tree" autocomplete="off" spellcheck="false"></div>
       <div class="tree" id="tree" role="tree"></div>
       <div id="side-note"></div>
+      <div class="treefold" id="treefold" role="group" aria-label="Fold the whole tree"><button type="button" data-fold="~" aria-pressed="false">~</button><button type="button" data-fold="F~">F~</button></div>
       <div class="side-foot"><span id="autoconn"></span><button type="button" class="btn addm-btn" style="margin-left:auto" data-addmachinedlg="1" aria-haspopup="dialog"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>Add a machine</button></div>
     </aside>
     <div class="mcol" id="mcol"><main id="main"></main></div>

@@ -80,6 +80,9 @@ The terminals are there from the start: a tab for each connected computer, each 
 opens one on any machine or container; the button left of the tabs minimizes them (they keep running), and the one at
 the bottom left of the pane, or ⌘J, brings them back.
 
+**Folding the tree.** The row above Auto and Add a machine folds the whole tree: **~** collapses everything and keeps
+what was open, and pressed again brings exactly that back; **F~** opens every node at every depth, or closes them all.
+
 **Spaces and groups.** Pin any machine, VM, project, container or group to the space bar. Drag a box over
 items at the same level (or drag a row by its handle) to group them: a **fleet** of machines, a
 **flotilla** of VMs, a **division** of containers, a **section** of cron jobs, a **squadron** of Compose
