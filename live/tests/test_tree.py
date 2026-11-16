@@ -441,6 +441,19 @@ class GoneNodesAreForgotten(TreeTest):
         self.assertEqual(snapshot(), before)
         self.assertEqual(self.saved_keys(), self.keys("nas", "veth1a2b3"))
 
+    def test_a_vms_host_side_history_is_kept_while_its_host_is_not_live(self):
+        # #206's history of what the host gives a VM is shown only under a live host (#163); it waits like the host's own
+        f = make_fleet(HOST_CFG, VM_CFG)
+        host = give(f, "nas", host_view([vm("win-vm", [3.5, 16.0, 0, 2.0, 1.0])]))
+        give(f, "win-vm", view(os="Windows"))
+        f.record_pass()
+        before = snapshot()["win-vm/hostside"]
+        host.status = "offline"
+        for _ in range(25):
+            f.record_pass()
+        self.assertEqual(snapshot().get("win-vm/hostside"), before)
+        self.assertIn("win-vm/hostside", self.saved_keys())
+
     def test_dead_keys_restored_from_an_old_state_file_go_at_the_first_sweep(self):
         f = make_fleet(HOST_CFG, {"id": "lx", "name": "lx", "ssh": "lx", "os": "linux"})
         give(f, "nas", self.with_veth(1.0, "veth1a2b3"))

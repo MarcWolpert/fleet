@@ -1578,6 +1578,8 @@ class Fleet:
                 sub = self.machine_spec(mm, record, vm_hostside={"u": v["u"], "cap": vm_cap(view, v)} if live else None, vm_parent=m if live else None)
                 if live:   # what the host gives it (its QEMU process), as a history
                     sub["hostside"] = self.leaf(sub["id"] + "/hostside", v["u"], own)
+                elif record:   # not shown while the host isn't live, and kept like the host's own history
+                    HIST.touch(sub["id"] + "/hostside")
                 vm_ids[v["name"]] = sub["id"]
                 spec["vms"].append(sub)
             else:
