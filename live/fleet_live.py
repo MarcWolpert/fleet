@@ -1426,6 +1426,134 @@ def write_config(path, cfg):
     os.replace(tmp, path)
 
 
+# ---------- one process, looked at closely (the Details drop-down) ----------
+# On demand only: the page asks while a process is open, at most once a second per process. Linux and
+# Windows hosts run inspect_linux.py / inspect_windows.ps1 over SSH (read-only, ~1.5 s of sampling);
+# this Mac is read with ps and lsof.
+INSPECT_SECS = 1.5
+INSPECT_LOCK = threading.Lock()
+INSPECT_CACHE = {}   # (machine, pid) -> (time, result)
+INSPECT_BUSY = {}    # (machine, pid) -> Event while a look is running
+
+
+def inspect_mac(pid):
+    def run(*cmd):
+        try:
+            return subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10).stdout.decode("utf-8", "replace")
+        except Exception:
+            return ""
+    head = run("ps", "-o", "pid=,ppid=,user=,nice=,pri=,rss=,vsz=,time=,state=,lstart=", "-p", str(pid)).split()
+    if not head:
+        return {"pid": pid, "gone": True}
+    cmdline = run("ps", "-o", "command=", "-p", str(pid)).strip()
+    name = run("ps", "-o", "comm=", "-p", str(pid)).strip().rsplit("/", 1)[-1]
+    def cputime():
+        t = run("ps", "-o", "time=", "-p", str(pid)).strip()
+        try:
+            parts = [float(x) for x in t.replace("-", ":").split(":")]
+            v = 0.0
+            for x in parts:
+                v = v * 60 + x
+            return v
+        except Exception:
+            return 0.0
+    c0, t0 = cputime(), time.time()
+    counts, samples = {}, 0
+    end = t0 + INSPECT_SECS
+    while True:
+        # one line per thread; the state's first letter: R running, U uninterruptible (disk), S sleeping, I idle, T stopped
+        lines = run("ps", "-M", "-p", str(pid)).splitlines()
+        col = lines[0].find("STAT") if lines else -1
+        for line in lines[1:] if col >= 0 else []:
+            k = {"R": "cpu", "U": "disk", "S": "sleep", "I": "idle", "T": "stopped"}.get(line[col:col + 1], "other")
+            counts[k] = counts.get(k, 0) + 1
+        samples += 1
+        if time.time() >= end:
+            break
+        time.sleep(0.12)
+    dt = max(0.05, time.time() - t0)
+    files, conns, fds = [], [], 0
+    for line in run("lsof", "-n", "-P", "-p", str(pid)).splitlines()[1:]:
+        parts = line.split(None, 8)
+        if len(parts) < 9:
+            continue
+        fds += parts[3][:1].isdigit()
+        typ, last = parts[4], parts[8]
+        if typ in ("IPv4", "IPv6"):
+            proto = "tcp" if "TCP" in line else "udp"
+            st = last.rsplit("(", 1)[1].rstrip(")").lower().replace("listen", "listening") if "(" in last else ("listening" if "->" not in last else "connected")
+            name_ = last.split(" (")[0]
+            local, _, remote = name_.partition("->")
+            conns.append({"proto": proto, "local": local, "remote": remote, "state": st})
+        elif typ == "REG" and parts[3][:1].isdigit() and last.startswith("/") and len(files) < 20 and not last.startswith(("/System/", "/usr/lib/", "/dev/")):
+            files.append(last)
+    threads_n = max(0, len(run("ps", "-M", "-p", str(pid)).splitlines()) - 1)
+    started = 0.0
+    try:
+        started = time.mktime(time.strptime(" ".join(head[9:14]), "%a %b %d %H:%M:%S %Y"))
+    except Exception:
+        pass
+    rss = int(head[5]) * 1024 if head[5].isdigit() else 0
+    return {"pid": pid, "name": name, "state": head[8][:1], "ppid": int(head[1]), "nice": int(head[3]) if head[3].lstrip("-").isdigit() else 0,
+            "priority": int(head[4]) if head[4].isdigit() else 0, "threads_n": threads_n, "started": started, "last_cpu": -1,
+            "user": head[2], "cmdline": cmdline, "exe": cmdline.split(" ")[0], "cwd": "", "affinity": "",
+            "cpu": {"user": max(0.0, cputime() - c0) / dt, "system": None},
+            "mem": {"rss": rss, "virt": int(head[6]) * 1024 if head[6].isdigit() else 0},
+            "io": None, "waits": counts, "samples": samples, "dt": dt, "threads": [], "fds": fds, "fd_limit": -1,
+            "files": files, "conns": conns[:40], "conns_n": len(conns), "cgroup": None, "cache": None,
+            "cache_error": "macOS only lets root tools read CPU cache counters"}
+
+
+def inspect_process(m, pid):
+    key = (m.id, pid)
+    with INSPECT_LOCK:
+        c = INSPECT_CACHE.get(key)
+        if c and time.time() - c[0] < 1.0:
+            return c[1]
+        ev = INSPECT_BUSY.get(key)
+        mine = ev is None
+        if mine:
+            ev = INSPECT_BUSY[key] = threading.Event()
+    if not mine:   # someone is already looking: share their answer
+        ev.wait(30)
+        with INSPECT_LOCK:
+            c = INSPECT_CACHE.get(key)
+        return c[1] if c else {"pid": pid, "error": "no answer"}
+    cfg = m.cfg
+    try:
+        if cfg.get("kind") == "local" and sys.platform == "darwin":
+            out = inspect_mac(pid)
+        else:
+            if cfg.get("kind") == "local":
+                cmd, stdin = [sys.executable, os.path.join(HERE, "inspect_linux.py"), str(pid), str(INSPECT_SECS)], None
+            elif cfg.get("os") == "windows":
+                script = "$FleetPid=%d\n$FleetSecs=%s\n" % (pid, INSPECT_SECS) + open(os.path.join(HERE, "inspect_windows.ps1"), encoding="utf-8").read()
+                enc = base64.b64encode(script.encode("utf-16-le")).decode()
+                cmd, stdin = ["ssh"] + SSH_MARK + [cfg["ssh"], "powershell -NoProfile -NonInteractive -EncodedCommand " + enc], None
+            else:
+                cmd = ["ssh"] + SSH_MARK + [cfg["ssh"], "python3 - %d %s" % (pid, INSPECT_SECS)]
+                stdin = open(os.path.join(HERE, "inspect_linux.py"), "rb").read()
+            r = subprocess.run(cmd, input=stdin, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+            lines = [l for l in r.stdout.decode("utf-8", "replace").splitlines() if l.startswith("{")]
+            if lines:
+                out = json.loads(lines[-1])
+            else:
+                err = r.stderr.decode("utf-8", "replace").strip().splitlines()
+                out = {"pid": pid, "error": (err[-1] if err else "no answer from %s" % m.name)[:300]}
+    except subprocess.TimeoutExpired:
+        out = {"pid": pid, "error": "%s took too long to answer" % m.name}
+    except Exception as e:
+        out = {"pid": pid, "error": str(e)[:300]}
+    out["machine"], out["t"] = m.id, time.time()
+    with INSPECT_LOCK:
+        INSPECT_CACHE[key] = (time.time(), out)
+        for k in [k for k, v in INSPECT_CACHE.items() if time.time() - v[0] > 120]:
+            del INSPECT_CACHE[k]
+        INSPECT_BUSY.pop(key, None)
+    ev.set()
+    return out
+
+
 def test_connection(dest, os_name):
     if not SSH_DEST.match(dest or ""):
         return {"ok": False, "output": "That doesn't look like an SSH destination."}
@@ -1666,6 +1794,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return self.send_json(self.fleet.api_ifs(q.get("machine", [""])[0]))
         if u.path == "/api/disks":
             return self.send_json(self.fleet.api_disks(q.get("machine", [""])[0]))
+        if u.path == "/api/proc":
+            m = self.fleet.machines.get(q.get("machine", [""])[0])
+            pid = q.get("pid", [""])[0]
+            if not m or not pid.isdigit() or not 0 < int(pid) < 1 << 31:
+                return self.send_json({"error": "no such machine or process"})
+            return self.send_json(inspect_process(m, int(pid)))
         return super().do_GET()
 
     def do_POST(self):

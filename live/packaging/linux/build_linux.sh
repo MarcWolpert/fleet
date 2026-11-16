@@ -9,7 +9,7 @@ VERSION=$(sed -n 's/^VERSION = "\(.*\)"/\1/p' "$LIVE/fleet_live.py")
 NAME="fleet-$VERSION-linux"
 OUT="$LIVE/dist/$NAME"
 rm -rf "$OUT" && mkdir -p "$OUT/app/web" "$OUT/icons"
-cp "$LIVE/fleet_live.py" "$LIVE/collect_linux.py" "$LIVE/collect_windows.ps1" "$LIVE/machines.example.toml" "$OUT/app/"
+cp "$LIVE/fleet_live.py" "$LIVE/collect_linux.py" "$LIVE/collect_windows.ps1" "$LIVE/inspect_linux.py" "$LIVE/inspect_windows.ps1" "$LIVE/machines.example.toml" "$OUT/app/"
 cp "$LIVE/web/index.html" "$LIVE/web/app.js" "$LIVE/web/themes.js" "$LIVE/web/icon.svg" "$OUT/app/web/"
 for s in 16 32 48 64 128 256 512; do cp "$LIVE/packaging/icon/png/fleet-$s.png" "$OUT/icons/"; done
 cp "$LIVE/packaging/icon/fleet.svg" "$OUT/icons/fleet.svg"
