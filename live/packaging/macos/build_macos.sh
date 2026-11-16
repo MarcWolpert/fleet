@@ -43,7 +43,8 @@ cp "$LIVE/web/index.html" "$LIVE/web/app.js" "$LIVE/web/themes.js" "$LIVE/web/ic
 mkdir -p "$APP/Contents/Resources/live/web/fonts" && cp "$LIVE/web/fonts/"* "$APP/Contents/Resources/live/web/fonts/"   # the terminals' symbols font (#387)
 cp "$LIVE/packaging/icon/Fleet.icns" "$APP/Contents/Resources/Fleet.icns"
 cp "$LIVE/../COPYING" "$APP/Contents/Resources/COPYING"
-sed "s/@VERSION@/$VERSION/g" "$HERE/Info.plist" > "$APP/Contents/Info.plist"
+BUILD=$(printf %s "$VERSION" | sed 's/-hotfix\./\./; s/[^0-9.].*//')   # macOS's build number is numbers only: 0.0.1-hotfix.1 -> 0.0.1.1
+sed "s/@VERSION@/$VERSION/g; s/@BUILD@/$BUILD/g" "$HERE/Info.plist" > "$APP/Contents/Info.plist"
 plutil -lint "$APP/Contents/Info.plist" >/dev/null
 
 # what it runs, inside it (#359): its own Python, ttyd and tmux (Apple silicon: the Python and Homebrew's are arm64)

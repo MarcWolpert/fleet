@@ -3,6 +3,18 @@
 Fleet's releases. Each is tagged `fleet-v<version>` (Mission Center's own tags in this fork are `v<version>`).
 The section for a version becomes its GitHub release notes; see docs/fleet/RELEASING.md.
 
+## Fleet 0.0.1-hotfix.1
+
+Fixes and a few small additions since 0.0.1. For macOS (Fleet.app, Apple silicon) and Linux (x64 and arm64
+packages, and a Flatpak), each carrying what it runs.
+
+- **Inline terminals in Fleet.app** draw in the right font, spaced right, with Powerline and Nerd Font symbols:
+  0.0.1 drew some in Times with the letters far apart. Choose your own font in Settings > Terminal.
+- **The tree panel resizes** from its right edge (double-click for the default); dragged narrow it drops its
+  graphs so the names get the room, and a toggle at the bottom turns the graphs off and on.
+- **Keys:** t shows or hides the terminals, r goes into the one you're on (when you aren't typing in a field).
+- **Escape closes any dialog**, wherever focus is.
+
 ## Fleet 0.0.1
 
 The first release of Fleet Live: every machine you manage, live, in one tree. For macOS (Fleet.app, Apple

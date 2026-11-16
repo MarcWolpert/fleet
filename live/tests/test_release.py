@@ -12,8 +12,16 @@ def version():
 
 
 class Release(unittest.TestCase):
-    def test_the_first_release_is_0_0_1(self):
-        self.assertEqual(version(), "0.0.1")
+    def test_the_version_is_a_release_or_a_hotfix(self):
+        self.assertRegex(version(), r"^\d+\.\d+\.\d+(-hotfix\.\d+)?$")
+
+    def test_the_mac_build_number_is_numbers_only(self):
+        # macOS wants CFBundleVersion as integers: 0.0.1-hotfix.1 builds as 0.0.1.1
+        script = open(os.path.join(LIVE, "packaging", "macos", "build_macos.sh"), encoding="utf-8").read()
+        line = [l for l in script.splitlines() if l.startswith("BUILD=")][0]
+        for v, want in (("0.0.1", "0.0.1"), ("0.0.1-hotfix.1", "0.0.1.1"), ("1.2.3-hotfix.12", "1.2.3.12")):
+            out = subprocess.run(["sh", "-c", line.split("#")[0] + '; printf %s "$BUILD"'], env=dict(os.environ, VERSION=v), capture_output=True, text=True).stdout
+            self.assertEqual(out, want, v)
 
     def test_the_changelog_starts_with_this_version(self):
         log = open(os.path.join(LIVE, "CHANGELOG.md"), encoding="utf-8").read()
