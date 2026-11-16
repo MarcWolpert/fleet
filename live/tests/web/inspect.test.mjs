@@ -146,3 +146,19 @@ test('a refresh keeps where you scrolled the docked Details panel and the page b
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
 });
+
+test('a Windows process: affinity reads as CPUs and handles are called handles (regression)', async () => {
+  const fx = fixture();
+  fx.proc = () => look({affinity: '16777215', fds: 620, fd_limit: -1, handles: 620, files: [], priority_class: 'Normal', cgroup: null, cache: null,
+    cache_error: 'Windows doesn\'t expose per-process CPU cache counters without a kernel driver'});
+  const p = await open(fx);
+  try {
+    await p.eval(`(() => { document.querySelector('tr[data-pid="103"] td:nth-child(4)').click(); return true; })()`);
+    await p.waitFor(`document.querySelector('tr.pinsp [data-wait]')`);
+    const text = await p.eval(`document.querySelector('tr.pinsp').textContent`);
+    assert.ok(text.includes('CPUs 0–23'), 'affinity as CPUs');
+    assert.ok(!text.includes('16777215'), 'no raw bitmask');
+    assert.deepEqual(await p.eval(`[...document.querySelectorAll('tr.pinsp .icard h4')].map(h => h.textContent)`).then(hs => hs.filter(h => /files|handles/i.test(h))), ['Handles']);
+    assert.ok(text.includes('620'));
+  } finally { await p.close(); }
+});

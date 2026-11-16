@@ -1910,6 +1910,13 @@ const ibytes = b => b == null ? '—' : memText(b / 1073741824);
 const ibps = b => b == null ? '—' : rateText(b / 1e6);
 const perSec = v => v == null ? '—' : (v >= 100 ? Math.round(v).toLocaleString() : v >= 1 ? v.toFixed(1) : v > 0 ? '<1' : '0') + '/s';
 const kvRow = (k, v, title) => `<div class="kv"${title ? ` title="${esc(title)}"` : ''}><span>${esc(k)}</span><b>${v}</b></div>`;
+// "0-15,32" stays as it is; a Windows bitmask (16777215) becomes "CPUs 0–23"
+function affinityText(a){
+  if (!/^\d+$/.test(a)) return a;
+  let m = BigInt(a), i = 0, runs = [], start = -1;
+  for (; m > 0n || start >= 0; i++, m >>= 1n){ const on = (m & 1n) === 1n; if (on && start < 0) start = i; if (!on && start >= 0){ runs.push(start === i - 1 ? String(start) : `${start}–${i - 1}`); start = -1; } }
+  return runs.length ? 'CPUs ' + runs.join(', ') : a;
+}
 function sinceText(t){ const s = Date.now() / 1000 - t; return s < 90 ? Math.round(s) + ' s ago' : s < 5400 ? Math.round(s / 60) + ' min ago' : s < 172800 ? Math.round(s / 3600) + ' h ago' : Math.round(s / 86400) + ' days ago'; }
 function inspectPanel(p){
   const d = INSP.data, g = INSP.good, name = (g && g.name) || INSP.name || (p && p[1]) || '';
@@ -1933,7 +1940,7 @@ function inspectPanel(p){
     c.ctx_invol != null ? kvRow('Switches: preempted', perSec(c.ctx_invol), 'involuntary: the scheduler took the core away') : '',
     c.runq_s != null ? kvRow('Queued for a core', Math.round(c.runq_s * 1000) + ' ms/s') : '',
     cg && cg.cpu_limit ? kvRow('CPU limit', num(cg.cpu_limit) + ' cores') : '', cg && cg.cpu_limit ? kvRow('Throttled', pct((cg.throttled || 0) * 100)) : '',
-    g.affinity ? kvRow('May run on', esc(g.affinity)) : '', g.last_cpu >= 0 ? kvRow('Last ran on', 'cpu' + g.last_cpu) : '',
+    g.affinity ? kvRow('May run on', esc(affinityText(g.affinity))) : '', g.last_cpu >= 0 ? kvRow('Last ran on', 'cpu' + g.last_cpu) : '',
     kvRow('Priority', `nice ${g.nice || 0}` + (g.priority_class ? ' · ' + esc(g.priority_class) : ''))]]);
   cards.push(['Memory', [kvRow('Resident', ibytes(m.rss)), m.anon != null ? kvRow('Its own (anon)', ibytes(m.anon)) : '', m.file != null ? kvRow('Files mapped', ibytes(m.file)) : '',
     m.shmem ? kvRow('Shared', ibytes(m.shmem)) : '', m.private != null ? kvRow('Private', ibytes(m.private)) : '', m.swap != null ? kvRow('Swapped out', ibytes(m.swap)) : '',
@@ -1950,7 +1957,8 @@ function inspectPanel(p){
   const conns = g.conns || [], listen = conns.filter(x => x.state === 'listening'), est = conns.filter(x => x.remote);
   cards.push(['Network', [kvRow('Sockets', String(g.conns_n || 0)), listen.length ? kvRow('Listens on', esc([...new Set(listen.map(x => x.proto + ' :' + x.local.split(':').pop()))].slice(0, 6).join(', '))) : '']
     .concat(est.slice(0, 6).map(x => `<div class="kv mono"><span>${esc(x.remote)}</span><b>${esc(x.state)}</b></div>`))]);
-  cards.push(['Files', [kvRow('Open', g.fd_limit > 0 ? `${(g.fds || 0).toLocaleString()} of ${g.fd_limit.toLocaleString()}` : (g.fds || 0).toLocaleString())]
+  if (g.handles != null) cards.push(['Handles', [kvRow('Open handles', g.handles.toLocaleString(), 'files, registry keys, events, threads and more')]]);
+  else cards.push(['Files', [kvRow('Open', g.fd_limit > 0 ? `${(g.fds || 0).toLocaleString()} of ${g.fd_limit.toLocaleString()}` : (g.fds || 0).toLocaleString())]
     .concat((g.files || []).slice(0, 6).map(f => `<div class="kv mono"><span title="${esc(f)}">${esc(f)}</span></div>`))]);
   cards.push(['Process', [kvRow('User', esc(g.user || '—')), kvRow('Parent', g.ppid ? `PID ${g.ppid}` : '—'), g.started ? kvRow('Started', sinceText(g.started)) : '',
     kvRow('Threads', String(g.threads_n || '—')), g.exe ? `<div class="kv mono"><span title="${esc(g.exe)}">${esc(g.exe)}</span></div>` : '', g.cwd ? kvRow('Working dir', `<span class="mono">${esc(g.cwd)}</span>`) : '']]);
