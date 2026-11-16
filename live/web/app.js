@@ -1124,11 +1124,14 @@ function selectionFilters(m, all, gpuProcs){
   }
   return out;
 }
-// The node whose processes a Details view shows right now (full or docked), or null.
+// A selection with a machine of its own; not All machines, nor a group of machines or of things on several (#294)
+const ownsMachine = n => !!n && !(n.kind === 'division' && !n.parent);
+// The node whose processes a Details view shows right now (full or docked), or null. With nothing of one machine
+// selected, the full view shows the first machine (All machines) or member (a group), and the docked panel asks for one.
 function shownDetails(){
   const n = S.sel === 'fleet' ? null : nodes[S.sel];
-  if (S.view === 'details') return n || roots[0] || null;
-  return S.detailsDocked && S.tree !== 'network' ? n : null;
+  if (S.view === 'details'){ let x = n || roots[0] || null; for (let i = 0; x && !ownsMachine(x) && i < 9; i++) x = x.children[0] || null; return ownsMachine(x) ? x : null; }
+  return S.detailsDocked && S.tree !== 'network' && ownsMachine(n) ? n : null;
 }
 // Left of the view pills: what Details is filtered to, each part with its own ×, plus Clear all; and a
 // dot on the CPU, GPU and Disk I/O pills while their selection filters Details.
@@ -1302,10 +1305,10 @@ function renderMain(){
   if (S.tree === 'network' && S.view !== 'details') html = netView();
   else {
     const n = S.sel === 'fleet' ? null : nodes[S.sel];
-    if (S.view === 'details') html = detailsView(n || (roots[0] || {id:'', name:'—'}));
+    if (S.view === 'details') html = detailsView(shownDetails() || {id:'', name:'—'});
     else html = !n ? (S.pinsOnly && S.space === 'fleet' ? pinsView() : fleetView()) : n.kind === 'division' && !n.parent ? fleetView(n) : n.kind === 'machine' ? machineView(n) : n.kind === 'cronfolder' ? cronFolderView(n) : n.kind === 'cron' ? cronView(n) : n.hist ? leafView(n) : groupView(n);
     if (S.detailsDocked && S.view !== 'details')
-      panel = n ? detailsView(n, true) : `<div class="dhead"><div class="dtitle"><b>Details</b><span>Select a machine or anything in it to see its processes.</span></div><button type="button" class="iconbtn" data-closedock="1" aria-label="Close the Details panel">${icon('x', 2.2)}</button></div>`;
+      panel = ownsMachine(n) ? detailsView(n, true) : `<div class="dhead"><div class="dtitle"><b>Details</b><span>Select a machine or anything in it to see its processes.</span></div><button type="button" class="iconbtn" data-closedock="1" aria-label="Close the Details panel">${icon('x', 2.2)}</button></div>`;
   }
   const full = panel
     ? `<div class="split"><div class="wrap">${html}</div><aside class="dpanel" style="width:${Math.round(S.dockW || 560)}px" aria-label="Details panel"><div class="dresize" data-resize="1" role="separator" aria-orientation="vertical" aria-label="Resize the Details panel" title="Drag to resize"></div>${panel}</aside></div>`
@@ -1586,7 +1589,8 @@ async function refreshNow(){
     if (S.sel !== 'fleet' && !nodes[S.sel]) { /* keep selection; it may come back */ }
     const n = S.sel === 'fleet' ? null : nodes[S.sel];
     const jobs = [];
-    if ((S.view === 'details' || (S.detailsDocked && n && S.tree !== 'network')) && (n || roots[0])){ const mid = procMachineFor(n || roots[0]); if (mid) jobs.push(fetch('/api/procs?machine=' + encodeURIComponent(mid), {cache:'no-store'}).then(r => r.json()).then(d => takeProcs(mid, d))); }
+    const shown = shownDetails();
+    if (shown){ const mid = procMachineFor(shown); if (mid) jobs.push(fetch('/api/procs?machine=' + encodeURIComponent(mid), {cache:'no-store'}).then(r => r.json()).then(d => takeProcs(mid, d))); }
     if (S.view !== 'details' && !S.detailsDocked && n && n.kind === 'machine' && S.metric === 'cpu' && S.cpuView === 'logical' && cpuSel(n).length && n.status === 'ok') jobs.push(fetch('/api/procs?machine=' + encodeURIComponent(n.id), {cache:'no-store'}).then(r => r.json()).then(d => takeProcs(n.id, d)));
     if (S.view !== 'details' && n && n.kind === 'machine' && S.metric === 'cpu' && S.cpuView === 'logical') jobs.push(fetch('/api/cpus?machine=' + encodeURIComponent(n.id), {cache:'no-store'}).then(r => r.json()).then(d => { CPUS[n.id] = d; }));
     const nm = n && n.kind === 'machine' ? n : null;

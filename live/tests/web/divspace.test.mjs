@@ -118,3 +118,30 @@ test('pinning a Pins only group of containers on two machines, from the + picker
     assert.deepEqual(JSON.parse(fx.posts.filter(x => x.path === '/api/pins').pop().body), ['host/containers/web', 'nog/containers/web', 'div:gx']);
   } finally { await p.close(); }
 });
+
+// Details lists one machine's processes. A group with no machine of its own (a group of machines, or of things on
+// several machines) is like All machines there: the docked panel asks for a machine, and the full view shows its
+// first member, as All machines shows its first machine. A group on one machine lists what's in it (#294).
+const DPANEL = `(() => { const d = document.querySelector('.dpanel .dtitle'); return d ? [d.querySelector('b').textContent, d.querySelector('span').textContent] : null; })()`;
+const FULL = `(() => { const h = document.querySelector('#main .hero h1'); return h ? [h.textContent, [...document.querySelectorAll('#main .hero .facts span')].map(s => s.textContent).slice(0, 2)] : null; })()`;
+const PIDLIST = `[...document.querySelectorAll('#main .ptbl tbody tr[data-pid]')].map(r => +r.dataset.pid).sort((a, b) => a - b)`;
+const LX = [101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112];
+for (const [name, divs, sel, full, fullPids, docked] of [
+  ['a group of machines', DIVS, 'div:g1', ['Details · lab-linux', ['12 processes', 'on lab-linux']], LX, ['Details', 'Select a machine or anything in it to see its processes.']],
+  ['a group on one machine (the control)', DIVS, 'div:g2', ['Details · Workloads', ['12 processes', 'on lab-linux']], LX, ['Details · Workloads', '12 processes on lab-linux']]])
+  test(`Details with ${name} selected: docked and full, never stuck on loading`, async () => {
+    const fx = fixture(); fx.fleet.prefs = {tgroups: divs}; fx.fleet.pins = [sel];
+    const p = await browser.page(fx, {ui: ui({sel, space: sel, detailsDocked: true, pinsOnly: sel === 'div:gw'})});
+    try {
+      await p.waitFor(`document.querySelector('.dpanel .dtitle')`);
+      for (let i = 0; i < 3; i++){ await p.eval(`(() => { refreshNow(); return true; })()`); await p.waitFor(`!busy`); }
+      assert.deepEqual(await p.eval(DPANEL), docked);
+      await p.eval(`(() => { document.querySelector('[data-undock]') ? document.querySelector('[data-undock]').click() : document.querySelector('[data-details]').click(); return true; })()`);
+      await p.waitFor(`S.view === 'details' && !S.detailsDocked`);
+      await p.waitFor(`!/loading/.test(document.querySelector('#main .hero .facts').textContent)`).catch(() => null);
+      assert.deepEqual(await p.eval(FULL), full);
+      assert.deepEqual(await p.eval(PIDLIST), fullPids);
+      assert.equal(await p.eval(`S.sel`), sel);
+      assert.deepEqual(p.errors, []);
+    } finally { await p.close(); }
+  });
