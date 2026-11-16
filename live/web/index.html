@@ -634,6 +634,14 @@ tr.fmatch>td{background:color-mix(in srgb, var(--stale) 16%, transparent)!import
 .ggroup.sel .lgh .lgbtn{color:var(--ink)}
 .ggroup.sel .lcell{border-color:color-mix(in srgb, var(--accent) 45%, transparent)}
 .gmc .lt{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* Right-click menus */
+.cxmenu{position:fixed;z-index:60;min-width:210px;max-width:340px;padding:5px;border-radius:10px;background:var(--pop);border:1px solid var(--line-2);box-shadow:0 16px 40px #000a;display:flex;flex-direction:column}
+.cxmenu[hidden]{display:none}
+.cx-h{padding:5px 9px 6px;font-size:11.5px;font-weight:600;color:var(--ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cx-i{display:block;width:100%;padding:6px 9px;border-radius:7px;font-size:13px;color:var(--ink);text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cx-i:hover,.cx-i:focus{background:var(--sel);outline:none}
+.cx-sep{height:1px;margin:4px 6px;background:var(--line)}
 </style>
 </head>
 <body>

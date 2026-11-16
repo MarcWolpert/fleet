@@ -2076,3 +2076,114 @@ function navGo(d){
 function renderNav(){ const b = document.querySelector('[data-nav="back"]'), f = document.querySelector('[data-nav="fwd"]'); if (b) b.disabled = NAV.i <= 0; if (f) f.disabled = NAV.i >= NAV.stack.length - 1; }
 document.addEventListener('mouseup', e => { if (e.button === 3 || e.button === 4){ e.preventDefault(); navGo(e.button === 3 ? -1 : 1); } });
 navRecord();
+
+/* ---------- Right-click menus (issue #7) ---------- */
+// One menu system: ctxFor() turns whatever was clicked into a title and its actions. Tiles (CPUs, CCDs, GPUs,
+// disks, interfaces) reuse their own select and pin buttons, so a new kind of tile gets a menu for free.
+const CTX = {items:[], origin:null};
+function copyText(text, what){
+  window.__fleetCopied = text;
+  const done = () => toast('Copied ' + what);
+  const legacy = () => { const a = document.createElement('textarea'); a.value = text; a.style.cssText = 'position:fixed;opacity:0'; document.body.appendChild(a); a.select(); try { document.execCommand('copy'); } catch (e) {} a.remove(); };
+  try { if (navigator.clipboard && window.isSecureContext){ navigator.clipboard.writeText(text).then(done, () => { legacy(); done(); }); return; } } catch (e) {}
+  legacy(); done();
+}
+const termOk = n => n.kind === 'machine' ? (n.agent === 'local' || !!n.ssh) : (n.kind === 'service' || n.kind === 'container');
+function openTerminal(id){ api('/api/terminal', {node:id}).then(r => toast(r.ok ? `Opened ${r.title} in ${r.terminal}` : (r.error || 'Couldn’t open a terminal'))).catch(() => toast('Couldn’t reach Fleet')); }
+function goNode(id, view){ S.view = view; select(id); if (view === 'details'){ S.detailsDocked = false; save(); lastMainHTML = ''; renderAll(); } }
+// a tile's own pin button, as a menu item
+function pinItem(scope, label){ const b = scope && scope.querySelector('[data-tpin]'); if (!b) return null; const on = b.getAttribute('aria-pressed') === 'true'; return {label:(on ? 'Unpin ' : 'Pin ') + label, run:() => b.click()}; }
+// a tile's own select button: pick just it, or add it to (take it out of) the selection
+function selItems(btn, what){
+  if (!btn) return [];
+  const on = btn.getAttribute('aria-pressed') === 'true';
+  return [{label:`See what runs on ${what}`, run:() => { if (!on || document.querySelectorAll(`[aria-pressed="true"][${[...btn.attributes].find(a => /^data-(lcpu|lgroup|gsel|dsel|isel)$/.test(a.name)).name}]`).length > 1) btn.click(); }},
+    ...(btn.matches('[data-lgroup], .lgbtn') ? [] : [{label:on ? `Take ${what} out of the selection` : `Add ${what} to the selection`, run:() => btn.dispatchEvent(new MouseEvent('click', {bubbles:true, metaKey:true, ctrlKey:true}))}])];
+}
+function ctxFor(t){
+  if (!t || !t.closest || t.closest('.ptbl thead th, #ctxmenu, #colmenu, input, textarea, select')) return null;
+  const pr = t.closest('.ptbl tbody tr[data-pid]');
+  if (pr){
+    const mid = pr.closest('.ptbl').dataset.mid, pid = +pr.dataset.pid, p = PROCS.list.find(x => x[0] === pid); if (!p) return null;
+    const owner = nodes[p[10]];
+    return {title:`${p[1]} · PID ${pid}`, items:[
+      {label:INSP.pid === pid ? 'Hide details' : 'Show details', run:() => toggleInspect(mid, pid, document.querySelector(`.ptbl tbody tr[data-pid="${pid}"]`))},
+      owner && {label:`Show ${owner.name} in the tree`, run:() => goNode(owner.id, 'overview')},
+      owner && {label:`Show only ${owner.name}`, run:() => goNode(owner.id, 'details')},
+      '—', {label:'Copy PID', run:() => copyText(String(pid), 'PID ' + pid)}, {label:'Copy name', run:() => copyText(p[1], p[1])},
+      p[9] && {label:'Copy command line', run:() => copyText(p[9], 'the command line')}]};
+  }
+  const tr = t.closest('#tree .row[data-select]');
+  if (tr){
+    const n = nodes[tr.dataset.select]; if (!n) return null;
+    const pinnable = n.kind !== 'cron' && n.kind !== 'cronfolder', pinned = PINS.includes(n.id);
+    return {title:n.name, items:[
+      {label:'Open', run:() => goNode(n.id, 'overview')}, {label:'Show its processes', run:() => goNode(n.id, 'details')},
+      pinnable && {label:pinned ? 'Unpin' : 'Pin as a space', run:() => togglePin(n.id)},
+      termOk(n) && {label:'Open a terminal', run:() => openTerminal(n.id)},
+      '—', {label:'Copy name', run:() => copyText(n.name, n.name)},
+      n.kind === 'machine' && n.ssh && {label:'Copy SSH destination', run:() => copyText(n.ssh, 'the SSH destination')}]};
+  }
+  const nr = t.closest('#tree .row[data-netsel]');
+  if (nr){ const n = netNodes[nr.dataset.netsel]; if (!n) return null; return {title:n.name, items:[{label:'Open', run:() => { S.netSel = n.id; S.tree = 'network'; save(); renderAll(); }}, '—', {label:'Copy name', run:() => copyText(n.name, n.name)}]}; }
+  const sp = t.closest('#spaces [data-space], #spaces .space');
+  if (sp){
+    const key = (sp.matches('[data-space]') ? sp : sp.querySelector('[data-space]')).dataset.space, name = key === 'fleet' ? 'All machines' : (nodes[key] || {name:key}).name;
+    return {title:name, items:[{label:'Open', run:() => goSpace(key)}, key !== 'fleet' && {label:'Unpin', run:() => { togglePin(key); if (S.space === key) goSpace('fleet'); }}]};
+  }
+  const gm = t.closest('.ggroup [data-gm]');
+  if (gm){
+    const g = gm.closest('.ggroup'), m = nodes[S.sel], gi = m ? m.gpus.findIndex(x => x.key === g.dataset.gpu) : -1, k = gm.dataset.gm;
+    const label = (GPU_M[k] || [k])[0];
+    return {title:`GPU ${gi} · ${label}`, items:[...selItems(gm.querySelector('[data-gsel]'), 'GPU ' + gi).slice(0, 1), pinItem(gm, label)]};
+  }
+  const gh = t.closest('.ggroup .lgh');
+  if (gh){ const g = gh.closest('.ggroup'), m = nodes[S.sel], gi = m ? m.gpus.findIndex(x => x.key === g.dataset.gpu) : -1; return {title:`GPU ${gi}`, items:[...selItems(gh.querySelector('[data-gsel]'), 'GPU ' + gi), pinItem(gh, 'GPU ' + gi)]}; }
+  const lg = t.closest('.lgh');
+  if (lg && lg.querySelector('[data-lgroup]')){ const name = lg.querySelector('[data-lgroup]').textContent.trim(); return {title:name, items:[...selItems(lg.querySelector('[data-lgroup]'), name), pinItem(lg, name)]}; }
+  for (const [attr, what] of [['lcpu', v => 'CPU ' + v], ['gsel', v => 'GPU ' + v.replace('gpu', '')], ['dsel', v => v], ['isel', v => v]]){
+    const btn = t.closest(`[data-${attr}]`) || (t.closest('.lcell, .gcell, .kcell') || {querySelector:() => null}).querySelector(`[data-${attr}]`);
+    if (btn){ const name = what(btn.dataset[attr]), tile = btn.closest('.lcell, .gcell, .kcell') || btn.parentElement; return {title:name, items:[...selItems(btn, name), pinItem(tile, name)]}; }
+  }
+  return null;
+}
+function closeCtx(refocus){ const el = $('ctxmenu'); if (!el || el.hidden) return; el.hidden = true; el.innerHTML = ''; if (refocus && CTX.origin && CTX.origin.isConnected) CTX.origin.focus(); CTX.origin = null; }
+function openCtx(spec, x, y, origin){
+  let el = $('ctxmenu');
+  if (!el){ el = document.createElement('div'); el.id = 'ctxmenu'; el.className = 'cxmenu'; el.setAttribute('role', 'menu'); document.body.appendChild(el); }
+  CTX.items = spec.items.filter(Boolean); CTX.origin = origin;
+  el.setAttribute('aria-label', spec.title);
+  el.innerHTML = `<div class="cx-h">${esc(spec.title)}</div>` + CTX.items.map((it, i) => it === '—' ? '<div class="cx-sep" role="separator"></div>' : `<button type="button" role="menuitem" class="cx-i" data-cxi="${i}">${esc(it.label)}</button>`).join('');
+  el.hidden = false;
+  const r = el.getBoundingClientRect();
+  el.style.left = Math.max(8, Math.min(x, innerWidth - r.width - 8)) + 'px';
+  el.style.top = Math.max(8, Math.min(y, innerHeight - r.height - 8)) + 'px';
+  const first = el.querySelector('[role=menuitem]'); if (first) first.focus();
+}
+document.addEventListener('contextmenu', e => {
+  const spec = ctxFor(e.target);
+  if (!spec || !spec.items.filter(x => x && x !== '—').length){ closeCtx(false); return; }
+  e.preventDefault();
+  openCtx(spec, e.clientX, e.clientY, e.target.closest('button, [tabindex]') || e.target);
+});
+document.addEventListener('click', e => {
+  const el = $('ctxmenu'); if (!el || el.hidden) return;
+  const it = e.target.closest('#ctxmenu [data-cxi]');
+  if (it){ const f = CTX.items[+it.dataset.cxi]; closeCtx(false); if (f && f.run) f.run(); e.stopPropagation(); return; }
+  if (!e.target.closest('#ctxmenu')) closeCtx(false);
+}, true);
+addEventListener('keydown', e => {
+  const el = $('ctxmenu'), open = el && !el.hidden;
+  if (!open && ((e.key === 'F10' && e.shiftKey) || e.key === 'ContextMenu')){
+    const a = document.activeElement, spec = a && a !== document.body ? ctxFor(a) : null;
+    if (spec){ e.preventDefault(); e.stopPropagation(); const r = a.getBoundingClientRect(); openCtx(spec, r.left + 8, r.bottom + 2, a); }
+    return;
+  }
+  if (!open) return;
+  const items = [...el.querySelectorAll('[role=menuitem]')], i = items.indexOf(document.activeElement);
+  if (e.key === 'Escape' || e.key === 'Tab'){ e.preventDefault(); e.stopPropagation(); closeCtx(true); return; }
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp'){ e.preventDefault(); e.stopPropagation(); const n = items.length; items[((i < 0 ? -1 : i) + (e.key === 'ArrowDown' ? 1 : -1) + n) % n].focus(); return; }
+  if (e.key === 'Home' || e.key === 'End'){ e.preventDefault(); e.stopPropagation(); items[e.key === 'Home' ? 0 : items.length - 1].focus(); return; }
+  if ((e.key === 'Enter' || e.key === ' ') && i >= 0){ e.preventDefault(); e.stopPropagation(); const f = CTX.items[+items[i].dataset.cxi]; closeCtx(false); if (f && f.run) f.run(); }
+}, true);
+addEventListener('resize', () => closeCtx(false));
