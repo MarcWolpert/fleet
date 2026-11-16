@@ -104,11 +104,24 @@ $o.nvidia = $nv
 $o.videoNames = @(Get-CimInstance Win32_VideoController | ForEach-Object { $_.Name })
 $o.gproc = @($pidGpu.Keys | ForEach-Object { $gp = $_.Split('|'); ,@([int]$gp[0], $gp[1], $pidGpu[$_]) })
 
-if ($loop % 3 -eq 0) { $cmdCache = @{}; foreach ($wp in Get-CimInstance Win32_Process) { $cmdCache[[int]$wp.ProcessId] = @([int]$wp.ParentProcessId, [string]$wp.CommandLine) } }
+# A running process's parent and command line never change: ask WMI for just those, about PIDs not seen before (or
+# now under another name: a reused PID), and forget PIDs that are gone. Re-reading every process took seconds.
+$gps = @(Get-Process | Where-Object { $_.Id -ne 0 })
+$live = @{}; foreach ($gp in $gps) { $live[[int]$gp.Id] = $gp.ProcessName }
+foreach ($k in @($cmdCache.Keys)) { if (-not $live.ContainsKey($k)) { $cmdCache.Remove($k) } }
+$miss = @($gps | Where-Object { $wc = $cmdCache[[int]$_.Id]; -not $wc -or $wc[2] -ne $_.ProcessName })
+if ($miss.Count) {
+  $q = @{ ClassName = 'Win32_Process'; Property = @('ProcessId', 'ParentProcessId', 'CommandLine') }
+  if ($miss.Count -le 100) { $q.Filter = ($miss | ForEach-Object { "Handle='$($_.Id)'" }) -join ' OR ' }
+  $res = @(Get-CimInstance @q)
+  if ($res.Count) {
+    foreach ($gp in $miss) { $cmdCache[[int]$gp.Id] = @(0, '', $gp.ProcessName) }   # gone before WMI saw it: don't ask again
+    foreach ($wp in $res) { $id = [int]$wp.ProcessId; if ($live.ContainsKey($id)) { $cmdCache[$id] = @([int]$wp.ParentProcessId, [string]$wp.CommandLine, $live[$id]) } }
+  }
+}
 $plist = New-Object System.Collections.ArrayList
 $o.tp = UnixNow
-foreach ($gp in Get-Process) {
-  if ($gp.Id -eq 0) { continue }
+foreach ($gp in $gps) {
   $wc = $cmdCache[[int]$gp.Id]; $cmd = ''; $ppid = 0
   if ($wc) { $ppid = $wc[0]; if ($wc[1]) { $cmd = [string]$wc[1] } }
   if ($cmd.Length -gt 300) { $cmd = $cmd.Substring(0, 300) }

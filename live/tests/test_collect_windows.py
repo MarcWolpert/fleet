@@ -287,7 +287,8 @@ class ClockLikeTaskManager(unittest.TestCase):
             "\\PhysicalDisk(*)\\Disk Bytes/sec", "\\PhysicalDisk(*)\\Disk Read Bytes/sec", "\\PhysicalDisk(*)\\Disk Write Bytes/sec",
             "\\PhysicalDisk(*)\\% Idle Time", "\\GPU Engine(*)\\Utilization Percentage", "\\GPU Adapter Memory(*)\\Dedicated Usage",
             "\\GPU Adapter Memory(*)\\Shared Usage", "\\Memory\\Available Bytes"])
-        self.assertIn("mhz = [int]$freq[$_]; perf = [double]$perf[$_]; maxf = [double]$maxf[$_]", src)
+        line = "mhz = [int]$freq[$_]; perf = [double]$perf[$_]; maxf = [double]$maxf[$_]"
+        self.assertTrue(line in src, line)
 
 class LocalCollectorStopsWithFleet(unittest.TestCase):
     """#156: on a Windows Fleet host, a restart (Settings save, file watch) ends the local collector: it is the
@@ -302,6 +303,27 @@ class LocalCollectorStopsWithFleet(unittest.TestCase):
         self.assertEqual((p.kw.get("stdin"), p.stdin.closed), (subprocess.PIPE, False))
         fl.stop_collectors(type("F", (), {"machines": {"local": m, "win-desktop": ssh}})())
         self.assertEqual((p.terminated, q.terminated), (True, True))
+
+class ProcessDetailsOnlyForNewPids(unittest.TestCase):
+    """#161: a running process's parent and command line never change, so the collector asks WMI for just those,
+    about PIDs it hasn't seen (or that now run under another name), on the reading it first sees them."""
+    SRC = fl.ps_compact(open(os.path.join(LIVE, "collect_windows.ps1"), encoding="utf-8").read())
+
+    def test_wmi_is_asked_for_three_properties(self):
+        self.assertEqual(re.findall(r"Get-CimInstance[^\n]*Win32_Process\b[^\n]*", self.SRC)
+                         + re.findall(r"\$q = @\{[^\n]*", self.SRC),
+                         ["Get-CimInstance Win32_Process -Filter \"ProcessId=$anc\").ParentProcessId",   # once, to find sshd
+                          "$q = @{ ClassName = 'Win32_Process'; Property = @('ProcessId', 'ParentProcessId', 'CommandLine') }"])
+
+    def test_only_about_pids_it_has_not_seen(self):
+        line = "$q.Filter = ($miss | ForEach-Object { \"Handle='$($_.Id)'\" }) -join ' OR '"
+        self.assertTrue(line in self.SRC, line)
+        self.assertEqual(self.SRC.count("$cmdCache = @{}"), 1, "the cache is never thrown away")
+        self.assertNotRegex(self.SRC, r"\$loop % 3 -eq 0\) \{ \$cmdCache")
+
+    def test_pids_that_are_gone_are_forgotten(self):
+        line = "foreach ($k in @($cmdCache.Keys)) { if (-not $live.ContainsKey($k)) { $cmdCache.Remove($k) } }"
+        self.assertTrue(line in self.SRC, line)
 
 
 if __name__ == "__main__":
