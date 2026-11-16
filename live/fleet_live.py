@@ -162,6 +162,15 @@ def size_bytes(s):
     return float(m.group(1)) * mult.get(m.group(2), 1)
 
 
+def docker_pct(s):
+    """A docker stats percentage as a fraction. docker stats prints "--" for a container it cannot read (one
+    that exits or is removed while it reads): that container counts as idle."""
+    try:
+        return float((s or "0%").rstrip("%") or 0) / 100.0
+    except ValueError:
+        return 0.0
+
+
 GB = 2**30
 MB = 1e6
 # Every collector SSH session starts with exactly these options, so leftovers from an
@@ -722,7 +731,7 @@ class Machine:
                 continue
             nio = s.get("NetIO", "0B / 0B").split("/")
             bio = s.get("BlockIO", "0B / 0B").split("/")
-            stats[s.get("ID", "")[:12]] = (float(s.get("CPUPerc", "0%").rstrip("%") or 0) / 100.0,
+            stats[s.get("ID", "")[:12]] = (docker_pct(s.get("CPUPerc")),
                                            size_bytes(s.get("MemUsage", "0B").split("/")[0]) / GB,
                                            sum(size_bytes(x) for x in bio), sum(size_bytes(x) for x in nio))
         for line in r.get("containers", []):
@@ -1066,7 +1075,7 @@ class MacCollector:
             s = stats.get(cid, {})
             nio = s.get("NetIO", "0B / 0B").split("/")
             bio = s.get("BlockIO", "0B / 0B").split("/")
-            u = [float(s.get("CPUPerc", "0%").rstrip("%") or 0) / 100.0, size_bytes(s.get("MemUsage", "0B").split("/")[0]) / GB, 0.0,
+            u = [docker_pct(s.get("CPUPerc")), size_bytes(s.get("MemUsage", "0B").split("/")[0]) / GB, 0.0,
                  self.rate("cb" + cid, sum(size_bytes(x) for x in bio), t) / MB, self.rate("cn" + cid, sum(size_bytes(x) for x in nio), t) / MB]
             containers.append({"id": cid, "name": c.get("Names", ""), "image": c.get("Image", ""), "status": c.get("Status", ""),
                                "project": labels.get("com.docker.compose.project", ""), "service": labels.get("com.docker.compose.service", ""),
