@@ -1913,8 +1913,8 @@ def inspect_mac(pid):
 # ---------------------------------------------------------------- Macs over SSH (#181)
 # A remote Mac runs exactly the reader this Mac runs: its source, with the helpers it calls, streamed to
 # `python3 -` (the system Python 3.9 of a Mac with the Command Line Tools is enough).
-MAC_HELPERS = ["run", "size_bytes", "parse_cputime", "fmt_secs", "human_cron", "job_name", "mac_gpu_stats"]
-MAC_IMPORTS = "import base64, collections, ctypes, ctypes.util, glob, json, os, platform, plistlib, re, shlex, shutil, subprocess, sys, threading, time, zlib\n"  # the server's own imports but tomllib (3.11+)
+MAC_HELPERS = ["run", "size_bytes", "docker_pct", "parse_cputime", "fmt_secs", "human_cron", "job_name", "mac_gpu_stats"]
+MAC_IMPORTS = "import base64, collections, ctypes, ctypes.util, glob, json, os, platform, plistlib, re, shlex, shutil, subprocess, sys, tempfile, threading, time, zlib\n"  # the server's own imports but tomllib (3.11+)
 
 
 def own_source(*names):
