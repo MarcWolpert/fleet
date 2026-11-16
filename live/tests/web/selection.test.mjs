@@ -192,3 +192,115 @@ test('the list keeps its scroll in the full Details view as well (#18)', async (
     assert.equal(await p.eval(`document.querySelector('.pscroll').scrollTop`), top);
   } finally { await p.close(); }
 });
+
+// ---- outside a Details row: tables that re-sort every poll, the drop-down, the Network tree, another page
+
+// lx's CCD 1 (CPUs 4-7, 12-15) ran 105 106 103 101 102 111 110, busiest first: "On these processors" lists them so
+const CPUROW = pid => `[...document.querySelectorAll('#main h3.cpuproc + .scroll-x tbody tr')].find(r => r.cells[1].textContent === '${pid}')`;
+const CPUPIDS = `[...document.querySelectorAll('#main h3.cpuproc + .scroll-x tbody tr')].map(r => +r.cells[1].textContent)`;
+const CELL_OF_SEL = `(() => { const s = getSelection(); if (!s.rangeCount || s.isCollapsed) return null; const td = n => (n.nodeType === 1 ? n : n.parentElement).closest('td'), r = td(s.anchorNode).parentElement;
+  return {text: s.toString(), row: [...r.cells].slice(0, 2).map(c => c.textContent), same: td(s.anchorNode) === td(s.focusNode)}; })()`;
+async function onCcd1(fx){
+  const p = await browser.page(fx, {ui: ui({sel: 'lx', metric: 'cpu', cpuView: 'logical', cpuSel: {mid: 'lx', cpus: [4, 5, 6, 7, 12, 13, 14, 15]}})});
+  try { await p.waitFor(`${CPUPIDS}.length === 7`); } catch (e) { await p.close(); throw e; }
+  return p;
+}
+const selectCell = (p, row, i) => p.eval(`(() => { const td = ${row}.cells[${i}], r = document.createRange(); r.selectNodeContents(td); getSelection().removeAllRanges(); getSelection().addRange(r); return getSelection().toString(); })()`);
+
+test('a PID selected in "On these processors" stays on its process when the rows re-sort', async () => {
+  const fx = fixture();
+  const p = await onCcd1(fx);
+  try {
+    assert.deepEqual(await p.eval(CPUPIDS), [105, 106, 103, 101, 102, 111, 110]);
+    assert.equal(await selectCell(p, CPUROW(103), 1), '103');
+    procOf(fx, 103)[4] = 3.0;                                    // postgres is busiest now: it moves to the top
+    await refresh(p, `${CPUPIDS}[0] === 103`);
+    assert.deepEqual(await p.eval(CPUPIDS), [103, 105, 106, 101, 102, 111, 110]);
+    assert.deepEqual(await p.eval(CELL_OF_SEL), {text: '103', row: ['postgres', '103'], same: true});   // not 106, now in its old place
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
+test('nothing else: when that process leaves the list, nothing is selected (not the process in its place)', async () => {
+  const fx = fixture();
+  const p = await onCcd1(fx);
+  try {
+    assert.equal(await selectCell(p, CPUROW(103), 0), 'postgres');
+    procOf(fx, 103)[12] = 0;                                     // it last ran on CPU 0, outside CCD 1
+    await refresh(p, `${CPUPIDS}.length === 6`);
+    assert.equal(await p.eval(CELL_OF_SEL), null);
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
+test('the same in "Doing I/O on this disk" and "Using this interface"', async () => {
+  for (const [over, title, pid, col, v, before, after] of [
+    [{metric: 'disk', diskView: 'each', diskSel: {mid: 'lx', names: ['nvme0n1']}}, 'Doing I/O on this disk', 111, 6, 5.0, [101, 103, 111], [111, 101, 103]],
+    [{metric: 'net', ifView: 'each', ifSel: {mid: 'lx', names: ['eth0']}}, 'Using this interface', 107, 16, 1.0, [105, 101, 102, 107], [107, 105, 101, 102]]]){
+    const fx = fixture();
+    const p = await browser.page(fx, {ui: ui(Object.assign({sel: 'lx'}, over))});
+    try {
+      const rows = `[...[...document.querySelectorAll('#main h3.cpuproc')].find(h => h.textContent === ${JSON.stringify(title)}).nextElementSibling.querySelectorAll('tbody tr')]`;
+      await p.waitFor(`document.querySelector('#main h3.cpuproc') && ${rows}.length === ${before.length}`);
+      assert.deepEqual(await p.eval(`${rows}.map(r => +r.cells[1].textContent)`), before, title);
+      assert.equal(await selectCell(p, `${rows}.find(r => r.cells[1].textContent === '${pid}')`, 1), String(pid));
+      procOf(fx, pid)[col] = v;                                  // it moves to the top
+      await refresh(p, `${rows}[0].cells[1].textContent === '${pid}'`);
+      assert.deepEqual(await p.eval(`${rows}.map(r => +r.cells[1].textContent)`), after, title);
+      assert.deepEqual(await p.eval(CELL_OF_SEL), {text: String(pid), row: [procOf(fx, pid)[1], String(pid)], same: true}, title);
+      assert.deepEqual(p.errors, []);
+    } finally { await p.close(); }
+  }
+});
+
+test('the command line in a process\'s drop-down stays selected while it refreshes (PR 259 review)', async () => {
+  const fx = fixture();
+  fx.proc = () => ({pid: 103, name: 'postgres', state: 'S', ppid: 1, threads_n: 2, user: 'postgres', cmdline: '/usr/bin/postgres -D /data', machine: 'lx', t: Date.now() / 1000,
+    waits: {disk: 6, events: 12}, samples: 16, dt: 1.5, threads: [{tid: 103, name: 'postgres', cpu: 0.2, doing: 'disk'}, {tid: 140, name: 'walwriter', cpu: 0.05, doing: 'events'}]});
+  const p = await details(fx);
+  try {
+    await p.eval(`(document.querySelector('tr[data-pid="103"] td:nth-child(4)').click(), true)`);
+    await p.waitFor(`document.querySelector('tr.pinsp .insp-cmd') && document.querySelector('tr.pinsp [data-wait]')`);
+    assert.equal(await select(p, 'tr.pinsp .insp-cmd', 0), '/usr/bin/postgres -D /data');
+    procOf(fx, 101)[4] = 0.42;                                   // a poll: its look at the process redraws the pane first (inspectTick)
+    await refresh(p, `document.querySelector('tr[data-pid="101"]').textContent.includes('2.6%')`);
+    await p.waitFor(`!busy && !INSP.busy`);
+    await p.eval(`(inspectTick(), true)`);                       // and a look of its own
+    await p.waitFor(`!INSP.busy`);
+    assert.equal(await p.eval(`getSelection().toString()`), '/usr/bin/postgres -D /data');
+    assert.equal(await p.eval(`!!(getSelection().anchorNode && getSelection().anchorNode.parentElement.closest('tr.pinsp .insp-cmd'))`), true);
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
+test('an address selected in the Network tree\'s Machines table stays selected as the rates change (PR 259 review)', async () => {
+  const fx = fixture();
+  const nm = (id, name, ip, rx) => ({id, name, status: 'ok', tailscale: {ip, online: true, direct: true}, ifs: [{name: 'eth0', kind: 'physical', rx, tx: rx / 2, addrs: [], state: 'up', speed: '', master: ''}],
+    containers: [], vms: [], dockernets: []});
+  fx.net = {tailnet: 'tailnet', machines: [nm('lx', 'lab-linux', '100.64.0.2', 1.5), nm('mac', 'lab-mac', '100.64.0.3', 0.5)]};
+  const p = await browser.page(fx, {ui: ui({tree: 'network', netSel: 'net:tailnet'})});
+  try {
+    const ADDR = `[...document.querySelectorAll('#main .tbl tbody tr')].find(r => r.cells[0].textContent === 'lab-mac').cells[2]`;
+    await p.waitFor(`document.querySelectorAll('#main .tbl tbody tr').length === 2`);
+    assert.equal(await p.eval(`(() => { const r = document.createRange(); r.selectNodeContents(${ADDR}); getSelection().removeAllRanges(); getSelection().addRange(r); return getSelection().toString(); })()`), '100.64.0.3');
+    fx.net.machines[0].ifs[0].rx = 3.5;                          // the next /api/net reads other rates
+    await p.eval(`(refreshNet(), true)`);
+    await p.waitFor(`document.querySelector('#main .tbl tbody tr').textContent.includes('3.5 MB/s')`);
+    assert.equal(await p.eval(`getSelection().toString()`), '100.64.0.3');
+    assert.equal(await p.eval(`${ADDR}.contains(getSelection().anchorNode)`), true);
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
+test('nothing else: moving to another page with the keyboard drops the selection, not onto the text in its place', async () => {
+  const fx = fx2();
+  const p = await open(fx, 'lx/containers/web', {ui: ui({sel: 'lx/containers/web', open: {lx: true, 'lx/containers': true, lx2: true, 'lx2/containers': true}})});
+  try {
+    assert.equal(await p.eval(SELECT(IMAGE)), 'registry.example/team/web:1.4.2');
+    await p.eval(`(select('lx2/containers/web'), true)`);       // what the tree's arrow keys do: the selection isn't cleared
+    await p.waitFor(`document.querySelector('#main .hero h1').firstChild.textContent.trim() === 'web' && document.querySelector('#main .hero').textContent.includes('lab-linux-2')`);
+    assert.equal(await p.eval(`document.querySelector(${JSON.stringify(IMAGE)}).textContent`), 'nginx:1');
+    assert.equal(await p.eval(SELECTED), '');                    // not lx2's nginx:1 in the same place
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
