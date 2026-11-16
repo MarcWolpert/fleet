@@ -201,7 +201,8 @@ class Http(unittest.TestCase):
         cls.srv.shutdown()
         cls.srv.server_close()
 
-    def send(self, method, path, headers, host="own"):
+    def exchange(self, method, path, headers, host="own"):
+        """One request; returns its response (status and headers)."""
         c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
         try:
             c.putrequest(method, path, skip_host=True, skip_accept_encoding=True)
@@ -213,9 +214,12 @@ class Http(unittest.TestCase):
             c.endheaders()
             r = c.getresponse()
             r.read()
-            return r.status
+            return r
         finally:
             c.close()
+
+    def send(self, method, path, headers, host="own"):
+        return self.exchange(method, path, headers, host).status
 
     def test_reads(self):
         got = {"own": self.send("GET", "/", {}),
@@ -235,6 +239,20 @@ class Http(unittest.TestCase):
                "preflight": self.send("OPTIONS", "/api/pins", {"Origin": "https://evil.example", "Access-Control-Request-Method": "POST",
                                                                 "Access-Control-Request-Headers": "x-fleet"})}
         self.assertEqual(got, {"passes the gate": 404, "no X-Fleet": 403, "foreign Origin": 403, "foreign Host": 403, "preflight": 501})
+
+    def test_no_page_can_put_fleet_in_a_frame(self):
+        # Inside a frame the UI is same-origin with the server, so its own requests would pass every check
+        # above: the browser has to refuse to frame it, on every response.
+        reqs = {"the page": ("GET", "/", {}), "the script": ("GET", "/app.js", {}), "JSON": ("GET", "/api/proc?machine=none&pid=1", {}),
+                "refused": ("GET", "/", {}, "evil.example:%d" % self.port), "not found": ("POST", "/api/no-such-thing", {"X-Fleet": "1"}),
+                "preflight": ("OPTIONS", "/api/pins", {})}
+        with mock.patch.object(fleet_live.Handler, "fleet", types.SimpleNamespace(machines={})):
+            got = {}
+            for name, req in reqs.items():
+                r = self.exchange(*req)
+                got[name] = (r.status, r.getheader("X-Frame-Options"), r.getheader("Content-Security-Policy"), r.getheader("Cache-Control"))
+        framed = {"the page": 200, "the script": 200, "JSON": 200, "refused": 403, "not found": 404, "preflight": 501}
+        self.assertEqual(got, {k: (status, "DENY", "frame-ancestors 'none'", "no-store") for k, status in framed.items()})
 
 
 if __name__ == "__main__":
