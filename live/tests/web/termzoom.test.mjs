@@ -19,6 +19,11 @@ function fx1(){
 }
 // focus moving and a terminal's frame starting take a while under a full suite's load
 const SLOW = 20000;
+// The frame takes focus when it loads, if the terminals have it (a tab does): under a full suite's load that can come
+// after the test focuses a tab, and the keys then go to the stand-in page, which has no bridge to pass them on
+const FRAME_LOADED = `new Promise(r => { const f = document.querySelector('#tdrawer iframe');
+  const done = () => { try { return f.contentWindow.location.href !== 'about:blank' && f.contentDocument.readyState === 'complete'; } catch (e) { return true; } };
+  if (done()) r(true); else f.addEventListener('load', () => r(true), {once: true}); })`;
 const press = async (p, key, code, modifiers, vk) => { for (const type of ['keyDown', 'keyUp']) await p.send('Input.dispatchKeyEvent', {type, key, code, modifiers, windowsVirtualKeyCode: vk}); };
 
 test('Fleet.app: in the terminals the keys size them, and the app is told so; elsewhere they zoom Fleet', async () => {
@@ -28,6 +33,7 @@ test('Fleet.app: in the terminals the keys size them, and the app is told so; el
     await p.waitFor(`document.querySelector('.hero [data-terminal="lx"]')`, SLOW);
     await p.eval(`(openInline('lx'), true)`);
     await p.waitFor(`document.querySelector('#tdrawer iframe')`, SLOW);
+    await p.eval(FRAME_LOADED);
     await p.eval(`(document.querySelector('#tdrawer [role=tab]').focus(), true)`);
     await p.waitFor(`window.nativePosts.some(m => m.termFocus === true)`, SLOW);
     await press(p, '=', 'Equal', 4, 187);
@@ -55,6 +61,7 @@ test('a browser (Linux, Windows): Ctrl+= Ctrl+- Ctrl+0 in the terminals size onl
     await p.waitFor(`document.querySelector('.hero [data-terminal="lx"]')`, SLOW);
     await p.eval(`(openInline('lx'), true)`);
     await p.waitFor(`document.querySelector('#tdrawer iframe')`, SLOW);
+    await p.eval(FRAME_LOADED);
     await p.eval(`(document.querySelector('#tdrawer [role=tab]').focus(), true)`);
     await p.waitFor(`PANEL === 'term'`, SLOW);
     await press(p, '-', 'Minus', 2, 189);
