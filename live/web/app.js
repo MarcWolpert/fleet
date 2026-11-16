@@ -2831,8 +2831,11 @@ function autoLabel(c){ return !c || c.auto === 'none' ? 'None' : c.auto === 'all
 function renderAutoConn(){
   const box = $('autoconn'); if (!box || AC.naming) return;
   const c = DATA && DATA.connect, label = autoLabel(c);
-  const html = `<button type="button" class="btn autoc-btn" data-autoconn="1" aria-haspopup="menu" title="Which machines Fleet connects to when it starts">${icon('power')}<span>Auto: ${esc(label)}</span></button>`;
-  if (box.innerHTML !== html) box.innerHTML = html;
+  // drawn again only for a new label: the browser writes the icon's <path/> back as <path></path>, so comparing
+  // innerHTML never matched and every poll replaced the button, its focus and a click in progress with it (#302)
+  if (box.dataset.label === label && box.querySelector('[data-autoconn]')) return;
+  box.dataset.label = label;
+  box.innerHTML = `<button type="button" class="btn autoc-btn" data-autoconn="1" aria-haspopup="menu" title="Which machines Fleet connects to when it starts">${icon('power')}<span>Auto: ${esc(label)}</span></button>`;
 }
 async function connApi(body){
   try {

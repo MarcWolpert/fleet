@@ -3,7 +3,7 @@
 // (beside + Add a machine): which machines Fleet connects to when it starts, All, None or a saved set.
 import {test, before, after} from 'node:test';
 import assert from 'node:assert/strict';
-import {launch} from './harness.mjs';
+import {launch, sleep, heldPoll} from './harness.mjs';
 import {fixture, ui} from './fixtures.mjs';
 
 let browser;
@@ -143,6 +143,30 @@ test('with nothing saved, Auto reads None (#224)', async () => {
     await p.eval(`(document.querySelector('[data-autoconn]').click(), true)`);
     await p.waitFor(`document.querySelector('#ctxmenu [role=menuitem]')`);
     assert.deepEqual((await p.eval(MENU)).slice(0, 2), ['All machines', '✓ None']);
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
+// The Auto button is drawn once and then only when its label changes: a poll redraws nothing, so focus, an open
+// menu's way back and a click that straddles a poll all keep their button (#302)
+test('the Auto button outlives the polls: same element, still focused, until its label changes', async () => {
+  const fx = fx1();
+  const p = await browser.page(fx, {ui: ui({sel: 'fleet'})});
+  try {
+    await p.waitFor(`document.querySelector('[data-autoconn]')`);
+    await p.eval(`(() => { window.__ab = document.querySelector('[data-autoconn]'); window.__ab.focus(); return true; })()`);
+    await sleep(4500);   // two polls
+    assert.deepEqual(await p.eval(`[window.__ab.isConnected, document.activeElement === window.__ab, document.querySelectorAll('[data-autoconn]').length]`), [true, true, 1]);
+    // the menu opened from it: Escape goes back to the button it came from, a poll later
+    await p.key('Enter');
+    await p.waitFor(`document.querySelector('#ctxmenu [role=menuitem]')`);
+    await sleep(2500);
+    await p.key('Escape');
+    await p.waitFor(`!document.querySelector('#ctxmenu [role=menuitem]')`);
+    assert.equal(await p.eval(`document.activeElement === window.__ab`), true);
+    // the control: a new label draws it anew
+    fx.fleet.connect.auto = 'Lab boxes';
+    await p.waitFor(`/Auto: Lab boxes/.test(document.querySelector('[data-autoconn]').textContent)`);
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
 });
