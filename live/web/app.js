@@ -365,6 +365,7 @@ function treeRoots(){
 }
 function renderTree(){
   if (S.tree === 'network') return renderNetTree();
+  if (S.groupsOnly) return renderGroupsTree();
   const rows = [];
   // ⌘F in the tree: only what matches, and the path down to it
   const keep = TF.q ? treeMatches(treeRoots(), TF.q) : null;
@@ -390,10 +391,56 @@ function renderTree(){
       + `<span class="val${n.kind === 'machine' && !isLive(n) ? ' dim' : ''}" data-val="${esc(n.id)}" title="share of host ${mlabel(S.metric)}">${rowVal(n)}</span></div>`;
   }
   if (S.pinsOnly && !rows.length) $('tree').innerHTML = `<div class="empty-pins">${icon('pin')}<b>Nothing pinned yet</b><span>Pin a machine, VM, project or container with the pin on its row, or with <b>+</b> in the top bar.</span></div>`;
+  treeHeader();
+}
+function treeHeader(){
   const scope = S.space === 'fleet' ? 'All machines' : (nodes[S.space] ? nodes[S.space].name : 'All machines');
-  $('tree-title').innerHTML = `<span class="scopeseg" role="group" aria-label="Show"><button type="button" data-pinsonly="0" aria-pressed="${!S.pinsOnly}">${esc(scope)}</button><button type="button" data-pinsonly="1" aria-pressed="${!!S.pinsOnly}">Pins only</button></span>`;
+  $('tree-title').innerHTML = `<span class="scopeseg" role="group" aria-label="Show"><button type="button" data-pinsonly="0" aria-pressed="${!S.pinsOnly}">${esc(scope)}</button><button type="button" data-pinsonly="1" aria-pressed="${!!S.pinsOnly}">Pins only</button></span>`
+    + `<button type="button" class="gonly" data-groupsonly="1" aria-pressed="${!!S.groupsOnly}" aria-label="Groups only" title="Groups only: show just your groups and subgroups (fleets, flotillas, divisions, …), without the machines in them">${icon('gfleet', 2)}</button>`;
   $('tree-col').textContent = '% of host · ' + mlabel(S.metric);
   $('side-note').innerHTML = '';
+}
+// The Fleet button (#59): the tree shows only your groups and their subgroups, as an overview of the group
+// hierarchy (fleets, flotillas, divisions, …); the machines and everything in them are hidden. A group's parent is
+// the nearest group of its own tree (All machines or Pins only) that holds one of its members' ancestors. Pins
+// only adds the groups you pinned, with their subgroups. Folding (S.gfold) is the same fold as in the normal tree.
+function groupsHierarchy(){
+  const all = [];
+  for (const [key, list] of Object.entries(PREFS.tgroups || {})){
+    const at = key.indexOf('|'), sc = key.slice(0, at);
+    if (sc === 'network') continue;
+    list.forEach(g => { const n = nodes['div:' + g.id]; if (n) all.push({g, sc, pk:key.slice(at + 1), n}); });
+  }
+  all.forEach(x => {
+    x.up = null;
+    for (let p = x.pk === 'root' ? null : nodes[x.pk]; p && !x.up; p = p.parent) x.up = all.find(y => y !== x && y.sc === x.sc && y.g.ids.includes(p.id)) || null;
+  });
+  const scope = S.pinsOnly ? 'pins' : 'machines', above = x => { for (let u = x.up; u; u = u.up) if (PINS.includes(u.n.id)) return true; return false; };
+  const tops = all.filter(x => x.sc === scope && !x.up).concat(S.pinsOnly ? all.filter(x => x.sc === 'machines' && PINS.includes(x.n.id) && !above(x)) : []);
+  const order = list => list.slice().sort((a, b) => { const pa = !S.pinsOnly && PINS.includes(a.n.id), pb = !S.pinsOnly && PINS.includes(b.n.id); return pa !== pb ? (pa ? -1 : 1) : COLL.compare(a.g.name, b.g.name); });
+  return {tops:order(tops), kids:x => order(all.filter(y => y.up === x))};
+}
+function renderGroupsTree(){
+  const {tops, kids} = groupsHierarchy(), q = TF.q.trim().toLowerCase(), rows = [];
+  const hit = x => !q || x.g.name.toLowerCase().includes(q) || GKIND[x.n.gkind][1].includes(q) || kids(x).some(hit);
+  (function walk(list, d){ list.filter(hit).forEach(x => {
+    const ks = kids(x).filter(hit), folded = !q && !!(S.gfold && S.gfold[x.g.id]);
+    rows.push({x, d, ks, folded});
+    if (ks.length && !folded) walk(ks, d + 1);
+  }); })(tops, 0);
+  $('tree').innerHTML = rows.length ? rows.map(({x, d, ks, folded}) => {
+    const n = x.n, sel = S.sel === n.id;
+    const chev = ks.length ? `<button type="button" class="chev${folded ? '' : ' open'}" data-tgfold="${esc(x.g.id)}" aria-expanded="${!folded}" aria-label="${folded ? 'Unfold' : 'Fold'} ${esc(x.g.name)}">${icon('chev', 2.4)}</button>`
+      : `<button type="button" class="chev leaf" tabindex="-1" aria-hidden="true">${icon('chev', 2.4)}</button>`;
+    const where = d === 0 && n.parent ? `<span class="tgw">on ${esc(hostOf(n).name)}</span>` : '';
+    return `<div class="row division gonlyrow${sel ? ' sel' : ''}" style="--d:${d}" role="treeitem" aria-level="${d + 1}" ${ks.length ? `aria-expanded="${!folded}"` : ''} aria-selected="${sel}" data-select="${esc(n.id)}">`
+      + chev + `<span class="ico" style="color:${n.color}">${icon(iconOf(n))}</span>`
+      + `<button type="button" class="nm" data-select="${esc(n.id)}">${esc(x.g.name)}</button><span class="tgk">${GKIND[n.gkind][0]}</span>${where}<span class="count">${n.children.length}</span>${pinBtn(n.id)}`
+      + `<svg class="spark" data-spark="${esc(n.id)}" viewBox="0 0 60 16" preserveAspectRatio="none" aria-hidden="true"><polyline points="${sparkPts(n.series[S.metric], 60, 16)}" fill="none" stroke="${n.color}" stroke-width="1.5" vector-effect="non-scaling-stroke" stroke-linejoin="round"/></svg>`
+      + `<span class="val" data-val="${esc(n.id)}" title="share of ${n.parent ? 'host' : 'all machines'} ${mlabel(S.metric)}">${rowVal(n)}</span></div>`;
+  }).join('') : q ? `<div class="tempty">Nothing in the tree matches “${esc(TF.q)}”.</div>`
+    : `<div class="tempty">No groups ${S.pinsOnly ? 'in Pins only ' : ''}yet. Draw a box over two or more items at the same level (or drag one onto another) to group them; turn off <b>Groups only</b> to see the items.</div>`;
+  treeHeader();
 }
 function updateTree(){
   if (S.tree === 'network') return renderNetTree();
@@ -1256,6 +1303,7 @@ document.addEventListener('click', e => {
   const pn = e.target.closest('[data-pin]'); if (pn){ e.stopPropagation(); togglePin(pn.dataset.pin); return; }
   const tg = e.target.closest('[data-toggle]');
   if (tg){ const id = tg.dataset.toggle; const n = nodes[id] || netNodes[id]; S.open[id] = !(nodes[id] ? isOpen(n) : netOpen(n)); save(); renderTree(); return; }
+  const go = e.target.closest('[data-groupsonly]'); if (go){ S.groupsOnly = !S.groupsOnly; save(); renderTree(); const b = document.querySelector('[data-groupsonly]'); if (b) b.focus(); return; }
   const po = e.target.closest('[data-pinsonly]'); if (po){ S.pinsOnly = po.dataset.pinsonly === '1'; save(); renderTree(); return; }
   const tr = e.target.closest('[data-tree]'); if (tr){ S.tree = tr.dataset.tree; if (S.tree === 'network') S.view = 'overview'; lastMainHTML = ''; save(); renderAll(); refreshNow(); return; }
   const ns = e.target.closest('[data-netsel]'); if (ns){ S.netSel = ns.dataset.netsel; S.tree = 'network'; save(); renderTree(); renderToolbar(); renderMain(); return; }
@@ -2322,6 +2370,7 @@ $('tree').addEventListener('dblclick', e => { const h = e.target.closest('.tg-h'
 // the box: a press that moves more than a few pixels draws it instead of clicking
 const MQ = {st:null, until:0};
 $('tree').addEventListener('pointerdown', e => {
+  if (S.groupsOnly && S.tree !== 'network') return;
   if (e.button !== 0 || e.target.closest('[data-toggle], [data-pin], [data-unpin], .tpin, .pin, input, .tg-h, .tdrag')) return;
   MQ.st = {x0:e.clientX, y0:e.clientY, on:false};
 });

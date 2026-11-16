@@ -390,6 +390,12 @@ main{flex:1;min-width:0;overflow:auto;background:var(--win)}
 .scopeseg button{padding:4px 9px;border-radius:6px;font:500 12px/1.2 var(--sans);color:var(--ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:150px}
 .scopeseg button:hover{color:var(--ink)}
 .scopeseg button[aria-pressed="true"]{background:var(--press);color:var(--ink);font-weight:600}
+.gonly{display:inline-grid;place-items:center;width:26px;height:24px;margin-left:6px;border-radius:7px;border:1px solid var(--line);background:var(--chrome-2);color:var(--ink-3);vertical-align:middle}
+.gonly svg{width:15px;height:15px}
+.gonly:hover{color:var(--ink)}
+.gonly[aria-pressed="true"]{background:var(--press);color:var(--accent);border-color:var(--line-2)}
+.gonlyrow .tgk{font-size:11px;color:var(--ink-3);margin-left:6px;flex:none}
+.gonlyrow .tgw{font-size:11px;color:var(--ink-3);margin-left:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
 button.lcell{padding:0;font:inherit;color:inherit;cursor:pointer;text-align:left}
 button.lcell:hover{border-color:color-mix(in srgb, var(--ink) 25%, transparent)}
 .lcell.sel{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent) inset}
