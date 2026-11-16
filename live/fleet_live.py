@@ -22,6 +22,8 @@ METRICS = ("cpu", "mem", "gpu", "disk", "net")
 CONFIG_PATH = os.path.expanduser("~/.config/fleet/machines.toml")
 LAST_CLIENT = [0.0]   # when a Fleet window last asked for data
 HIDDEN_POLL_S = 75.0  # longest gap between a hidden window's polls: Chrome's once-a-minute timers, plus slack
+REOPENED = [0.0]      # when reopen_if_unseen last opened the app window
+REOPEN_LOCK = threading.Lock()
 PINS_PATH = os.path.expanduser("~/.config/fleet/pins.json")
 TILEPINS_PATH = os.path.expanduser("~/.config/fleet/tilepins.json")  # pinned tiles and CPU groups, per machine
 PREFS_PATH = os.path.expanduser("~/.config/fleet/ui.json")  # UI layout (Details columns per detail type)
@@ -395,40 +397,55 @@ class Machine:
         self.wake.set()
         return True
 
-    def docker_desktop_procs(self, view, own, now=None):
+    def docker_desktop_procs(self, view, own, now=None, scope=None):
         """Docker Desktop (this Mac): each container's processes, read with docker top, since they run in
         Docker's Linux VM, which macOS can't see. Their PIDs are the VM's, so rows are keyed
         d:<container>:<pid> and never meet this Mac's. CPU comes from each one's cumulative CPU time over its
-        last readings (up to 15 s apart); it is read at most every 2 s."""
+        last readings (up to 15 s apart).
+        Only the containers inside `scope` (a node id: this Mac, a Compose project, one container; None: all) are
+        read, each at most once per reading interval and on a thread of its own: a request gets each one's last
+        rows at once, and waits (up to 6 s) only for one it has never read or not for 15 s (nothing showed it)."""
         now = time.time() if now is None else now
-        st = self.__dict__.setdefault("dtop", {"t": -1e9, "rows": [], "cpu": {}})
-        if now - st["t"] < 2.0:
-            return st["rows"]
-        conts = [c for c in view.get("containers", []) if c.get("id")]
-        outs = {}
-        def top(c):
-            outs[c["id"]] = run(["docker", "top", c["id"], "-eo", "pid,ppid,user,stat,cputimes,rss,nlwp,args"], timeout=5)
-        threads = [threading.Thread(target=top, args=(c,), daemon=True) for c in conts]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join(6)
-        rows, seen = [], set()
-        for c in conts:
-            cid = c["id"]
-            for pid, ppid, user, stat, cpus, rss, nlwp, args in parse_docker_top(outs.get(cid, "")):
+        st = self.__dict__.setdefault("dtop", {"c": {}, "lock": threading.Lock()})
+        node_of = lambda cid: own["cont"].get(cid, self.id + "/base")
+        listed = [c for c in view.get("containers", []) if c.get("id")]
+        conts = [c for c in listed if scope is None or node_of(c["id"]) == scope or node_of(c["id"]).startswith(scope + "/")]
+        every, first = max(2.5, self.interval), []
+        with st["lock"]:
+            ids = {c["id"] for c in listed}
+            for cid in [k for k in st["c"] if k not in ids]:   # gone: forgotten, with its CPU history
+                del st["c"][cid]
+            for c in conts:
+                e = st["c"].setdefault(c["id"], {"t": -1e9, "rows": None, "cpu": {}, "reading": None})
+                if e["reading"] is None and now - e["t"] >= every:
+                    e["reading"] = threading.Thread(target=self.docker_top_read, args=(c["id"], e, now, st["lock"]), daemon=True, name="fleet-dtop")
+                    e["reading"].start()
+                if e["reading"] is not None and (e["rows"] is None or now - e["t"] > 15):
+                    first.append(e["reading"])
+        for th in first:
+            th.join(6)
+        rows = []
+        with st["lock"]:
+            for c in conts:
+                for r in st["c"].get(c["id"], {}).get("rows") or []:
+                    rows.append(r[:10] + [node_of(c["id"])] + r[11:])
+        return rows
+
+    def docker_top_read(self, cid, e, now, lock):
+        """One container's docker top, into its entry in docker_desktop_procs' cache (the node is filled in there)."""
+        out = run(["docker", "top", cid, "-eo", "pid,ppid,user,stat,cputimes,rss,nlwp,args"], timeout=5)
+        rows, cpu = [], {}
+        with lock:
+            for pid, ppid, user, stat, cpus, rss, nlwp, args in parse_docker_top(out):
                 key = "d:%s:%d" % (cid, pid)
-                seen.add(key)
-                hist = st["cpu"].setdefault(key, collections.deque(maxlen=8))
+                hist = cpu[key] = e["cpu"].get(key) or collections.deque(maxlen=8)
                 hist.append((now, cpus))
                 old = next(((t0, c0) for t0, c0 in hist if now - t0 <= 15), None)
-                cpu = (cpus - old[1]) / (now - old[0]) if old and now - old[0] >= 2.5 else 0.0
+                rate = (cpus - old[1]) / (now - old[0]) if old and now - old[0] >= 2.5 else 0.0
                 name = os.path.basename(args.split()[0]).rstrip(":") if args.split() else ""
-                rows.append([key, name, user, stat, round(max(0.0, cpu), 4), round(rss * 1024 / GB, 5), 0.0, 0.0, nlwp, args,
-                             own["cont"].get(cid, self.id + "/base"), "d:%s:%d" % (cid, ppid), -1, [], [], [], -1])
-        st["cpu"] = {k: v for k, v in st["cpu"].items() if k in seen}
-        st["t"], st["rows"] = now, rows
-        return rows
+                rows.append([key, name, user, stat, round(max(0.0, rate), 4), round(rss * 1024 / GB, 5), 0.0, 0.0, nlwp, args,
+                             None, "d:%s:%d" % (cid, ppid), -1, [], [], [], -1])
+            e["cpu"], e["rows"], e["t"], e["reading"] = cpu, rows, now, None
 
     def got(self, view):
         with self.lock:
@@ -1688,6 +1705,8 @@ class MacCollector:
             except Exception:
                 continue
             labels = dict(kv.split("=", 1) for kv in c.get("Labels", "").split(",") if "=" in kv)
+            if "fleet.helper" in labels:   # Fleet's own throwaway helper (docker_vm_inspect_cmd), not one of yours
+                continue
             cid = c.get("ID", "")[:12]
             s = stats.get(cid, {})
             nrx, ntx = netio(s.get("NetIO"))
@@ -1891,12 +1910,10 @@ class Fleet:
             if mm:
                 listed.add(v["name"])
                 sub = self.machine_spec(mm, record, vm_hostside={"u": v["u"], "cap": vm_cap(view, v)} if live else None, vm_parent=m if live else None)
-                if live:   # what the host gives it (its QEMU process), as a history, and of each of the host's GPUs
-                    sub["hostside"] = self.leaf(sub["id"] + "/hostside", u, own)
-                    sub["hostside_gh"] = self.gpu_leaf(sub["id"] + "/hostside", v.get("gu"), ng, own)
-                elif record:   # not shown while the host isn't live, and kept like the host's own history
-                    for key in [sub["id"] + "/hostside"] + ["%s/hostside/__gpu/%d" % (sub["id"], i) for i in range(ng)]:
-                        HIST.touch(key)
+                # What the host gives it (its QEMU process), as a history, and of each of the host's GPUs. Under a host
+                # that isn't live it waits with the host's own: the host's row is its last reading, Base and this alike.
+                sub["hostside"] = self.leaf(sub["id"] + "/hostside", u, own)
+                sub["hostside_gh"] = self.gpu_leaf(sub["id"] + "/hostside", v.get("gu"), ng, own)
                 vm_ids[v["name"]] = sub["id"]
                 spec["vms"].append(sub)
             else:
@@ -2018,7 +2035,10 @@ class Fleet:
     def find_machine(self, mid):
         return self.machines.get(mid)
 
-    def api_procs(self, mid):
+    def api_procs(self, mid, scope=None, docker=True):
+        """A machine's processes, each under its tree node. For this Mac, Docker Desktop's containers' too, unless the
+        list is for something they never show in (docker=False: last CPU, disks, interfaces); scope: the node the
+        page shows, whose containers alone are read (see docker_desktop_procs)."""
         m = self.machines.get(mid)
         if not m:
             return {"procs": []}
@@ -2054,8 +2074,8 @@ class Fleet:
                         p[15] if len(p) > 15 else [], round(p[16], 4) if len(p) > 16 else -1])
         # p[13]: the GPUs the process uses (positions in this machine's gpus); gpu_procs says whether the
         # host reports that at all (macOS doesn't), so an empty p[13] isn't taken for "on no GPU".
-        if m.cfg.get("kind") == "local" and platform.system() == "Darwin" and view.get("containers"):
-            out.extend(m.docker_desktop_procs(view, own))   # Docker Desktop: its containers' processes, from its VM
+        if docker and m.cfg.get("kind") == "local" and platform.system() == "Darwin" and view.get("containers"):
+            out.extend(m.docker_desktop_procs(view, own, scope=scope))   # Docker Desktop: its containers' processes, from its VM
         return {"procs": out, "t": view["t"], "gpu_procs": bool(view.get("gpu_procs")), "ready": True}
 
     def api_cpus(self, mid):
@@ -2496,9 +2516,13 @@ VM_KEY = re.compile(r"^d:([0-9a-f]{12}):([1-9][0-9]{0,9})$")
 EXEC_PRELUDE = """import json, os, sys
 WANT_CMD = %r
 WANT_AGE = %d
+WANT_I, WANT_N = %d, %d
 def _fleet_find():
-    # the process inside its container: the same command line, started the same number of seconds ago
-    up, hz, best = float(open("/proc/uptime").read().split()[0]), os.sysconf("SC_CLK_TCK"), None
+    # The process inside its container, where its PID isn't the VM's: the same command line (NULs as spaces, as docker
+    # top shows it), started as long ago. Look-alikes (a pre-fork server's master and workers share both) are told
+    # apart by their order: docker top saw it as the WANT_I-th of WANT_N, by PID, and a fork takes the next PID in
+    # the VM and in the container alike. If one came or went since, only an unmistakable match will do.
+    up, hz, same = float(open("/proc/uptime").read().split()[0]), os.sysconf("SC_CLK_TCK"), []
     for d in os.listdir("/proc"):
         if not d.isdigit():
             continue
@@ -2508,12 +2532,20 @@ def _fleet_find():
             age = up - int(st[st.rindex(")") + 2:].split()[19]) / hz
         except Exception:
             continue
-        if cmd == WANT_CMD and (best is None or abs(age - WANT_AGE) < best[0]):
-            best = (abs(age - WANT_AGE), int(d))
-    return best[1] if best and best[0] <= 3 else None
-_p = _fleet_find()
+        if cmd == WANT_CMD:
+            same.append((int(d), age))
+    same.sort()
+    near = [p for p, age in same if abs(age - WANT_AGE) <= 3]
+    if len(same) == WANT_N and abs(same[WANT_I][1] - WANT_AGE) <= 3:
+        return same[WANT_I][0], ""
+    if len(near) == 1:
+        return near[0], ""
+    if near:
+        return None, "Its container runs other processes just like it, and Fleet couldn't tell which one it is. Look with a helper container instead."
+    return None, "Couldn't find that process inside its container."
+_p, _why = _fleet_find()
 if _p is None:
-    print(json.dumps({"pid": 0, "error": "Couldn't find that process inside its container."}))
+    print(json.dumps({"pid": 0, "error": _why}))
     sys.exit(0)
 sys.argv = ["-", str(_p), %r]
 """
@@ -2524,13 +2556,15 @@ def parse_vm_key(k):
     return (m.group(1), int(m.group(2))) if m else None
 
 
-def docker_vm_inspect_cmd(cid, pid, via, args, age):
+def docker_vm_inspect_cmd(cid, pid, via, args, age, i=0, n=1):
+    """How to look at VM process `pid` of container `cid`: through a helper that sees the VM, or (exec) inside the
+    container, where it is found by its command line `args` and `age` (s), the i-th of n such by PID (see EXEC_PRELUDE)."""
     src = open(os.path.join(HERE, "inspect_linux.py"), "rb").read()
     if via == "helper":
         return (["docker", "run", "--rm", "-i", "--pid=host", "--cap-add=SYS_PTRACE", "--network=none", "--label", "fleet.helper=inspect",
                  HELPER_IMAGE, "python3", "-", str(pid), str(INSPECT_SECS)], src)
     if via == "exec":
-        return ["docker", "exec", "-i", cid, "python3", "-"], (EXEC_PRELUDE % (args, int(age), str(INSPECT_SECS))).encode() + src
+        return ["docker", "exec", "-i", cid, "python3", "-"], (EXEC_PRELUDE % (args, int(age), int(i), int(n), str(INSPECT_SECS))).encode() + src
     raise ValueError("no such way to look: %r" % via)
 
 
@@ -2548,15 +2582,18 @@ def inspect_docker_vm(m, cid, pid, via):
         if c and time.time() - c[0] < 1.0:
             return c[1]
     try:
-        args, age = "", 0
-        if via == "exec":   # its command line and age, to find it inside its container
-            for line in run(["docker", "top", cid, "-eo", "pid,etimes,args"], timeout=5).splitlines()[1:]:
-                f = line.split(None, 2)
-                if len(f) == 3 and f[0] == str(pid) and f[1].isdigit():
+        args, age, i, n = "", 0, 0, 1
+        if via == "exec":   # its command line and age, and its place among its look-alikes, to find it inside its container
+            rows = [f for f in (line.split(None, 2) for line in run(["docker", "top", cid, "-eo", "pid,etimes,args"], timeout=5).splitlines()[1:])
+                    if len(f) == 3 and f[0].isdigit() and f[1].isdigit()]
+            for f in rows:
+                if f[0] == str(pid):
                     args, age = f[2], int(f[1])
             if not args:
                 return {"pid": pid, "gone": True}
-        cmd, stdin = docker_vm_inspect_cmd(cid, pid, via, args, age)
+            same = sorted(int(f[0]) for f in rows if f[2] == args)
+            i, n = same.index(pid), len(same)
+        cmd, stdin = docker_vm_inspect_cmd(cid, pid, via, args, age, i, n)
         r = subprocess.run(cmd, input=stdin, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
         lines = [l for l in r.stdout.decode("utf-8", "replace").splitlines() if l.startswith("{")]
         if lines:
@@ -2823,7 +2860,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             LAST_CLIENT[0] = time.time()
             return self.send_json(self.fleet.api_fleet())
         if u.path == "/api/procs":
-            return self.send_json(self.fleet.api_procs(q.get("machine", [""])[0]))
+            return self.send_json(self.fleet.api_procs(q.get("machine", [""])[0], scope=q.get("scope", [None])[0], docker=q.get("docker", ["1"])[0] != "0"))
         if u.path == "/api/cpus":
             return self.send_json(self.fleet.api_cpus(q.get("machine", [""])[0]))
         if u.path == "/api/net":
@@ -2972,8 +3009,12 @@ def reopen_if_unseen(url, since, wait=8.0):
     deadline = max(since + wait, LAST_CLIENT[0] + HIDDEN_POLL_S)
     while LAST_CLIENT[0] < since and time.time() < deadline:
         time.sleep(max(0.0, min(1.0, deadline - time.time())))
-    if LAST_CLIENT[0] < since:
-        open_app_window(url)
+    # Waiters started within a minute of a closed window's last poll share that deadline and wake together:
+    # a window opened since this one started loads the newest files and serves it too.
+    with REOPEN_LOCK:
+        if LAST_CLIENT[0] < since and REOPENED[0] < since:
+            REOPENED[0] = time.time()
+            open_app_window(url)
 
 
 def watch_own_files(url):

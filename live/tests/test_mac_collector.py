@@ -193,6 +193,30 @@ class DockerStatsItCannotRead(unittest.TestCase):
         self.assertEqual(view["containers"], EXPECTED_CONTAINERS)
 
 
+HELPER_ID = "5e1f0e1f0e1f" + "4" * 52
+# a throwaway container Fleet starts to look inside a process in Docker Desktop's VM (#218), as docker ps lists it
+HELPER_CMD = fl.docker_vm_inspect_cmd("abc123def456", 3615, "helper", "", 0)[0]
+HELPER = {"ID": HELPER_ID, "Names": "eager_turing", "Image": fl.HELPER_IMAGE, "Status": "Up 1 second", "Networks": "none",
+          "Labels": HELPER_CMD[HELPER_CMD.index("--label") + 1]}   # the label Fleet starts it with
+HELPER_STATS = {"BlockIO": "0B / 0B", "CPUPerc": "35.00%", "Container": HELPER_ID[:12], "ID": HELPER_ID[:12], "MemPerc": "0.40%",
+                "MemUsage": "30MiB / 7.654GiB", "Name": "eager_turing", "NetIO": "0B / 0B", "PIDs": "1"}
+
+
+class FleetsOwnHelpers(unittest.TestCase):
+    """PR 273 review: Fleet's own helper containers (label fleet.helper) are not the user's containers. While a process's
+    drop-down looks through a helper, a new one lives about 1.8 s per look, and most readings caught one: a randomly
+    named python:3.12-slim container came and went under Containers, with its usage in the containers' totals."""
+
+    def test_a_helper_container_is_not_listed(self):
+        mac = Mac({DOCKER_PS: jsonl(CONTAINERS[0], HELPER, *CONTAINERS[1:]), DOCKER_STATS: jsonl(STATS[0], HELPER_STATS, *STATS[1:])})
+        self.assertEqual(mac.collector(self).snapshot()["containers"], EXPECTED_CONTAINERS)
+
+    def test_nothing_else_a_label_that_only_looks_like_it_is_listed(self):
+        like = dict(HELPER, Labels="com.example.fleet.helper=inspect,fleet.helpers=1")
+        mac = Mac({DOCKER_PS: jsonl(like), DOCKER_STATS: jsonl(HELPER_STATS)})
+        self.assertEqual([c["name"] for c in mac.collector(self).snapshot()["containers"]], ["eager_turing"])
+
+
 class CpuTicks(unittest.TestCase):
     """#102: host_processor_info hands this process an array the kernel allocated; the collector owns it
     and gives it back after every reading, so the server's memory stays flat."""

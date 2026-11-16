@@ -675,14 +675,14 @@ function tableCard(title, sub, list){
   const rows = list.map(({n, d}) => {
     const share = shareOfHost(n, S.metric), w = isFinite(share) ? Math.min(100, share) : 0;
     const off = n.kind === 'machine' && n.status !== 'ok' && n.status !== 'hostonly';
-    return `<tr><td style="padding-left:${10 + d*20}px"><button type="button" class="namebtn" data-select="${esc(n.id)}"><span class="ico" style="color:${n.kind==='cron'||n.kind==='cronfolder'?'var(--ink-3)':colOf(n)}">${icon(iconOf(n))}</span>${esc(n.name)}${off ? ` <span class="gtag">${statusText(n)}</span>` : ''}</button></td>`
+    return `<tr data-row="${esc(n.id)}"><td style="padding-left:${10 + d*20}px"><button type="button" class="namebtn" data-select="${esc(n.id)}"><span class="ico" style="color:${n.kind==='cron'||n.kind==='cronfolder'?'var(--ink-3)':colOf(n)}">${icon(iconOf(n))}</span>${esc(n.name)}${off ? ` <span class="gtag">${statusText(n)}</span>` : ''}</button></td>`
       + METRICS.map(m => `<td>${m.id === 'gpu' ? gpuCell(n) : fmt(cur(n, m.id), m.id)}</td>`).join('')
       + `<td><span class="share" data-tip="child|${esc(n.id)}|${S.metric}"><span class="b"><i style="width:${w}%;background:${TCOL[n.type] || 'var(--accent-bg)'}"></i></span>${pct(share)}</span></td></tr>`;
   }).join('');
   return `<section class="card"><div class="card-h"><h2>${title}</h2><span class="sub">${sub}</span></div><div class="scroll-x"><table class="tbl"><thead><tr><th>Name</th>${METRICS.map(m => `<th>${m.label}</th>`).join('')}<th>Share of host · ${mlabel(S.metric)}</th></tr></thead><tbody>${rows}</tbody></table></div></section>`;
 }
 function cronTableCard(folder, title){
-  const rows = orderedKids(folder).map(n => `<tr><td><button type="button" class="namebtn" data-select="${esc(n.id)}"><span class="ico" style="color:var(--ink-3)">${icon('clock')}</span>${esc(n.name)}</button></td><td class="l"><code>${esc(n.job.sched)}</code>${n.job.human && n.job.human !== n.job.sched ? ' · ' + esc(n.job.human) : ''}</td><td class="l"><span class="pill${n.running?' on':''}"><i></i>${n.running ? 'running' : esc(n.job.state || 'idle')}</span></td>`
+  const rows = orderedKids(folder).map(n => `<tr data-row="${esc(n.id)}"><td><button type="button" class="namebtn" data-select="${esc(n.id)}"><span class="ico" style="color:var(--ink-3)">${icon('clock')}</span>${esc(n.name)}</button></td><td class="l"><code>${esc(n.job.sched)}</code>${n.job.human && n.job.human !== n.job.sched ? ' · ' + esc(n.job.human) : ''}</td><td class="l"><span class="pill${n.running?' on':''}"><i></i>${n.running ? 'running' : esc(n.job.state || 'idle')}</span></td>`
     + METRICS.map(m => `<td>${!n.running ? '—' : m.id === 'gpu' ? gpuCell(n) : fmt(cur(n, m.id), m.id)}</td>`).join('') + `<td class="l">${esc(n.job.last || '')}</td></tr>`).join('');
   return `<section class="card"><div class="card-h"><h2>${title}</h2><span class="sub">usage shows while a job runs</span></div><div class="scroll-x"><table class="tbl"><thead><tr><th>Job</th><th style="text-align:left">Schedule</th><th style="text-align:left">Status</th>${METRICS.map(m => `<th>${m.label}</th>`).join('')}<th style="text-align:left">Last / next</th></tr></thead><tbody>${rows}</tbody></table></div></section>`;
 }
@@ -727,7 +727,7 @@ function cpuSelCard(m){
   else {
     const on = machineProcs.filter(p => sel.includes(p[12])).sort((a, b) => b[4] - a[4]);
     const ncpu = m.ncpu || capOf(m, 'cpu');
-    procs = on.length ? `<div class="scroll-x"><table class="tbl"><thead><tr><th>Process</th><th>PID</th><th style="text-align:left">Runs in</th><th>CPU (machine)</th><th>Memory</th><th>Last ran on</th></tr></thead><tbody>${on.slice(0, 15).map(p => `<tr><td>${esc(p[1])}</td><td>${esc(p[0])}</td><td class="l"><button type="button" class="namebtn" data-select="${esc(p[10])}" style="font-weight:400">${esc(nodes[p[10]] ? nodes[p[10]].name : '')}</button></td><td>${pct(p[4] / ncpu * 100)}</td><td>${memText(p[5])}</td><td>CPU ${esc(p[12])}</td></tr>`).join('')}</tbody></table></div>${on.length > 15 ? `<div class="more">${on.length - 15} more on these processors.</div>` : ''}` : `<div class="sub">Nothing ran on these processors in the last reading.</div>`;
+    procs = on.length ? `<div class="scroll-x"><table class="tbl"><thead><tr><th>Process</th><th>PID</th><th style="text-align:left">Runs in</th><th>CPU (machine)</th><th>Memory</th><th>Last ran on</th></tr></thead><tbody>${on.slice(0, 15).map(p => `<tr data-row="pid:${esc(p[0])}"><td>${esc(p[1])}</td><td>${esc(p[0])}</td><td class="l"><button type="button" class="namebtn" data-select="${esc(p[10])}" style="font-weight:400">${esc(nodes[p[10]] ? nodes[p[10]].name : '')}</button></td><td>${pct(p[4] / ncpu * 100)}</td><td>${memText(p[5])}</td><td>CPU ${esc(p[12])}</td></tr>`).join('')}</tbody></table></div>${on.length > 15 ? `<div class="more">${on.length - 15} more on these processors.</div>` : ''}` : `<div class="sub">Nothing ran on these processors in the last reading.</div>`;
   }
   return `<section class="card"><div class="card-h"><h2>${esc(title)}</h2><span class="sub">${cs.length} of ${d.cpus.length} processors</span><span class="grow"></span><button type="button" class="btn" data-cpuclear="1">${icon('x', 2.2)}Clear selection</button></div>`
     + `<div class="cpustats">${heroStats([{k:'Now', v:pct(now), s:'average'}, {k:'Peak', v:pct(peak), s:'any one, last ' + ago(WINDOW).replace(' ago', '')}].concat(mhz ? [{k:'Clock', v:(mhz / 1000).toFixed(2) + ' GHz', s:'average'}] : []))}</div>`
@@ -772,7 +772,7 @@ function ifSelCard(m){
   if (!P) list = `<div class="sub">Loading processes…</div>`;
   else {
     const on = P.filter(p => (p[15] || []).some(x => sel.includes(x))).sort((a, b) => (b[16] || 0) - (a[16] || 0) || b[4] - a[4]);
-    list = on.length ? `<div class="scroll-x"><table class="tbl"><thead><tr><th>Process</th><th>PID</th><th style="text-align:left">Runs in</th><th>Network (TCP)</th><th style="text-align:left">Via</th></tr></thead><tbody>${on.slice(0, 15).map(p => `<tr><td>${esc(p[1])}</td><td>${esc(p[0])}</td><td class="l"><button type="button" class="namebtn" data-select="${esc(p[10])}" style="font-weight:400">${esc(nodes[p[10]] ? nodes[p[10]].name : '')}</button></td><td>${p[16] >= 0 ? rateText(p[16]) : '—'}</td><td class="l">${esc((p[15] || []).filter(x => sel.includes(x)).join(', '))}</td></tr>`).join('')}</tbody></table></div>${on.length > 15 ? `<div class="more">${on.length - 15} more.</div>` : ''}` : `<div class="sub">Nothing is talking through ${xs.length === 1 ? 'this interface' : 'these interfaces'} right now.</div>`;
+    list = on.length ? `<div class="scroll-x"><table class="tbl"><thead><tr><th>Process</th><th>PID</th><th style="text-align:left">Runs in</th><th>Network (TCP)</th><th style="text-align:left">Via</th></tr></thead><tbody>${on.slice(0, 15).map(p => `<tr data-row="pid:${esc(p[0])}"><td>${esc(p[1])}</td><td>${esc(p[0])}</td><td class="l"><button type="button" class="namebtn" data-select="${esc(p[10])}" style="font-weight:400">${esc(nodes[p[10]] ? nodes[p[10]].name : '')}</button></td><td>${p[16] >= 0 ? rateText(p[16]) : '—'}</td><td class="l">${esc((p[15] || []).filter(x => sel.includes(x)).join(', '))}</td></tr>`).join('')}</tbody></table></div>${on.length > 15 ? `<div class="more">${on.length - 15} more.</div>` : ''}` : `<div class="sub">Nothing is talking through ${xs.length === 1 ? 'this interface' : 'these interfaces'} right now.</div>`;
   }
   return card.replace(/<\/section>$/, `<h3 class="cpuproc">Using ${xs.length === 1 ? 'this interface' : 'these interfaces'}</h3>${list}</section>`);
 }
@@ -844,7 +844,7 @@ function diskSelCard(m){
   else if (!P) list = `<div class="sub">Loading processes…</div>`;
   else {
     const on = P.filter(p => (p[14] || []).some(x => sel.includes(x))).sort((a, b) => b[6] - a[6]);
-    list = on.length ? `<div class="scroll-x"><table class="tbl"><thead><tr><th>Process</th><th>PID</th><th style="text-align:left">Runs in</th><th>Disk I/O (all disks)</th><th style="text-align:left">On</th></tr></thead><tbody>${on.slice(0, 15).map(p => `<tr><td>${esc(p[1])}</td><td>${esc(p[0])}</td><td class="l"><button type="button" class="namebtn" data-select="${esc(p[10])}" style="font-weight:400">${esc(nodes[p[10]] ? nodes[p[10]].name : '')}</button></td><td>${rateText(p[6])}</td><td class="l">${esc((p[14] || []).filter(x => sel.includes(x)).join(', '))}</td></tr>`).join('')}</tbody></table></div>` : `<div class="sub">No process did I/O on ${ds.length === 1 ? 'this disk' : 'these disks'} in the last reading.</div>`;
+    list = on.length ? `<div class="scroll-x"><table class="tbl"><thead><tr><th>Process</th><th>PID</th><th style="text-align:left">Runs in</th><th>Disk I/O (all disks)</th><th style="text-align:left">On</th></tr></thead><tbody>${on.slice(0, 15).map(p => `<tr data-row="pid:${esc(p[0])}"><td>${esc(p[1])}</td><td>${esc(p[0])}</td><td class="l"><button type="button" class="namebtn" data-select="${esc(p[10])}" style="font-weight:400">${esc(nodes[p[10]] ? nodes[p[10]].name : '')}</button></td><td>${rateText(p[6])}</td><td class="l">${esc((p[14] || []).filter(x => sel.includes(x)).join(', '))}</td></tr>`).join('')}</tbody></table></div>` : `<div class="sub">No process did I/O on ${ds.length === 1 ? 'this disk' : 'these disks'} in the last reading.</div>`;
   }
   return card.replace(/<\/section>$/, `<h3 class="cpuproc">Doing I/O on ${ds.length === 1 ? 'this disk' : 'these disks'}</h3>${list}</section>`);
 }
@@ -1219,7 +1219,7 @@ function detailsView(n, docked){
   const isInsp = p => INSP.pid === p[0] && INSP.mid === mid;
   let inspShown = false;
   const rowHTML = p => `<tr data-pid="${esc(p[0])}" aria-expanded="${isInsp(p)}" class="drow${isInsp(p) ? ' open' : ''}">${COLS.map(c => `<td class="${c.l ? 'l' : ''} ${c.cls || ''}">${c.show(p)}</td>`).join('')}</tr>`  // data-pid: columns can move or hide
-    + (isInsp(p) ? (inspShown = true, `<tr class="pinsp"><td colspan="${COLS.length}">${inspectPanel(p)}</td></tr>`) : '');
+    + (isInsp(p) ? (inspShown = true, `<tr class="pinsp" data-row="insp:${esc(p[0])}"><td colspan="${COLS.length}">${inspectPanel(p)}</td></tr>`) : '');
   if (groupBy){
     // Groups start collapsed, each header a summary; open ones are remembered per Group-by mode (S.groupOpen)
     // and share the row limit.
@@ -1263,7 +1263,7 @@ function detailsView(n, docked){
   const thead = `<tr>${COLS.map(c => `<th class="${c.l ? 'l' : ''}" data-colk="${c.k}" ${c.k === SORT.k ? `aria-sort="${dir < 0 ? 'descending' : 'ascending'}"` : ''}><button type="button" data-sort="${c.k}" title="Sort; right-click to choose and arrange columns">${c.label}${c.k === SORT.k ? (dir < 0 ? ' ↓' : ' ↑') : ''}</button></th>`).join('')}</tr>`;
   const applied = FS.filter(f => f.apply);
   // the open process isn't in the list any more (it exited, or the filter hides it): its drop-down goes first
-  if (INSP.pid && INSP.mid === mid && !inspShown && all) body = `<tr class="pinsp"><td colspan="${COLS.length}">${inspectPanel(null)}</td></tr>` + body;
+  if (INSP.pid && INSP.mid === mid && !inspShown && all) body = `<tr class="pinsp" data-row="insp:${esc(INSP.pid)}"><td colspan="${COLS.length}">${inspectPanel(null)}</td></tr>` + body;
   if (applied.length && all && !list.length && !INSP.pid) body = `<tr class="empty"><td colspan="${COLS.length}" class="l" style="padding:18px 10px;color:var(--ink-3)">No process matches ${esc(applied.map(f => f.short).concat(q ? ['“' + S.filter.trim() + '”'] : []).join(' + '))} right now.</td></tr>`;
   const hold = holding ? `<div class="holdbar">${icon('pin')}<span>Rows hold their places while <b>${esc(INSP.name || 'PID ' + INSP.pid)}</b> is open</span><button type="button" class="btn" data-inspclose="1">Resume live order</button></div>` : '';
   return head + groupNote + offNote + `<section class="card">${tools}${filterChips(FS)}${hold}<div class="pscroll"><table class="ptbl" data-mid="${esc(mid)}"><thead>${thead}</thead><tbody>${body}</tbody></table>${more ? `<div class="more">${more}</div>` : ''}</div></section>`;
@@ -1279,7 +1279,7 @@ function netView(){
   if (n.kind === 'if'){ facts.push(n.ifkind); if (n.state) facts.push(n.state); if (n.speed && n.speed !== '-1') facts.push(/^\d+$/.test(n.speed) ? n.speed + ' Mb/s' : n.speed); facts.push(...n.addrs); if (n.desc) facts.push(n.desc); if (n.vm) facts.push('VM: ' + n.vm); if (n.dnet) facts.push('Docker network: ' + n.dnet); }
   let graph = '';
   if (n.hrx && n.htx) graph = graphCard('Traffic', '↓ received and ↑ sent, stacked', [{label:'received', color:'var(--t-compose)', data:n.hrx}, {label:'sent', color:'var(--t-vm)', data:n.htx}], graphMax(0, [{data:n.hrx}, {data:n.htx}], 'net'), 'net');
-  const rows = n.children.map(c => `<tr><td><button type="button" class="namebtn" data-netsel="${esc(c.id)}">${esc(c.name)}</button></td><td class="l">${esc(c.kind === 'if' ? c.ifkind : c.kind === 'nmachine' ? statusText({status:c.status}) : c.kind === 'ncontainer' ? 'container' : '')}</td><td class="l">${esc((c.addrs || []).join(', ') || (c.ts && c.ts.ip) || '')}</td><td>${rateText(c.rx)}</td><td>${rateText(c.tx)}</td></tr>`).join('');
+  const rows = n.children.map(c => `<tr data-row="${esc(c.id)}"><td><button type="button" class="namebtn" data-netsel="${esc(c.id)}">${esc(c.name)}</button></td><td class="l">${esc(c.kind === 'if' ? c.ifkind : c.kind === 'nmachine' ? statusText({status:c.status}) : c.kind === 'ncontainer' ? 'container' : '')}</td><td class="l">${esc((c.addrs || []).join(', ') || (c.ts && c.ts.ip) || '')}</td><td>${rateText(c.rx)}</td><td>${rateText(c.tx)}</td></tr>`).join('');
   return `<div class="hero"><span class="tile fleet">${icon(n.kind === 'tailnet' ? 'net' : n.kind === 'if' ? (n.ifkind === 'bridge' ? 'bridge' : 'nic') : 'desktop')}</span><div><h1>${esc(n.name)}</h1><div class="facts">${facts.filter(Boolean).map(f => `<span>${esc(f)}</span>`).join('')}</div></div>${heroStats([{k:'In', v:rateText(n.rx), s:'received'}, {k:'Out', v:rateText(n.tx), s:'sent'}])}</div>`
     + (n.error ? noteHTML(`<b>${esc(statusText({status:n.status}))}.</b> ${esc(n.error)}`, 'warn') : '')
     + graph
@@ -1287,19 +1287,39 @@ function netView(){
 }
 
 /* ---------- main ---------- */
-let lastMainHTML = '';
-// A text selection in the pane (a command line to copy) survives its rebuild: each end is kept as its process
-// row (rows re-sort) or the pane, the child path down to the text, and the offset there.
+let lastMainHTML = '', lastMainPage = '';
+// A text selection in the pane (a command line or a PID to copy) survives its rebuild. Each end is kept as the rows
+// and entries it lies in, each known by what it shows (a process, a node, a thread: tables re-sort every poll), then
+// the child path from there down to the text, and the offset; it goes when its row does. It is put back only on
+// the same page: on another one the same place holds other text.
+const SEL_KEYS = ['pid', 'row', 'select', 'netsel', 'gtoggle'], SEL_ANY = SEL_KEYS.map(k => `[data-${k}]`).join(',');
+function selKey(n){ if (n.nodeType === 1) for (const k of SEL_KEYS) if (n.dataset[k] != null) return `[data-${k}="${CSS.escape(n.dataset[k])}"]`; return null; }
+// the elements with this key right inside `scope` (no other keyed element between): one process can be in two tables
+function selKeyed(root, scope, key){
+  return [...scope.querySelectorAll(key)].filter(e => { const up = e.parentElement.closest(SEL_ANY); return scope === root ? !up || !root.contains(up) : up === scope; });
+}
 function selEnd(root, node, off){
-  const row = (node.nodeType === 1 ? node : node.parentNode).closest('tr[data-pid]'), top = row && root.contains(row) ? row : root, path = [];
-  for (let n = node; n !== top; n = n.parentNode) path.unshift([...n.parentNode.childNodes].indexOf(n));
-  return {pid:top === row ? row.dataset.pid : null, path, off};
+  const chain = [], steps = [];
+  for (let n = node; n && n !== root; n = n.parentNode) chain.unshift(n);
+  let scope = root;
+  for (const n of chain){
+    const k = selKey(n);
+    if (!k){ steps.push([...n.parentNode.childNodes].indexOf(n)); continue; }
+    while (typeof steps[steps.length - 1] === 'number') steps.pop();   // a keyed element is found from the one above it, wherever it moved
+    steps.push({k, i:selKeyed(root, scope, k).indexOf(n)});
+    scope = n;
+  }
+  return {steps, off};
 }
 function selAt(root, e){
-  let n = e.pid ? root.querySelector(`tr[data-pid="${CSS.escape(e.pid)}"]`) : root;
-  for (const i of e.path){ if (!n) break; n = n.childNodes[i]; }
-  return n ? [n, Math.min(e.off, n.nodeType === 3 ? n.length : n.childNodes.length)] : null;   // its process exited: gone
+  let scope = root, n = root;
+  for (const s of e.steps){
+    n = typeof s === 'number' ? n.childNodes[s] : (scope = selKeyed(root, scope, s.k)[s.i]);
+    if (!n) return null;   // its process exited, its row is gone: so is the selection
+  }
+  return [n, Math.min(e.off, n.nodeType === 3 ? n.length : n.childNodes.length)];
 }
+function mainPage(){ return [S.tree, S.tree === 'network' ? S.netSel : '', S.sel, S.view, S.metric, S.cpuView, S.gpuView, S.diskView, S.ifView, S.detailsDocked ? 'dock' : ''].join('|'); }
 let resizing = false;  // the docked panel's edge is being dragged: hold the page still till it's let go
 function renderMain(){
   if (resizing) return;  // a rebuild would replace the handle, which drops its pointer capture and strands the drag
@@ -1325,11 +1345,13 @@ function renderMain(){
   const full = panel
     ? `<div class="split"><div class="wrap">${html}</div><aside class="dpanel" style="width:${Math.round(S.dockW || 560)}px" aria-label="Details panel"><div class="dresize" data-resize="1" role="separator" aria-orientation="vertical" aria-label="Resize the Details panel" title="Drag to resize"></div>${panel}</aside></div>`
     : `<div class="wrap">${html}</div>`;
+  const page = mainPage(), samePage = page === lastMainPage;
+  lastMainPage = page;
   if (full === lastMainHTML) return;
   lastMainHTML = full;
   // the panels inside are rebuilt: keep where each was scrolled (the docked Details, the page beside it, wide tables)
   const pos = scrollSnapshot(main);
-  const sel = getSelection(), ends = sel.rangeCount && !sel.isCollapsed && main.contains(sel.anchorNode) && main.contains(sel.focusNode) && selStart == null
+  const sel = getSelection(), ends = samePage && sel.rangeCount && !sel.isCollapsed && main.contains(sel.anchorNode) && main.contains(sel.focusNode) && selStart == null
     ? [selEnd(main, sel.anchorNode, sel.anchorOffset), selEnd(main, sel.focusNode, sel.focusOffset)] : null;
   main.innerHTML = full;
   scrollRestore(main, pos);
@@ -1582,6 +1604,10 @@ function sigOf(){ return Object.keys(nodes).join('|') + '#' + PINS.join('|'); }
 // The Network tree's data comes on its own: the server runs tailscale status for /api/net, which can take seconds,
 // and the fleet's numbers never wait for it. One is on its way at a time (#144).
 let netBusy = false;
+// What a process list is for, so this Mac's server reads Docker Desktop's containers (a docker top each) only for the
+// ones shown (#312): Details names its node unless that's the whole machine (a division's members are anywhere); the
+// CPU, disk and interface cards' lists ask for none (&docker=0), since those rows never say a CPU, disk or interface.
+function procsScope(n, mid){ return n && n.id !== mid && n.kind !== 'division' ? '&scope=' + encodeURIComponent(n.id) : ''; }
 function refreshNet(){
   if (netBusy || S.tree !== 'network') return; netBusy = true;
   fetch('/api/net', {cache:'no-store'}).then(r => r.json()).then(d => { NET = d; if (S.tree === 'network'){ updateTree(); renderMain(); } })
@@ -1610,15 +1636,15 @@ async function refreshNow(){
     const n = S.sel === 'fleet' ? null : nodes[S.sel];
     const jobs = [];
     const shown = shownDetails();
-    if (shown){ const mid = procMachineFor(shown); if (mid) jobs.push(fetch('/api/procs?machine=' + encodeURIComponent(mid), {cache:'no-store'}).then(r => r.json()).then(d => takeProcs(mid, d))); }
-    if (S.view !== 'details' && !S.detailsDocked && n && n.kind === 'machine' && S.metric === 'cpu' && S.cpuView === 'logical' && cpuSel(n).length && n.status === 'ok') jobs.push(fetch('/api/procs?machine=' + encodeURIComponent(n.id), {cache:'no-store'}).then(r => r.json()).then(d => takeProcs(n.id, d)));
+    if (shown){ const mid = procMachineFor(shown); if (mid) jobs.push(fetch('/api/procs?machine=' + encodeURIComponent(mid) + procsScope(shown, mid), {cache:'no-store'}).then(r => r.json()).then(d => takeProcs(mid, d))); }
+    if (S.view !== 'details' && !S.detailsDocked && n && n.kind === 'machine' && S.metric === 'cpu' && S.cpuView === 'logical' && cpuSel(n).length && n.status === 'ok') jobs.push(fetch('/api/procs?machine=' + encodeURIComponent(n.id) + '&docker=0', {cache:'no-store'}).then(r => r.json()).then(d => takeProcs(n.id, d)));
     if (S.view !== 'details' && n && n.kind === 'machine' && S.metric === 'cpu' && S.cpuView === 'logical') jobs.push(fetch('/api/cpus?machine=' + encodeURIComponent(n.id), {cache:'no-store'}).then(r => r.json()).then(d => { CPUS[n.id] = d; }));
     const nm = n && n.kind === 'machine' ? n : null;
     // Each interface / Each disk shows nm's; Details filtered by a disk or interface pick needs its machine's to tell whether that's still there.
     const dn = shownDetails(), dmid = dn && procMachineFor(dn), lists = (shown, pick) => [...new Set([shown && nm ? nm.id : null, pick && pick.mid === dmid && pick.names.length ? dmid : null].filter(Boolean))];
     lists(S.metric === 'net' && S.view !== 'details', S.ifSel).forEach(id => jobs.push(fetch('/api/ifs?machine=' + encodeURIComponent(id), {cache:'no-store'}).then(r => r.json()).then(d => { IFS[id] = d; })));
     lists(S.metric === 'disk' && S.view !== 'details', S.diskSel).forEach(id => jobs.push(fetch('/api/disks?machine=' + encodeURIComponent(id), {cache:'no-store'}).then(r => r.json()).then(d => { DISKS[id] = d; })));
-    if (nm && S.view !== 'details' && !S.detailsDocked && ((S.metric === 'disk' && S.diskView === 'each' && diskSel(nm).length) || (S.metric === 'net' && S.ifView === 'each' && ifSel(nm).length)) && nm.status === 'ok') jobs.push(fetch('/api/procs?machine=' + encodeURIComponent(nm.id), {cache:'no-store'}).then(r => r.json()).then(d => takeProcs(nm.id, d)));
+    if (nm && S.view !== 'details' && !S.detailsDocked && ((S.metric === 'disk' && S.diskView === 'each' && diskSel(nm).length) || (S.metric === 'net' && S.ifView === 'each' && ifSel(nm).length)) && nm.status === 'ok') jobs.push(fetch('/api/procs?machine=' + encodeURIComponent(nm.id) + '&docker=0', {cache:'no-store'}).then(r => r.json()).then(d => takeProcs(nm.id, d)));
     await Promise.all(jobs.map(p => p.catch(() => null)));
     fails = 0; $('conn').hidden = true; $('live').hidden = false;
     const sig = sigOf();
@@ -2345,7 +2371,7 @@ function inspectPanel(p){
   if (typeof INSP.pid === 'string' && !INSP.via) return vmInspectPanel(p);
   const d = INSP.data, g = INSP.good, name = (g && g.name) || INSP.name || (p && p[1]) || '';
   const close = `<button type="button" class="iconbtn" data-inspclose="1" aria-label="Close" title="Close (Esc)">${icon('x', 2.2)}</button>`;
-  const head = `<div class="insp-h"><div><b>${esc(name)}</b> <span class="mono">PID ${typeof INSP.pid === 'string' ? pidNum(INSP.pid) + ' in Docker’s VM · ' + (INSP.via === 'helper' ? 'through a helper container' : 'inside its container') : INSP.pid}</span>${g && g.cmdline ? `<div class="insp-cmd mono">${esc(g.cmdline)}</div>` : ''}</div>${close}</div>`;
+  const head = `<div class="insp-h"><div><b>${esc(name)}</b> <span class="mono">PID ${typeof INSP.pid === 'string' ? pidNum(INSP.pid) + ' in Docker’s VM · ' + (INSP.via === 'helper' ? 'through a helper container' : (g && Number.isInteger(g.pid) && g.pid > 0 ? `PID ${g.pid} ` : '') + 'inside its container') : INSP.pid}</span>${g && g.cmdline ? `<div class="insp-cmd mono">${esc(g.cmdline)}</div>` : ''}</div>${close}</div>`;
   if (!d) return `<div class="insp">${head}<div class="insp-wait">Looking at it… (about 2 seconds)</div></div>`;
   let note = '';
   if (d.gone) note = noteHTML(`<b>${esc(name || 'This process')} has exited.</b> What Fleet saw before is below.`, 'warn');
@@ -2385,7 +2411,7 @@ function inspectPanel(p){
   cards.push(['Process', [kvRow('User', esc(g.user || '—')), kvRow('Parent', g.ppid ? `PID ${g.ppid}` : '—'), g.started ? kvRow('Started', sinceText(g.started)) : '',
     kvRow('Threads', String(g.threads_n || '—')), g.exe ? `<div class="kv mono"><span title="${esc(g.exe)}">${esc(g.exe)}</span></div>` : '', g.cwd ? kvRow('Working dir', `<span class="mono">${esc(g.cwd)}</span>`) : '']]);
   const th = (g.threads || []).filter(t => t.name || t.tid).slice(0, 8);
-  const threads = th.length ? `<div class="icard wide"><h4>Busiest threads</h4><table class="ithr"><tbody>${th.map(t => `<tr><td class="l">${esc(t.name || '—')}</td><td>${t.tid}</td><td>${t.total != null ? num(t.total) + ' s in all' : pct((t.cpu || 0) * 100)}</td><td class="l">${esc(WAIT_LABEL[t.doing] || t.doing || '')}</td></tr>`).join('')}</tbody></table></div>` : '';
+  const threads = th.length ? `<div class="icard wide"><h4>Busiest threads</h4><table class="ithr"><tbody>${th.map(t => `<tr data-row="tid:${esc(t.tid)}"><td class="l">${esc(t.name || '—')}</td><td>${t.tid}</td><td>${t.total != null ? num(t.total) + ' s in all' : pct((t.cpu || 0) * 100)}</td><td class="l">${esc(WAIT_LABEL[t.doing] || t.doing || '')}</td></tr>`).join('')}</tbody></table></div>` : '';
   return `<div class="insp">${head}${note}${wait}<div class="insp-grid">${cards.map(([h, rows]) => `<div class="icard"><h4>${h}</h4>${rows.filter(Boolean).join('')}</div>`).join('')}${threads}</div></div>`;
 }
 
