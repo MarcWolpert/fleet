@@ -2067,6 +2067,7 @@ INSPECT_SECS = 1.5
 INSPECT_LOCK = threading.Lock()
 INSPECT_CACHE = {}   # (machine, pid) -> (time, result)
 INSPECT_BUSY = {}    # (machine, pid) -> Event while a look is running
+REACHES_OUT = {"/api/proc"}   # the GETs that start work on a machine: they need what a write needs (#287)
 
 
 def inspect_mac(pid):
@@ -2552,10 +2553,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         return json.loads(self.rfile.read(min(n, 1 << 20)) or b"null")
 
     def do_GET(self):
-        if not self.allowed():
+        u = urllib.parse.urlparse(self.path)
+        # A look at a process opens an SSH session or runs a helper container. A page on any site can send a
+        # no-cors GET with Fleet's own Host, so this GET passes the write gate too (#287).
+        if not self.allowed(write=u.path in REACHES_OUT):
             self.send_error(403)
             return
-        u = urllib.parse.urlparse(self.path)
         if u.path == "/api/config":
             f = self.fleet
             st = {m.id: {"status": m.status, "error": m.error} for m in f.machines.values()}

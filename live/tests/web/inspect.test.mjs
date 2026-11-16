@@ -60,6 +60,19 @@ test('clicking a process opens its drop-down right under it, asks for that proce
   } finally { await p.close(); }
 });
 
+test('a look is asked for with Fleet\'s own header, which a page on another site can\'t send (#287)', async () => {
+  const fx = fixture(); fx.proc = () => look();
+  const p = await open(fx);
+  try {
+    await click(p, 'tr[data-pid="103"] td:nth-child(4)');
+    await p.waitFor(`document.querySelector('tr.pinsp [data-wait]')`);
+    assert.deepEqual(fx.procCalls.slice(0, 1), ['lx:103']);
+    assert.deepEqual((fx.refused || []).map(r => r.path), [], 'no look turned away');
+    assert.equal(await p.eval(`${PANEL}.textContent.includes('didn’t answer')`), false);
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
 test('what it waits on adds up over every look while it is open', async () => {
   const fx = fixture(); fx.proc = (mid, pid, n) => n === 1 ? look() : look({waits: {disk: 20}});
   const p = await open(fx);

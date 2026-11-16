@@ -2218,7 +2218,8 @@ async function inspectTick(){
   INSP.busy = true;
   let d;
   const q = typeof pid === 'string' ? `key=${encodeURIComponent(pid)}&via=${INSP.via}` : `pid=${pid}`;
-  try { d = await (await fetch(`/api/proc?machine=${encodeURIComponent(mid)}&${q}`, {cache:'no-store'})).json(); }
+  // X-Fleet: a look reaches out to the machine, so the server wants proof it comes from this page (#287)
+  try { d = await (await fetch(`/api/proc?machine=${encodeURIComponent(mid)}&${q}`, {cache:'no-store', headers:{'X-Fleet':'1'}})).json(); }
   catch (e) { d = {pid, error:'Fleet didn’t answer'}; }
   INSP.busy = false;
   if (INSP.pid !== pid || INSP.mid !== mid) return;

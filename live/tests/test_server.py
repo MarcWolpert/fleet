@@ -240,10 +240,32 @@ class Http(unittest.TestCase):
                                                                 "Access-Control-Request-Headers": "x-fleet"})}
         self.assertEqual(got, {"passes the gate": 404, "no X-Fleet": 403, "foreign Origin": 403, "foreign Host": 403, "preflight": 501})
 
+    def test_a_close_look_at_a_process_needs_what_a_write_needs(self):
+        # /api/proc is a GET, but it opens an SSH session (or runs a helper container) to look at the process. A
+        # page on any site can send a no-cors GET with Fleet's own Host, so a look must pass the write gate: no
+        # foreign Origin and X-Fleet: 1, which a cross-site page can't send without a preflight (#287).
+        own = "http://127.0.0.1:%d" % self.port
+        looks, fleet = [], types.SimpleNamespace(machines={"nas": types.SimpleNamespace(id="nas", cfg={"kind": "ssh", "ssh": "nas"})},
+                                                 api_procs=lambda mid: {"procs": []})
+        with mock.patch.object(fleet_live.Handler, "fleet", fleet), \
+                mock.patch.object(fleet_live, "inspect_process", side_effect=lambda m, pid: looks.append((m.id, pid)) or {"pid": pid}), \
+                mock.patch.object(fleet_live, "inspect_docker_vm", side_effect=lambda m, cid, pid, via: looks.append((m.id, cid, pid, via)) or {"pid": pid}):
+            got = {"the page's own look": self.send("GET", "/api/proc?machine=nas&pid=101", {"X-Fleet": "1"}),
+                   "with its own Origin": self.send("GET", "/api/proc?machine=nas&pid=102", {"X-Fleet": "1", "Origin": own}),
+                   "a cross-site no-cors fetch": self.send("GET", "/api/proc?machine=nas&pid=103", {}),
+                   "with Origin, no X-Fleet": self.send("GET", "/api/proc?machine=nas&pid=104", {"Origin": "https://evil.example"}),
+                   "foreign Origin": self.send("GET", "/api/proc?machine=nas&pid=105", {"X-Fleet": "1", "Origin": "https://evil.example"}),
+                   "foreign Host": self.send("GET", "/api/proc?machine=nas&pid=106", {"X-Fleet": "1"}, host="evil.example:%d" % self.port),
+                   "Docker VM, no X-Fleet": self.send("GET", "/api/proc?machine=nas&key=d:0123456789ab:7&via=helper", {}),
+                   "a read of memory, no X-Fleet": self.send("GET", "/api/procs?machine=nas", {})}
+        self.assertEqual(got, {"the page's own look": 200, "with its own Origin": 200, "a cross-site no-cors fetch": 403, "with Origin, no X-Fleet": 403,
+                               "foreign Origin": 403, "foreign Host": 403, "Docker VM, no X-Fleet": 403, "a read of memory, no X-Fleet": 200})
+        self.assertEqual(looks, [("nas", 101), ("nas", 102)], "a refused request never starts a look")
+
     def test_no_page_can_put_fleet_in_a_frame(self):
         # Inside a frame the UI is same-origin with the server, so its own requests would pass every check
         # above: the browser has to refuse to frame it, on every response.
-        reqs = {"the page": ("GET", "/", {}), "the script": ("GET", "/app.js", {}), "JSON": ("GET", "/api/proc?machine=none&pid=1", {}),
+        reqs = {"the page": ("GET", "/", {}), "the script": ("GET", "/app.js", {}), "JSON": ("GET", "/api/proc?machine=none&pid=1", {"X-Fleet": "1"}),
                 "refused": ("GET", "/", {}, "evil.example:%d" % self.port), "not found": ("POST", "/api/no-such-thing", {"X-Fleet": "1"}),
                 "preflight": ("OPTIONS", "/api/pins", {})}
         with mock.patch.object(fleet_live.Handler, "fleet", types.SimpleNamespace(machines={})):
