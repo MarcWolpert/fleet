@@ -73,6 +73,28 @@ test('Which GPU shows what the host sent as text, and the GPUs of ordinary rows'
   } finally { await p.close(); }
 });
 
+test('the processes on picked processors, interfaces and disks show a host\'s PID as text', async () => {
+  // #307: these cards list /api/procs rows too. nginx 101 last ran on CPU 4, talks via eth0 and did I/O on nvme0n1.
+  for (const [card, over, want] of [
+    ['processors', {metric: 'cpu', cpuView: 'logical', cpuSel: {mid: 'lx', cpus: [4]}}, [['nginx', IMG], ['kworker/4:1', '110']]],
+    ['interfaces', {metric: 'net', ifView: 'each', ifSel: {mid: 'lx', names: ['eth0']}},
+      [['python3', '105'], ['nginx', IMG], ['nginx', '102'], ['sshd', '107']]],
+    ['disks', {metric: 'disk', diskView: 'each', diskSel: {mid: 'lx', names: ['nvme0n1']}}, [['nginx', IMG], ['postgres', '103'], ['redis-server', '111']]]]){
+    const fx = fixture();
+    fx.procs.lx.procs[0][0] = IMG;
+    const p = await browser.page(fx, {ui: ui(Object.assign({sel: 'lx'}, over))});
+    try {
+      const TABLE = `[...document.querySelectorAll('#main table.tbl')].filter(t => [...t.querySelectorAll('thead th')].some(th => th.textContent === 'PID'))`;
+      const ROWS = `${TABLE}.flatMap(t => [...t.querySelectorAll('tbody tr')].map(r => [r.cells[0].textContent, r.cells[1].textContent]))`;
+      await p.waitFor(`${ROWS}.length === ${want.length}`);
+      await sleep(300);   // an injected image's onerror would have fired by now
+      assert.deepEqual(await p.eval(ROWS), want, card);
+      assert.deepEqual(await p.eval(`[document.querySelectorAll('#main table.tbl tbody img').length, window.__xss || []]`), [0, []], card);
+      assert.deepEqual(p.errors, [], card);
+    } finally { await p.close(); }
+  }
+});
+
 // ---- the names of a host's GPUs (#91)
 const H = 60, flat = v => new Array(H).fill(v);
 const EVIL0 = 'NVIDIA <img src=x onerror="window.__xss=(window.__xss||0)+1">';
