@@ -237,6 +237,26 @@ class Sessions(unittest.TestCase):
         self.assertIsNone(fl.INLINE[r["id"]]["proc"].poll())
         self.assertEqual(fl.attach_inline(self.f, r["id"], {})["url"], again["url"], "a running one is reused")
 
+    def test_split_into_a_tab_renamed_and_kept(self):
+        # #339: a terminal can join another's tab (a split), be named, and both are kept with it; the list says so
+        a = fl.new_inline(self.f, "nas", "", {})
+        b = fl.new_inline(self.f, "here", "htop", {}, group=a["id"])
+        self.assertEqual(fl.INLINE[b["id"]]["group"], a["id"])
+        self.assertEqual(fl.INLINE[a["id"]]["group"], a["id"], "a terminal is its own tab to start with")
+        fl.update_inline(b["id"], title="  logs  ")
+        fl.update_inline(a["id"], group=b["id"])
+        with self.assertRaises(ValueError):
+            fl.update_inline(a["id"], group="no spaces allowed")
+        listed = {x["id"]: x for x in fl.list_inline()}
+        self.assertEqual((listed[b["id"]]["title"], listed[b["id"]]["group"], listed[b["id"]]["then"]), ("logs", a["id"], "htop"))
+        self.assertEqual(listed[a["id"]]["group"], b["id"])
+        fl.stop_inline(); fl.INLINE.clear(); fl.load_terms()
+        listed = {x["id"]: x for x in fl.list_inline()}
+        self.assertEqual((listed[b["id"]]["title"], listed[b["id"]]["group"]), ("logs", a["id"]), "kept")
+        self.assertEqual(fl.attach_inline(self.f, b["id"], {})["title"], "logs", "a name you gave it outlives attaching")
+        fl.update_inline(b["id"], title="")
+        self.assertEqual(fl.INLINE[b["id"]]["title"], "here", "an empty name goes back to the machine's")
+
     def test_attach_to_one_fleet_doesnt_know(self):
         with self.assertRaises(KeyError):
             fl.attach_inline(self.f, "nope", {})

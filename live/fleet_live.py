@@ -2823,7 +2823,8 @@ def session_argv(sid, argv, tmux_bin):
 
 def save_terms():
     with INLINE_LOCK:
-        keep = [{"id": k, "node": v["node"], "then": v["then"], "title": v["title"], "t": v["t"]} for k, v in sorted(INLINE.items(), key=lambda kv: kv[1]["t"])]
+        keep = [{"id": k, "node": v["node"], "then": v["then"], "title": v["title"], "t": v["t"], "group": v.get("group") or k, "named": bool(v.get("named"))}
+                for k, v in sorted(INLINE.items(), key=lambda kv: kv[1]["t"])]
     try:
         os.makedirs(os.path.dirname(TERMS_PATH), exist_ok=True)
         tmp = TERMS_PATH + ".tmp"
@@ -2843,8 +2844,10 @@ def load_terms():
     with INLINE_LOCK:
         for t in kept[:INLINE_MAX]:
             if isinstance(t, dict) and re.match(r"^[A-Za-z0-9_-]{6,40}$", str(t.get("id", ""))) and t["id"] not in INLINE:
+                g = str(t.get("group") or t["id"])
                 INLINE[t["id"]] = {"node": str(t.get("node", "")), "then": str(t.get("then", ""))[:300], "title": str(t.get("title", ""))[:120],
-                                   "t": float(t.get("t") or 0), "proc": None, "url": None}
+                                   "t": float(t.get("t") or 0), "proc": None, "url": None,
+                                   "group": g if GROUP_ID.match(g) else t["id"], "named": bool(t.get("named"))}
 
 
 def prune_tmux():
@@ -2856,8 +2859,28 @@ def prune_tmux():
 
 def list_inline():
     with INLINE_LOCK:
-        return [{"id": k, "node": v["node"], "title": v["title"], "live": bool(v.get("proc") and v["proc"].poll() is None)}
+        return [{"id": k, "node": v["node"], "title": v["title"], "then": v["then"], "group": v.get("group") or k,
+                 "live": bool(v.get("proc") and v["proc"].poll() is None)}
                 for k, v in sorted(INLINE.items(), key=lambda kv: kv[1]["t"])]
+
+
+GROUP_ID = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
+
+
+def update_inline(sid, group=None, title=None):
+    """A terminal joins a tab (group: a split, #339), or is named (title; empty: the machine's name again). Kept."""
+    if group is not None and not GROUP_ID.match(str(group)):
+        raise ValueError("That isn't a tab Fleet knows.")
+    with INLINE_LOCK:
+        s = INLINE[sid]
+        if group is not None:
+            s["group"] = str(group)
+        if title is not None:
+            t = re.sub(r"\s+", " ", str(title)).strip()[:80]
+            s["named"] = bool(t)
+            s["title"] = t or s.get("auto_title") or s["title"]
+    save_terms()
+    return True
 
 
 def bundled(name):
@@ -2925,6 +2948,8 @@ TTYD_BRIDGE_JS = r"""
     if (k === 't' && (MAC ? e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey : e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey)) act = 'newTab';
     if (k === 'j' && MAC && e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) act = 'minimize';
     if (e.key === 'Tab' && e.ctrlKey && !e.metaKey && !e.altKey) act = e.shiftKey ? 'prevTab' : 'nextTab';
+    if (MAC ? e.metaKey && !e.shiftKey && !e.altKey && e.code === 'Backslash' : e.ctrlKey && e.shiftKey && e.code === 'Digit5') act = 'split';
+    if (k === 'z' && MAC && e.metaKey && !e.shiftKey && !e.altKey) act = 'undo';
     if (!act) return;
     e.preventDefault(); e.stopPropagation();
     P.postMessage({fleet: 'termKey', act: act}, '*');
@@ -3038,8 +3063,11 @@ def start_ttyd(argv, opts):
     return p, "http://127.0.0.1:%d/fleet-%s/" % (port, token)
 
 
-def new_inline(fleet, node_id, then, opts):
-    """A new inline terminal on node_id: its shell (in tmux when there is tmux), kept in the setup, and a ttyd on it."""
+def new_inline(fleet, node_id, then, opts, group=None):
+    """A new inline terminal on node_id: its shell (in tmux when there is tmux), kept in the setup, and a ttyd on it.
+    group: the tab it joins (a split, #339); its own tab otherwise."""
+    if group is not None and not GROUP_ID.match(str(group)):
+        raise ValueError("That isn't a tab Fleet knows.")
     argv, title = inline_argv(fleet, node_id, then)
     if not ttyd_path():
         start_ttyd(argv, opts)   # says how to get ttyd
@@ -3047,7 +3075,8 @@ def new_inline(fleet, node_id, then, opts):
         if len(INLINE) >= INLINE_MAX:
             raise RuntimeError("Fleet keeps at most %d inline terminals; close one first." % INLINE_MAX)
         sid = secrets.token_urlsafe(9).replace("-", "x").replace("_", "y")
-        INLINE[sid] = {"node": node_id, "then": (then or "").strip(), "title": title, "t": time.time(), "proc": None, "url": None}
+        INLINE[sid] = {"node": node_id, "then": (then or "").strip(), "title": title, "t": time.time(), "proc": None, "url": None,
+                       "group": str(group) if group else sid, "named": False, "auto_title": title}
     t = tmux_path()
     if t:   # the shell starts now, whether or not a page ever connects
         tmux("-f", tmux_conf(), "new-session", "-d", "-s", "fleet-" + sid, "-x", "160", "-y", "40", *reconnecting(argv))
@@ -3073,7 +3102,10 @@ def attach_inline(fleet, sid, opts):
         if sid not in INLINE:   # closed meanwhile
             stop_ttyd({"proc": p})
             raise KeyError(sid)
-        INLINE[sid].update(proc=p, url=url, title=title)
+        INLINE[sid].update(proc=p, url=url, auto_title=title)
+        if not INLINE[sid].get("named"):
+            INLINE[sid]["title"] = title
+        title = INLINE[sid]["title"]
     return {"id": sid, "url": url, "title": title}
 
 
@@ -3307,7 +3339,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             try:
                 node = str(d.get("node", ""))
                 title = (self.fleet.machines[node].name if node in self.fleet.machines else node)
-                return self.send_json(dict(new_inline(self.fleet, node, str(d.get("then", "")), inline_opts(d, title)), ok=True))
+                return self.send_json(dict(new_inline(self.fleet, node, str(d.get("then", "")), inline_opts(d, title), group=d.get("group") or None), ok=True))
             except Exception as e:
                 return self.send_json({"ok": False, "error": str(e)[:300]})
         if u.path == "/api/inline-terminal/attach":   # #337: a kept one, after a reload or a restart; {id, theme, fontSize}
@@ -3319,6 +3351,14 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 return self.send_json({"ok": False, "gone": True, "error": "That terminal was closed."})
             except Exception as e:
                 return self.send_json({"ok": False, "error": str(e)[:300]})
+        if u.path == "/api/inline-terminal/update":   # #339: {id, group?, title?}: a split, or a name
+            d = self.read_json() or {}
+            try:
+                return self.send_json({"ok": update_inline(str(d.get("id", "")), group=d.get("group"), title=d.get("title"))})
+            except KeyError:
+                return self.send_json({"ok": False, "gone": True, "error": "That terminal was closed."})
+            except ValueError as e:
+                return self.send_json({"ok": False, "error": str(e)})
         if u.path == "/api/inline-terminal/close":
             d = self.read_json() or {}
             return self.send_json({"ok": close_inline(str(d.get("id", "")))})

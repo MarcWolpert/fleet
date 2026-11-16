@@ -410,7 +410,14 @@ html.native .superbtn{width:32px;height:32px}
 .td-size button:hover{color:var(--ink);background:var(--hover)}
 .td-size span{min-width:24px;text-align:center;font:500 12px/1 var(--mono);color:var(--ink-3)}
 .td-frames{flex:1;min-height:0;position:relative}
-.td-pane{position:absolute;inset:0}
+.td-pane{position:absolute;top:0;bottom:0;left:0;width:100%}
+.td-pane.cur::after{content:"";position:absolute;inset:0;pointer-events:none;z-index:1;box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--accent) 45%,transparent)}
+.td-vgrip{position:absolute;top:0;bottom:0;width:7px;margin-left:-3px;z-index:2;cursor:col-resize;background:linear-gradient(to right,transparent 3px,var(--line-2) 3px,var(--line-2) 4px,transparent 4px)}
+.td-vgrip:hover,.td-vgrip:focus-visible{background:color-mix(in srgb,var(--accent) 35%,transparent);outline:none}
+.tdrawer.tabdrag .td-tab{cursor:grabbing}
+.td-frames.droptarget::before{content:"";position:absolute;inset:0;z-index:3;pointer-events:none;background:color-mix(in srgb,var(--accent) 12%,transparent);box-shadow:inset 0 0 0 2px color-mix(in srgb,var(--accent) 60%,transparent)}
+.td-tab.droptarget{box-shadow:inset 0 0 0 2px color-mix(in srgb,var(--accent) 60%,transparent)}
+.td-tab input.td-name{width:12em;font:500 12.5px/1.2 var(--sans);padding:2px 6px;border-radius:5px;border:1px solid var(--accent);background:var(--win);color:var(--ink)}
 .td-pane[hidden]{display:none}
 .td-pane iframe{width:100%;height:100%;border:0;display:block;background:var(--win)}
 .tdrawer.dragging iframe{pointer-events:none}
@@ -711,6 +718,8 @@ tr.fmatch>td{background:color-mix(in srgb, var(--stale) 16%, transparent)!import
 .cx-h{padding:5px 9px 6px;font-size:11.5px;font-weight:600;color:var(--ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .cx-i{display:block;width:100%;padding:6px 9px;border-radius:7px;font-size:13px;color:var(--ink);text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .cx-i:hover,.cx-i:focus{background:var(--sel);outline:none}
+.cx-i.cx-hk{display:flex;justify-content:space-between;gap:18px}
+.cx-k{font:12px/1.4 var(--mono);color:var(--ink-3)}
 .cx-sep{height:1px;margin:4px 6px;background:var(--line)}
 
 /* Custom groups in the trees */

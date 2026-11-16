@@ -78,7 +78,8 @@ or quitting (its shell lives in tmux), and reconnects when the connection drops 
 or `sudo apt install ttyd`; Settings › Terminal picks a login shell, tmux or your own command, and can make inline the default).
 The terminals are there from the start: a tab for each connected computer, each starting when you first go to it. **+**
 opens one on any machine or container; the button left of the tabs minimizes them (they keep running), and the one at
-the bottom left of the pane, or ⌘J, brings them back.
+the bottom left of the pane, or ⌘J, brings them back. Like VS Code's: split one (⌘\\), kill one (⌘⌫ on its tab),
+rename it, drag a tab onto a terminal to split them there (⌘Z undoes it), and right-click a tab or the bar for the rest.
 
 **Folding the tree.** The row above Auto and Add a machine folds the whole tree: **~** collapses everything and keeps
 what was open, and pressed again brings exactly that back; **F~** opens every node at every depth, or closes them all.
@@ -272,6 +273,7 @@ and `connect.json` (which machines connect when Fleet starts, and your saved set
 | ↑ ↓ ← → | Move through the tree; collapse, expand, go to the parent |
 | ⌘T | Open a terminal on the selection; in the terminals below the page, pick where to open another (that one's machine first; Ctrl+Shift+T inside one elsewhere) |
 | ⌘J | Show or minimize the terminals below the page |
+| ⌘\\, ⌘⌫ in the terminals | Split the one you're on; kill it (Ctrl+Shift+5 and Delete elsewhere) |
 | ⌃⇥, ⌃⇧⇥ in the terminals | The next or previous terminal |
 | ⌘+ ⌘− ⌘0 | Bigger, smaller, actual size (the zoom shows by Settings when it isn't 100%) |
 | ⌘, | Settings |

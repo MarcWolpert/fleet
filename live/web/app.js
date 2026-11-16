@@ -2054,6 +2054,9 @@ const SHORTCUTS = [
   ['In the terminals: open another (pick where; this one’s machine first)', [IS_MAC ? MODK + 'T' : 'Ctrl+Shift+T']],
   ['In the terminals: the next or previous one', IS_MAC ? [CTRLK + TABK, CTRLK + SHIFTK + TABK] : ['Ctrl+Tab', 'Ctrl+Shift+Tab']],
   ['Show or minimize the terminals below the page', [IS_MAC ? MODK + 'J' : 'Alt+J']],
+  ['In the terminals: split the one you’re on', [IS_MAC ? '⌘\\' : 'Ctrl+Shift+5']],
+  ['In the terminals: kill the one you’re on (on its tab)', [IS_MAC ? '⌘⌫' : 'Delete']],
+  ['In the terminals: undo dragging a tab onto another', [MODK + 'Z']],
   ['Bigger, smaller, actual size', IS_MAC ? [MODK + '+', MODK + '−', MODK + '0'] : ['Ctrl+Plus', 'Ctrl+Minus', 'Ctrl+0']],
   ['Settings', [MODK + ',']],
   ['Refresh now', [MODK + 'R']],
@@ -2571,6 +2574,8 @@ function selItems(btn, what){
 }
 function ctxFor(t){
   if (!t || !t.closest || t.closest('.ptbl thead th, #ctxmenu, #colmenu, input, textarea, select')) return null;
+  const tdt = t.closest('#tdrawer [data-tdtab], #tdrawer .td-tab'); if (tdt) return termTabMenu((tdt.dataset.tdtab || tdt.dataset.tdg));
+  if (t.closest('#tdrawer .td-bar, #tdrawer .td-msg, #tdrawer .td-pane, [data-tdrestore]')) return termBarMenu();
   const tmb = t.closest('[data-terminal], [data-termchoose]'); if (tmb) return termMenu(tmb.dataset.terminal || tmb.dataset.termchoose);
   const tgh = t.closest('#tree .tg-h');
   if (tgh){
@@ -2635,7 +2640,7 @@ function openCtx(spec, x, y, origin){
   if (!el){ el = document.createElement('div'); el.id = 'ctxmenu'; el.className = 'cxmenu'; el.setAttribute('role', 'menu'); document.body.appendChild(el); }
   CTX.items = spec.items.filter(Boolean); CTX.origin = origin;
   el.setAttribute('aria-label', spec.title);
-  el.innerHTML = `<div class="cx-h">${esc(spec.title)}</div>` + CTX.items.map((it, i) => it === '—' ? '<div class="cx-sep" role="separator"></div>' : `<button type="button" role="menuitem" class="cx-i" data-cxi="${i}">${esc(it.label)}</button>`).join('');
+  el.innerHTML = `<div class="cx-h">${esc(spec.title)}</div>` + CTX.items.map((it, i) => it === '—' ? '<div class="cx-sep" role="separator"></div>' : `<button type="button" role="menuitem" class="cx-i${it.hint ? ' cx-hk' : ''}" data-cxi="${i}">${it.hint ? `<span class="cx-l">${esc(it.label)}</span><kbd class="cx-k">${esc(it.hint)}</kbd>` : esc(it.label)}</button>`).join('');
   el.hidden = false;
   const r = el.getBoundingClientRect();
   el.style.left = Math.max(8, Math.min(x, innerWidth - r.width - 8)) + 'px';
@@ -3211,7 +3216,7 @@ document.addEventListener('change', e => {
 // pane splits, the page above with its own scroll and the terminals below. Each frame (and its session) lives through
 // refreshes, the split moves from the terminals' top edge (S.termH) and closing a tab ends that session.
 // Settings › Terminal picks what it starts.
-const TD = {list:[], active:'', seq:0, ro:null};
+const TD = {list:[], active:'', seq:0, ro:null, gActive:{}, frac:{}, undo:[]};
 // Its own text size (#335), kept in ui.json as termFont: Fleet's zoom (Fleet.app reports it) is divided out, so ⌘+ ⌘−
 // leave the terminal as it is. ttyd's page gets the size from Fleet's script in it (TTYD_SIZE_JS), live.
 let ZOOM = 1;
@@ -3228,7 +3233,9 @@ window.addEventListener('message', e => {
   const f = [...document.querySelectorAll('#tdrawer iframe')].find(x => x.contentWindow === e.source); if (!f) return;
   const s = TD.list.find(x => x.key === f.closest('[data-tdpane]').dataset.tdpane);
   if (k === 'termReady') sendTermFont(f);
-  else if (k === 'termFocus'){ if (PANEL !== 'term'){ PANEL = 'term'; markPanel(); } }
+  else if (k === 'termFocus'){ if (s && TD.active !== s.key){ TD.active = s.key; keepActive(s); renderDrawer(); } if (PANEL !== 'term'){ PANEL = 'term'; markPanel(); } }
+  else if (k === 'termKey' && e.data.act === 'split') splitInline(s);
+  else if (k === 'termKey' && e.data.act === 'undo') undoTerm();
   else if (k === 'termKey' && e.data.act === 'newTab') openGoto({mode:'term', first:s && s.node});
   else if (k === 'termKey' && (e.data.act === 'nextTab' || e.data.act === 'prevTab')) cycleTerm(e.data.act === 'nextTab' ? 1 : -1);
   else if (k === 'termKey' && e.data.act === 'minimize') setTermMin(true);
@@ -3243,10 +3250,11 @@ function inlineNewTab(){
 // Ctrl+Tab, Ctrl+Shift+Tab (and the other keys that step through spaces) go round the terminals while you're in them
 function cycleTerm(d){
   if (!TD.list.length || PREFS.termMin) return false;
-  const i = Math.max(0, TD.list.findIndex(x => x.key === TD.active)), s = TD.list[(i + d + TD.list.length) % TD.list.length];
-  TD.active = s.key; keepActive(s); renderDrawer();
+  const gs = termGroups(), i = Math.max(0, gs.findIndex(x => x.g === termGroupOf(TD.list.find(y => y.key === TD.active)))), g = gs[(i + d + gs.length) % gs.length].g;
+  activateTermGroup(g);
+  const s = TD.list.find(x => x.key === TD.active);
   const f = document.querySelector(`#tdrawer [data-tdpane="${s.key}"] iframe`);
-  if (f) f.focus(); else { const t = document.getElementById('tdt-' + s.key); if (t) t.focus(); }
+  if (f) f.focus(); else { const t = document.getElementById('tdt-' + g); if (t) t.focus(); }
   if (PANEL !== 'term'){ PANEL = 'term'; markPanel(); }
   return true;
 }
@@ -3283,9 +3291,10 @@ function startInline(s){
   if (s.pending || s.live) return;
   s.pending = true; renderDrawer();
   const id = s.node;
-  api('/api/inline-terminal', {node:id, then:PREFS.inlineCmd || '', theme:termTheme(), fontSize:termFontPx()}).then(r => {
+  s.then = PREFS.inlineCmd || '';
+  api('/api/inline-terminal', Object.assign({node:id, then:s.then, theme:termTheme(), fontSize:termFontPx()}, s.group ? {group:s.group} : {})).then(r => {
     if (!TD.list.includes(s)){ if (r.ok) api('/api/inline-terminal/close', {id:r.id}).catch(() => {}); return; }  // closed while it opened
-    if (r.ok){ Object.assign(s, {id:r.id, url:r.url, title:r.title || s.title, pending:false, live:true}); if (TD.active === s.key) keepActive(s); }
+    if (r.ok){ Object.assign(s, {id:r.id, url:r.url, title:r.title || s.title, group:r.group || s.group || r.id, pending:false, live:true}); if (TD.active === s.key) keepActive(s); }
     else Object.assign(s, {pending:false, error:r.error || 'Couldn’t open an inline terminal'});
     renderDrawer();
   }).catch(() => { Object.assign(s, {pending:false, error:'Couldn’t reach Fleet'}); renderDrawer(); });
@@ -3303,7 +3312,8 @@ async function syncTerms(){
   TD.avail = {tmux:!!d.tmux, ttyd:!!d.ttyd};
   const kept = d.terminals || [], ids = new Set(kept.map(t => t.id));
   TD.list = TD.list.filter(s => !s.live || ids.has(s.id));   // closed elsewhere
-  kept.forEach(t => { if (!TD.list.some(s => s.id === t.id)) TD.list.push({key:'k' + (++TD.seq), id:t.id, node:t.node, title:t.title, live:true, url:null}); });
+  kept.forEach(t => { if (!TD.list.some(s => s.id === t.id)) TD.list.push({key:'k' + (++TD.seq), id:t.id, node:t.node, title:t.title, then:t.then || '', group:t.group || t.id, live:true, url:null}); });
+  TD.list.forEach(s => { const t = kept.find(x => x.id === s.id); if (t){ s.group = t.group || t.id; s.title = t.title || s.title; } });
   syncAutoTerms();
   if (!TD.list.some(s => s.key === TD.active)){ const a = TD.list.find(s => s.id === PREFS.termActive) || TD.list[0]; TD.active = a ? a.key : ''; }
   renderDrawer();
@@ -3328,7 +3338,8 @@ function closeInline(id){
   if (n && n.kind === 'machine' && !TD.list.some(x => x.node === s.node) && !(PREFS.termClosed || []).includes(s.node)){
     PREFS = Object.assign({}, PREFS, {termClosed:(PREFS.termClosed || []).concat([s.node])}); savePrefs('the terminals');
   }
-  if (TD.active === s.key) TD.active = TD.list.length ? TD.list[TD.list.length - 1].key : '';
+  if (TD.active === s.key){ const same = TD.list.filter(x => termGroupOf(x) === termGroupOf(s)); TD.active = same.length ? same[same.length - 1].key : TD.list.length ? TD.list[TD.list.length - 1].key : ''; }
+  termEqual(termGroupOf(s));
   renderDrawer();
 }
 function termHMax(){ const c = $('mcol'); return Math.max(140, (c ? c.getBoundingClientRect().height : 700) - 140); }   // the page keeps 140px
@@ -3379,12 +3390,29 @@ function renderDrawer(){
   d.hidden = false;
   d.querySelector('[data-tdfontnow]').textContent = termFont();
   if (!TD.list.some(x => x.key === TD.active)) TD.active = (TD.list.find(x => x.live && x.id === PREFS.termActive) || TD.list[0]).key;   // the one you were on, or the first
-  d.querySelector('.td-tabs').innerHTML = TD.list.map(s => `<span class="td-tab${s.key === TD.active ? ' on' : ''}"><button type="button" role="tab" id="tdt-${esc(s.key)}" aria-controls="tdp-${esc(s.key)}" aria-selected="${s.key === TD.active}" tabindex="${s.key === TD.active ? 0 : -1}" data-tdtab="${esc(s.key)}">${icon('terminal')}${esc(s.title)}${s.pending ? ' <span class="sub">opening…</span>' : ''}</button><button type="button" class="td-x" data-tdclose="${esc(s.id || s.key)}" aria-label="Close ${esc(s.title)}" title="Close (ends this session)">${icon('x', 2.2)}</button></span>`).join('');
+  const groups = termGroups(), ag = termGroupOf(TD.list.find(x => x.key === TD.active));
+  TD.gActive[ag] = TD.active;
+  if (!TD.renaming) d.querySelector('.td-tabs').innerHTML = groups.map(({g, list}) => {
+    const on = g === ag, lab = list.map(x => x.title).join(' · '), one = list.length === 1 ? list[0] : null;
+    return `<span class="td-tab${on ? ' on' : ''}${list.length > 1 ? ' split' : ''}" data-tdg="${esc(g)}"><button type="button" role="tab" id="tdt-${esc(g)}" aria-selected="${on}" tabindex="${on ? 0 : -1}" data-tdtab="${esc(g)}">${icon('terminal')}<span class="td-lab">${esc(lab)}</span>${list.some(x => x.pending) ? ' <span class="sub">opening…</span>' : ''}</button>`
+      + `<button type="button" class="td-x" ${one ? `data-tdclose="${esc(one.id || one.key)}"` : `data-tdclosegroup="${esc(g)}"`} aria-label="Close ${esc(lab)}" title="Close (ends ${one ? 'this session' : 'these sessions'})">${icon('x', 2.2)}</button></span>`;
+  }).join('');
   const fr = d.querySelector('.td-frames');
-  [...fr.children].forEach(p => { if (!TD.list.some(s => s.key === p.dataset.tdpane)) p.remove(); });
+  [...fr.querySelectorAll('.td-pane')].forEach(p => { if (!TD.list.some(s => s.key === p.dataset.tdpane)) p.remove(); });
+  fr.querySelectorAll('.td-vgrip').forEach(x => x.remove());
+  const shown = (groups.find(x => x.g === ag) || {list:[]}).list, fracs = termFracs(shown);
+  let left = 0;
+  shown.forEach((x, i) => {   // the tab's terminals side by side; a frame never moves in the page (that would reload it)
+    if (i){ const v = document.createElement('div'); v.className = 'td-vgrip'; v.dataset.tdsplit = i; v.style.left = (left * 100) + '%'; v.setAttribute('role', 'separator'); v.setAttribute('aria-orientation', 'vertical'); v.setAttribute('aria-label', 'Resize the split'); v.tabIndex = 0; fr.appendChild(v); }
+    x._left = left; x._width = fracs[i]; left += fracs[i];
+  });
   TD.list.forEach(s => {
     let p = fr.querySelector(`[data-tdpane="${s.key}"]`);
-    if (!p){ p = document.createElement('div'); p.className = 'td-pane'; p.dataset.tdpane = s.key; p.id = 'tdp-' + s.key; p.setAttribute('role', 'tabpanel'); p.setAttribute('aria-labelledby', 'tdt-' + s.key); fr.appendChild(p); }
+    if (!p){ p = document.createElement('div'); p.className = 'td-pane'; p.dataset.tdpane = s.key; p.id = 'tdp-' + s.key; p.setAttribute('role', 'tabpanel'); fr.appendChild(p); }
+    p.setAttribute('aria-labelledby', 'tdt-' + termGroupOf(s)); p.dataset.tdid = s.id || '';
+    const vis = shown.includes(s);
+    if (vis){ p.style.left = (s._left * 100) + '%'; p.style.width = (s._width * 100) + '%'; }
+    p.classList.toggle('cur', vis && shown.length > 1 && s.key === TD.active);
     const fr0 = p.querySelector('iframe');
     if (s.url && fr0 && fr0.getAttribute('src') !== s.url) fr0.setAttribute('src', s.url);   // the same frame, on Fleet's new ttyd
     if (s.url && !fr0){
@@ -3395,14 +3423,133 @@ function renderDrawer(){
     } else if (!s.url && !fr0){
       p.innerHTML = s.error ? `<div class="td-msg" role="alert">${esc(s.error)}</div>` : `<div class="td-msg">Starting ${esc(s.title)}…</div>`;
     }
-    p.hidden = s.key !== TD.active;
-    if (s.key === TD.active && s.live && !s.url && !s.error) attachInline(s);
-    if (s.key === TD.active && !s.live && !s.pending && !s.error && !s.url) startInline(s);
+    p.hidden = !vis;
+    if (vis && s.live && !s.url && !s.error) attachInline(s);
+    if (vis && !s.live && !s.pending && !s.error && !s.url) startInline(s);
   });
   const note = d.querySelector('.td-note');
   note.hidden = !(TD.avail && !TD.avail.tmux);
   placeDrawer();
 }
+// Tabs and splits (#339): a tab holds one terminal or several side by side (its group: the server keeps it). Split
+// (⌘\), kill (⌘⌫, or Delete on a tab), rename, move one to its own tab, drag a tab onto a terminal to split it there
+// (⌘Z puts it back), and right-click menus for a tab and for the bar.
+function termGroupOf(s){ return s ? (s.group || s.id || s.key) : ''; }
+function termGroups(){ const out = []; TD.list.forEach(s => { const g = termGroupOf(s); let x = out.find(o => o.g === g); if (!x) out.push(x = {g, list:[]}); x.list.push(s); }); return out; }
+function termFracs(list){ const f = list.map(s => TD.frac[s.key] || 1 / list.length), t = f.reduce((a, b) => a + b, 0) || 1; return f.map(x => x / t); }
+function termEqual(g){ TD.list.filter(x => termGroupOf(x) === g).forEach(x => { delete TD.frac[x.key]; }); }
+function activeTerm(){ return TD.list.find(x => x.key === TD.active); }
+function activateTermGroup(g){
+  const list = TD.list.filter(x => termGroupOf(x) === g); if (!list.length) return;
+  const k = TD.gActive[g] && list.some(x => x.key === TD.gActive[g]) ? TD.gActive[g] : list[0].key;
+  TD.active = k; keepActive(list.find(x => x.key === k)); renderDrawer();
+}
+function splitInline(s){
+  s = s || activeTerm(); if (!s || !s.live) return;
+  const n = nodes[s.node], x = {key:'k' + (++TD.seq), id:'', node:s.node, title:n ? n.name : s.title, group:termGroupOf(s)};
+  TD.list.splice(TD.list.indexOf(s) + 1, 0, x); termEqual(x.group); TD.active = x.key; startInline(x);
+}
+function closeTermGroup(g){ TD.list.filter(x => termGroupOf(x) === g).forEach(x => closeInline(x.id || x.key)); }
+function setTermGroup(s, g){ s.group = g; if (s.live) api('/api/inline-terminal/update', {id:s.id, group:g}).catch(() => {}); }
+function unsplitTerm(s){ if (!s || !s.live) return; const from = termGroupOf(s); TD.list.splice(TD.list.indexOf(s), 1); TD.list.push(s); setTermGroup(s, s.id); termEqual(from); TD.active = s.key; renderDrawer(); }
+// a dragged tab joins the tab it's dropped on (or the one you see, dropped on its terminals); ⌘Z puts it back
+function joinTermGroup(g, to){
+  if (g === to) return;
+  const moving = TD.list.filter(x => termGroupOf(x) === g); if (!moving.length || !TD.list.some(x => termGroupOf(x) === to)) return;
+  TD.undo.push(moving.map(x => ({key:x.key, from:termGroupOf(x), at:TD.list.indexOf(x)})));
+  if (TD.undo.length > 20) TD.undo.shift();
+  TD.list = TD.list.filter(x => !moving.includes(x));
+  const last = TD.list.map(x => termGroupOf(x)).lastIndexOf(to);
+  TD.list.splice(last + 1, 0, ...moving);
+  moving.forEach(x => setTermGroup(x, to)); termEqual(to);
+  renderDrawer();
+}
+function undoTerm(){
+  const u = TD.undo.pop(); if (!u) return false;
+  u.slice().sort((a, b) => a.at - b.at).forEach(m => {
+    const x = TD.list.find(y => y.key === m.key); if (!x) return;
+    const to = termGroupOf(x); TD.list.splice(TD.list.indexOf(x), 1); TD.list.splice(Math.min(m.at, TD.list.length), 0, x); setTermGroup(x, m.from); termEqual(to);
+  });
+  renderDrawer(); return true;
+}
+function renameTerm(s){
+  if (!s) return; const g = termGroupOf(s);
+  const lab = document.querySelector(`#tdt-${CSS.escape(g)} .td-lab`); if (!lab) return;
+  const inp = document.createElement('input'); inp.className = 'td-name'; inp.value = s.title; inp.setAttribute('aria-label', 'Terminal name'); inp.maxLength = 80;
+  lab.replaceWith(inp); TD.renaming = true; inp.focus(); inp.select();
+  let done = false;
+  const finish = keep => {
+    if (done) return; done = true; TD.renaming = false;
+    const v = inp.value.replace(/\s+/g, ' ').trim();
+    if (keep && v !== s.title){ const n = nodes[s.node]; s.title = v || (n ? n.name : s.title); if (s.live) api('/api/inline-terminal/update', {id:s.id, title:v}).catch(() => {}); }
+    renderDrawer(); const t = document.getElementById('tdt-' + g); if (t) t.focus();
+  };
+  inp.addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Enter'){ e.preventDefault(); finish(true); } else if (e.key === 'Escape'){ e.preventDefault(); finish(false); } });
+  inp.addEventListener('blur', () => finish(true));
+  inp.addEventListener('click', e => e.stopPropagation());
+}
+const TERM_KEYS = {split:IS_MAC ? '⌘\\' : 'Ctrl+Shift+5', kill:IS_MAC ? '⌘⌫' : 'Delete'};
+function termTabMenu(g){
+  const list = TD.list.filter(x => termGroupOf(x) === g); if (!list.length) return null;
+  const s = list.find(x => x.key === TD.gActive[g]) || list[0];
+  return {title:list.map(x => x.title).join(' · '), items:[
+    {label:'Split terminal', hint:TERM_KEYS.split, run:() => splitInline(s)},
+    list.length > 1 && {label:'Move to its own tab', run:() => unsplitTerm(s)},
+    {label:'Rename…', run:() => renameTerm(s)},
+    {label:'Kill terminal', hint:TERM_KEYS.kill, run:() => closeInline(s.id || s.key)},
+    '—', {label:'Close tab', run:() => closeTermGroup(g)}]};
+}
+function termBarMenu(){
+  const s = activeTerm();
+  return {title:'Terminals', items:[
+    {label:'New terminal…', hint:MODK + 'T', run:() => openGoto({mode:'term', first:s && s.node})},
+    {label:PREFS.termMin ? 'Show the terminals' : 'Minimize', hint:IS_MAC ? '⌘J' : 'Alt+J', run:() => setTermMin(!PREFS.termMin)},
+    '—',
+    {label:'Larger text', run:() => setTermFont(termFont() + 1)},
+    {label:'Smaller text', run:() => setTermFont(termFont() - 1)},
+    {label:'Actual size', run:() => setTermFont(TERM_FONT.def)}]};
+}
+// the keys, in the terminals (their bar, a tab, or a terminal: Fleet's script in ttyd's page passes them on)
+document.addEventListener('keydown', e => {
+  if (PANEL !== 'term' || PREFS.termMin || !TD.list.length) return;
+  if (e.target.closest && e.target.closest('input, textarea, select')) return;
+  const mod = IS_MAC ? e.metaKey : e.ctrlKey;
+  if (IS_MAC ? (e.metaKey && !e.shiftKey && !e.altKey && e.code === 'Backslash') : (e.ctrlKey && e.shiftKey && e.code === 'Digit5')){ e.preventDefault(); e.stopPropagation(); splitInline(); return; }
+  const onTab = e.target.closest && e.target.closest('#tdrawer [data-tdtab]');
+  if (onTab && ((IS_MAC && e.metaKey && e.key === 'Backspace') || (!mod && !e.altKey && e.key === 'Delete'))){ e.preventDefault(); e.stopPropagation(); const s = activeTerm(); if (s) closeInline(s.id || s.key); return; }
+  if (mod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'z' && TD.undo.length){ e.preventDefault(); e.stopPropagation(); undoTerm(); }
+}, true);
+// focus in a terminal makes it the one you're on
+document.addEventListener('focusin', e => { const p = e.target.closest && e.target.closest('#tdrawer .td-pane'); if (p && TD.active !== p.dataset.tdpane){ TD.active = p.dataset.tdpane; keepActive(activeTerm()); renderDrawer(); } });
+// drag a tab: onto the terminals you see (or another tab) it joins that tab; the split between two moves with its grip
+document.addEventListener('pointerdown', e => {
+  const t = e.target.closest('#tdrawer [data-tdtab]'); if (!t || e.button !== 0 || TD.renaming) return;
+  const g = t.dataset.tdtab, x0 = e.clientX, y0 = e.clientY, d = $('tdrawer');
+  let moving = false;
+  const target = ev => { const el = document.elementFromPoint(ev.clientX, ev.clientY); if (!el) return ''; const tt = el.closest('#tdrawer [data-tdtab]'); if (tt) return tt.dataset.tdtab; return el.closest('#tdrawer .td-frames') ? termGroupOf(activeTerm()) : ''; };
+  const mv = ev => {
+    if (!moving && Math.hypot(ev.clientX - x0, ev.clientY - y0) > 6){ moving = true; d.classList.add('dragging', 'tabdrag'); }
+    if (moving){ const to = target(ev); d.querySelectorAll('.droptarget').forEach(x => x.classList.remove('droptarget')); if (to && to !== g){ const el = to === termGroupOf(activeTerm()) && !(document.elementFromPoint(ev.clientX, ev.clientY) || d).closest('[data-tdtab]') ? d.querySelector('.td-frames') : d.querySelector(`.td-tab[data-tdg="${CSS.escape(to)}"]`); if (el) el.classList.add('droptarget'); } }
+  };
+  const up = ev => {
+    document.removeEventListener('pointermove', mv); document.removeEventListener('pointerup', up);
+    if (!moving) return;
+    const to = target(ev); d.classList.remove('dragging', 'tabdrag'); d.querySelectorAll('.droptarget').forEach(x => x.classList.remove('droptarget'));
+    TD.dragged = true; setTimeout(() => { TD.dragged = false; }, 0);
+    if (to && to !== g) joinTermGroup(g, to);
+  };
+  document.addEventListener('pointermove', mv); document.addEventListener('pointerup', up);
+});
+document.addEventListener('pointerdown', e => {
+  const v = e.target.closest('#tdrawer .td-vgrip'); if (!v || e.button !== 0) return;
+  e.preventDefault();
+  const d = $('tdrawer'), fr = d.querySelector('.td-frames'), box = fr.getBoundingClientRect(), shown = TD.list.filter(x => termGroupOf(x) === termGroupOf(activeTerm())), i = +v.dataset.tdsplit;
+  const f = termFracs(shown), a = shown[i - 1], b = shown[i], pair = f[i - 1] + f[i], start = f.slice(0, i - 1).reduce((x, y) => x + y, 0);
+  d.classList.add('dragging');
+  const mv = ev => { const at = Math.min(pair - 0.08, Math.max(0.08, (ev.clientX - box.left) / box.width - start)); shown.forEach((x, j) => { TD.frac[x.key] = f[j]; }); TD.frac[a.key] = at; TD.frac[b.key] = pair - at; renderDrawer(); };
+  const up = () => { document.removeEventListener('pointermove', mv); document.removeEventListener('pointerup', up); d.classList.remove('dragging'); };
+  document.addEventListener('pointermove', mv); document.addEventListener('pointerup', up);
+});
 function setTermH(h, keep){
   S.termH = Math.round(Math.min(termHMax(), Math.max(120, h)));
   placeDrawer();
@@ -3415,7 +3562,8 @@ document.addEventListener('click', e => {
   if (e.target.closest('#tdrawer [data-tdmin]')){ setTermMin(true); return; }
   if (e.target.closest('[data-tdrestore]')){ setTermMin(false); return; }
   if (e.target.closest('#tdrawer [data-tdadd]')){ openGoto({mode:'term'}); return; }
-  const t = e.target.closest('#tdrawer [data-tdtab]'); if (t){ TD.active = t.dataset.tdtab; keepActive(TD.list.find(x => x.key === TD.active)); renderDrawer(); }
+  const cg = e.target.closest('#tdrawer [data-tdclosegroup]'); if (cg){ closeTermGroup(cg.dataset.tdclosegroup); return; }
+  const t = e.target.closest('#tdrawer [data-tdtab]'); if (t){ if (TD.dragged){ TD.dragged = false; return; } activateTermGroup(t.dataset.tdtab); }
 });
 document.addEventListener('pointerdown', e => {
   const g = e.target.closest('#tdrawer .td-grip'); if (!g || e.button !== 0) return;
