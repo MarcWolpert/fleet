@@ -1475,7 +1475,8 @@ def restart_self(fleet, reason):
 # ---------------------------------------------------------------- settings
 TILES = ("laptop", "desktop", "terminal", "server", "globe", "vm")
 SSH_DEST = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.@:\[\]%-]{0,252}$")   # never starts with "-": no option smuggling
-MACHINE_KEYS = ("id", "name", "kind", "ssh", "os", "tile", "vm_on", "domain", "tailscale")
+MACHINE_KEYS = ("id", "name", "kind", "ssh", "os", "os_label", "tile", "vm_on", "domain", "tailscale", "note")
+NOTE_KEYS = ("label", "text")   # note is a table: [machine.note] label = "...", text = "..."
 
 
 def validate_config(data):
@@ -1490,7 +1491,11 @@ def validate_config(data):
     machines, ids = [], set()
     for i, m in enumerate(data.get("machines") or []):
         label = "Machine %d" % (i + 1)
-        mm = {k: str(m.get(k, "")).strip() for k in MACHINE_KEYS if str(m.get(k, "")).strip()}
+        mm = {k: str(m.get(k, "")).strip() for k in MACHINE_KEYS if k != "note" and str(m.get(k, "")).strip()}
+        if isinstance(m.get("note"), dict):
+            note = {k: str(m["note"].get(k, "")).strip() for k in NOTE_KEYS if str(m["note"].get(k, "")).strip()}
+            if note:
+                mm["note"] = note
         if not re.match(r"^[A-Za-z0-9_-]{1,40}$", mm.get("id", "")):
             errors.append("%s: id must be 1–40 letters, digits, - or _." % label)
         elif mm["id"] in ids:
@@ -1531,8 +1536,11 @@ def write_config(path, cfg):
     for m in cfg["machine"]:
         lines.append("[[machine]]")
         for k in MACHINE_KEYS:
-            if m.get(k):
+            if m.get(k) and k != "note":
                 lines.append("%s = %s" % (k, json.dumps(m[k], ensure_ascii=False)))
+        if m.get("note"):
+            lines.append("[machine.note]")
+            lines += ["%s = %s" % (k, json.dumps(m["note"][k], ensure_ascii=False)) for k in NOTE_KEYS if m["note"].get(k)]
         lines.append("")
     if os.path.exists(path):
         shutil.copy(path, path + ".bak")
