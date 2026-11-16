@@ -18,8 +18,8 @@ test('the + sits at the bottom of the tree panel, in both trees, and opens the i
     const p = await browser.page(fx, {ui: ui({tree}), height: 800});
     try {
       await p.waitFor(`document.querySelector('aside.side [data-addmachinedlg]')`);
-      const b = await p.eval(`(() => { const a = document.querySelector('aside.side').getBoundingClientRect(), r = document.querySelector('[data-addmachinedlg]').getBoundingClientRect(); return {bottom: a.bottom - r.bottom, left: r.left - a.left}; })()`);
-      assert.ok(b.bottom >= 0 && b.bottom < 40 && b.left < 40, JSON.stringify(b));
+      const b = await p.eval(`(() => { const a = document.querySelector('aside.side').getBoundingClientRect(), r = document.querySelector('[data-addmachinedlg]').getBoundingClientRect(); return {bottom: a.bottom - r.bottom, right: a.right - r.right}; })()`);
+      assert.ok(b.bottom >= 0 && b.bottom < 40 && b.right < 40, JSON.stringify(b));   // bottom right, Auto on its left (#212)
       assert.match(await p.eval(`document.querySelector('[data-addmachinedlg]').textContent`), /Add a machine/);
       await p.eval(`(() => { document.querySelector('[data-addmachinedlg]').click(); return true; })()`);
       await p.waitFor(`document.querySelector('#addm[role=dialog]')`);

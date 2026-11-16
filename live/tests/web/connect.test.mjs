@@ -77,3 +77,15 @@ test('Connect automatically: All, a saved set or None; save what is connected no
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
 });
+
+test('the tree footer: Auto on the left, Add a machine on the right edge', async () => {
+  const p = await browser.page(fx1(), {ui: ui({sel: 'fleet'})});
+  try {
+    await p.waitFor(`document.querySelector('.side-foot [data-autoconn]')`);
+    const r = await p.eval(`(() => { const f = document.querySelector('.side-foot').getBoundingClientRect(), a = document.querySelector('[data-autoconn]').getBoundingClientRect(), m = document.querySelector('[data-addmachinedlg]').getBoundingClientRect(); return {autoLeft: Math.round(a.left - f.left), addRight: Math.round(f.right - m.right), order: a.right <= m.left}; })()`);
+    assert.equal(r.order, true, 'Auto before Add a machine');
+    assert.ok(r.autoLeft <= 16, `Auto at the left (${r.autoLeft}px in)`);
+    assert.ok(r.addRight <= 16, `Add a machine at the right (${r.addRight}px in)`);
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
