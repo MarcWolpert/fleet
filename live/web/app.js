@@ -69,6 +69,8 @@ function save(){ try { const {hover, mx, my, ...keep} = S; localStorage.setItem(
 
 /* ---------- model ---------- */
 let TPINS = {}, PREFS = {}, prefsBusy = false;
+// the process open in the Details drop-down (see "One process, up close")
+const INSP = {mid:null, pid:0, name:'', order:null, gorder:null, data:null, good:null, acc:{}, samples:0, secs:0, looks:0, busy:false};
 let DATA = null, PINS = [], WINDOW = 180, INTERVAL = 3, CPUS = {}, PROCS = {machine:null, list:[]}, NET = null, DISKS = {}, IFS = {};
 const nodes = {}, roots = [];
 const zero = () => new Array(H).fill(0);
@@ -976,16 +978,23 @@ function detailsView(n, docked){
   const col = ALLCOLS.find(c => c.k === SORT.k) || COLS[0];
   const dir = SORT.dir;
   list = list.slice().sort((a, b) => { const x = col.get(a), y = col.get(b); return (x < y ? -1 : x > y ? 1 : 0) * dir || b[4] - a[4]; });
+  // A process is open: rows keep the places they had when it opened (new ones go last), so nothing moves under you.
+  const holding = INSP.pid && INSP.mid === mid && INSP.order;
+  if (holding){ const pos = new Map(INSP.order.map((pid, i) => [pid, i])); list = list.filter(p => pos.has(p[0])).sort((a, b) => pos.get(a[0]) - pos.get(b[0])).concat(list.filter(p => !pos.has(p[0]))); }
   const groupBy = {none:null, cpugroup:groupOf, owner:p => ownerName(p[10]) || '—', user:p => p[2] || '—', state:p => stateLabel(p[3]) || '—'}[S.group];
   const LIMIT = 400;
   let body = '', shown = 0, more = '';
-  const rowHTML = p => `<tr data-pid="${p[0]}">${COLS.map(c => `<td class="${c.l ? 'l' : ''} ${c.cls || ''}">${c.show(p)}</td>`).join('')}</tr>`;  // data-pid: columns can move or hide
+  const isInsp = p => INSP.pid === p[0] && INSP.mid === mid;
+  let inspShown = false;
+  const rowHTML = p => `<tr data-pid="${p[0]}" aria-expanded="${isInsp(p)}" class="prow${isInsp(p) ? ' open' : ''}">${COLS.map(c => `<td class="${c.l ? 'l' : ''} ${c.cls || ''}">${c.show(p)}</td>`).join('')}</tr>`  // data-pid: columns can move or hide
+    + (isInsp(p) ? (inspShown = true, `<tr class="pinsp"><td colspan="${COLS.length}">${inspectPanel(p)}</td></tr>`) : '');
   if (groupBy){
     // Groups start collapsed, each header a summary; open ones are remembered per Group-by mode (S.groupOpen)
     // and share the row limit.
     const groups = new Map();
     list.forEach(p => { const g = groupBy(p); if (!groups.has(g)) groups.set(g, []); groups.get(g).push(p); });
-    const ordered = [...groups.entries()].sort((a, b) => b[1].reduce((s, p) => s + p[4], 0) - a[1].reduce((s, p) => s + p[4], 0));
+    let ordered = [...groups.entries()].sort((a, b) => b[1].reduce((s, p) => s + p[4], 0) - a[1].reduce((s, p) => s + p[4], 0));
+    if (holding && INSP.gorder){ const gp = new Map(INSP.gorder.map((g, i) => [g, i])); ordered = ordered.filter(x => gp.has(x[0])).sort((a, b) => gp.get(a[0]) - gp.get(b[0])).concat(ordered.filter(x => !gp.has(x[0]))); }
     const isOpen = g => groupOpen(S.group, g);
     const nOpen = ordered.filter(([g]) => isOpen(g)).length;
     const per = nOpen ? Math.max(10, Math.floor(LIMIT / nOpen)) : 0;
@@ -1014,8 +1023,11 @@ function detailsView(n, docked){
   const tools = `<div class="dtools"><input type="search" id="pfilter" placeholder="Filter by name, PID, user or command" value="${esc(S.filter)}" aria-label="Filter processes"><label>Group by <select id="pgroup"><option value="none"${S.group==='none'?' selected':''}>Nothing</option><option value="cpugroup"${S.group==='cpugroup'?' selected':''}>CPU group (CCD, P-/E-cores)</option><option value="owner"${S.group==='owner'?' selected':''}>Where it runs (tree node)</option><option value="user"${S.group==='user'?' selected':''}>User</option><option value="state"${S.group==='state'?' selected':''}>Status</option></select></label>${groupBy ? `<span class="gall"><button type="button" class="btn" data-gall="open">Expand all</button><button type="button" class="btn" data-gall="close">Collapse all</button></span>` : ''}</div>`;
   const thead = `<tr>${COLS.map(c => `<th class="${c.l ? 'l' : ''}" data-colk="${c.k}" ${c.k === SORT.k ? `aria-sort="${dir < 0 ? 'descending' : 'ascending'}"` : ''}><button type="button" data-sort="${c.k}" title="Sort; right-click to choose and arrange columns">${c.label}${c.k === SORT.k ? (dir < 0 ? ' ↓' : ' ↑') : ''}</button></th>`).join('')}</tr>`;
   const applied = FS.filter(f => f.apply);
-  if (applied.length && all && !list.length) body = `<tr class="empty"><td colspan="${COLS.length}" class="l" style="padding:18px 10px;color:var(--ink-3)">No process matches ${esc(applied.map(f => f.short).concat(q ? ['“' + S.filter.trim() + '”'] : []).join(' + '))} right now.</td></tr>`;
-  return head + groupNote + `<section class="card">${tools}${filterChips(FS)}<div class="pscroll"><table class="ptbl"><thead>${thead}</thead><tbody>${body}</tbody></table>${more ? `<div class="more">${more}</div>` : ''}</div></section>`;
+  // the open process isn't in the list any more (it exited, or the filter hides it): its drop-down goes first
+  if (INSP.pid && INSP.mid === mid && !inspShown && all) body = `<tr class="pinsp"><td colspan="${COLS.length}">${inspectPanel(null)}</td></tr>` + body;
+  if (applied.length && all && !list.length && !INSP.pid) body = `<tr class="empty"><td colspan="${COLS.length}" class="l" style="padding:18px 10px;color:var(--ink-3)">No process matches ${esc(applied.map(f => f.short).concat(q ? ['“' + S.filter.trim() + '”'] : []).join(' + '))} right now.</td></tr>`;
+  const hold = holding ? `<div class="holdbar">${icon('pin')}<span>Rows hold their places while <b>${esc(INSP.name || 'PID ' + INSP.pid)}</b> is open</span><button type="button" class="btn" data-inspclose="1">Resume live order</button></div>` : '';
+  return head + groupNote + `<section class="card">${tools}${filterChips(FS)}${hold}<div class="pscroll"><table class="ptbl" data-mid="${esc(mid)}"><thead>${thead}</thead><tbody>${body}</tbody></table>${more ? `<div class="more">${more}</div>` : ''}</div></section>`;
 }
 
 /* ---------- network detail ---------- */
@@ -1157,6 +1169,9 @@ function select(id){
   save(); renderAll(); refreshNow();
 }
 document.addEventListener('click', e => {
+  if (e.target.closest('[data-inspclose]')){ closeInspect(); return; }
+  const prow = e.target.closest('.ptbl tbody tr[data-pid]');
+  if (prow && !e.target.closest('button, a, input, select, label')){ toggleInspect(prow.closest('.ptbl').dataset.mid, +prow.dataset.pid, prow); return; }
   const tp = e.target.closest('[data-tpin]'); if (tp){ e.stopPropagation(); toggleTilePin(tp.dataset.tpin); return; }
   const ap = e.target.closest('[data-addpin]'); if (ap){ PICK.open ? closePicker(false) : openPicker(); return; }
   const st = e.target.closest('[data-settings]'); if (st){ openSettings(); return; }
@@ -1233,6 +1248,7 @@ document.addEventListener('toggle', e => { if (e.target.classList && e.target.cl
 let lastSig = '', busy = false, fails = 0;
 function sigOf(){ return Object.keys(nodes).join('|') + '#' + PINS.join('|'); }
 async function refreshNow(){
+  inspectTick();
   if (busy) return; busy = true;
   try {
     const r = await fetch('/api/fleet', {cache:'no-store'});
@@ -1689,6 +1705,7 @@ document.addEventListener('keydown', e => {
   const run = (name, arg) => { if ((SET.open || $('keys') || $('goto')) && !['keys', 'refresh', 'goto'].includes(name)) return; if (fleetCommand(name, arg)) e.preventDefault(); };
   if (e.key === 'Escape'){
     if ($('keys')){ e.preventDefault(); closeKeys(); return; }
+    if (INSP.pid && !typing && !overlayOpen()){ e.preventDefault(); closeInspect(); return; }
     if (e.target.id === 'pfilter'){ e.preventDefault(); if (e.target.value){ e.target.value = ''; S.filter = ''; save(); renderMain(); } else e.target.blur(); return; }
     return;
   }
@@ -1797,3 +1814,111 @@ function openGoto(){
 }
 function closeGoto(){ const el = $('goto'); if (el) el.remove(); }
 function runGoto(i){ const x = GOTO.items[i]; if (!x) return; closeGoto(); x.run(); }
+
+
+/* ---------- One process, up close (the Details drop-down) ---------- */
+// Click a process: /api/proc takes a ~1.5 s look at it (inspect_linux.py / inspect_windows.ps1 / ps+lsof on a
+// Mac), again on every poll while it stays open. What its threads were doing adds up over every look, so the
+// answer to "what does it wait on" is over the whole time you watched, not one snapshot.
+const WAIT_LABEL = {cpu:'Running on a CPU', cpuwait:'Waiting for a CPU', disk:'Disk I/O', netfs:'Network storage (NFS, SMB, FUSE)', memory:'Memory: paging',
+  gpu:'The GPU', lock:'Locks: its other threads', network:'Network', io:'Async I/O', pipe:'Pipes and other processes', events:'Waiting for events or requests',
+  timer:'Sleeping on a timer', child:'Its child processes', signal:'Waiting for a signal', sleep:'Sleeping', idle:'Idle', stopped:'Stopped', other:'Other kernel waits'};
+const WAIT_IDLE = new Set(['events', 'timer', 'sleep', 'idle', 'signal', 'child', 'stopped']);
+const VERDICT = {cpu:'CPU: it is running most of the time it isn’t idle', cpuwait:'A CPU: it is ready to run but waits for a free core', membw:'Memory: it runs, but stalls on cache misses',
+  throttled:'Its CPU limit: the cgroup throttles it', disk:'The disk', netfs:'Network storage', memory:'Memory: it waits on paging', gpu:'The GPU', lock:'Locks: its own other threads',
+  network:'The network', io:'Async I/O', pipe:'Other processes, through pipes', other:'The kernel (other waits)', idle:'Nothing: it is idle, waiting for work'};
+function toggleInspect(mid, pid, row){
+  if (INSP.pid === pid && INSP.mid === mid){ closeInspect(); return; }
+  const tbl = row && row.closest('.ptbl');
+  Object.assign(INSP, {mid, pid, name:'', data:null, good:null, acc:{}, samples:0, secs:0, looks:0, busy:false,
+    order:tbl ? [...tbl.querySelectorAll('tbody tr[data-pid]')].map(r => +r.dataset.pid) : null,
+    gorder:tbl ? [...tbl.querySelectorAll('[data-gtoggle]')].map(b => b.dataset.gtoggle) : null});
+  const pr = PROCS.list.find(p => p[0] === pid); INSP.name = pr ? pr[1] : '';
+  lastMainHTML = ''; renderMain(); inspectTick();
+}
+function closeInspect(){ if (!INSP.pid) return; Object.assign(INSP, {mid:null, pid:0, order:null, gorder:null, data:null, good:null, acc:{}, looks:0}); lastMainHTML = ''; renderMain(); }
+async function inspectTick(){
+  if (!INSP.pid || INSP.busy) return;
+  const mid = INSP.mid, pid = INSP.pid;
+  INSP.busy = true;
+  let d;
+  try { d = await (await fetch(`/api/proc?machine=${encodeURIComponent(mid)}&pid=${pid}`, {cache:'no-store'})).json(); }
+  catch (e) { d = {pid, error:'Fleet didn’t answer'}; }
+  INSP.busy = false;
+  if (INSP.pid !== pid || INSP.mid !== mid) return;
+  INSP.data = d; INSP.looks++;
+  if (!d.error && !d.gone){
+    INSP.good = d; if (d.name) INSP.name = d.name;
+    const w = Object.assign({}, d.waits || {});
+    // a running thread is either on a core or queued for one: the scheduler's own times say which
+    const run = d.cpu && d.cpu.run_s || 0, q = d.cpu && d.cpu.runq_s || 0;
+    if (w.cpu && q > 0){ const r = q / (run + q); w.cpuwait = (w.cpuwait || 0) + w.cpu * r; w.cpu *= 1 - r; }
+    for (const [k, v] of Object.entries(w)) INSP.acc[k] = (INSP.acc[k] || 0) + v;
+    INSP.samples += d.samples || 0; INSP.secs += d.dt || 0;
+  }
+  lastMainHTML = ''; renderMain();
+}
+function inspVerdict(acc, d){
+  const tot = Object.values(acc).reduce((a, b) => a + b, 0);
+  if (!tot) return null;
+  const active = Object.entries(acc).filter(([k]) => !WAIT_IDLE.has(k)).sort((a, b) => b[1] - a[1]);
+  const share = active.reduce((a, [, v]) => a + v, 0) / tot, cores = d && d.cpu ? (d.cpu.user || 0) + (d.cpu.system || 0) : 0;
+  if (!active.length || (share < 0.1 && cores < 0.05)) return 'idle';
+  let k = active[0][0];
+  if (k === 'cpu' && d && d.cgroup && d.cgroup.cpu_limit && d.cgroup.throttled > 0.05) k = 'throttled';
+  else if (k === 'cpu' && d && d.cache && d.cache.miss_pct > 0.25 && d.cache.ipc != null && d.cache.ipc < 0.8) k = 'membw';
+  return k;
+}
+const shareText = v => v >= 0.995 ? '100%' : v >= 0.01 ? Math.round(v * 100) + '%' : v > 0 ? '<1%' : '0%';
+const ibytes = b => b == null ? '—' : memText(b / 1073741824);
+const ibps = b => b == null ? '—' : rateText(b / 1e6);
+const perSec = v => v == null ? '—' : (v >= 100 ? Math.round(v).toLocaleString() : v >= 1 ? v.toFixed(1) : v > 0 ? '<1' : '0') + '/s';
+const kvRow = (k, v, title) => `<div class="kv"${title ? ` title="${esc(title)}"` : ''}><span>${esc(k)}</span><b>${v}</b></div>`;
+function sinceText(t){ const s = Date.now() / 1000 - t; return s < 90 ? Math.round(s) + ' s ago' : s < 5400 ? Math.round(s / 60) + ' min ago' : s < 172800 ? Math.round(s / 3600) + ' h ago' : Math.round(s / 86400) + ' days ago'; }
+function inspectPanel(p){
+  const d = INSP.data, g = INSP.good, name = (g && g.name) || INSP.name || (p && p[1]) || '';
+  const close = `<button type="button" class="iconbtn" data-inspclose="1" aria-label="Close" title="Close (Esc)">${icon('x', 2.2)}</button>`;
+  const head = `<div class="insp-h"><div><b>${esc(name)}</b> <span class="mono">PID ${INSP.pid}</span>${g && g.cmdline ? `<div class="insp-cmd mono">${esc(g.cmdline)}</div>` : ''}</div>${close}</div>`;
+  if (!d) return `<div class="insp">${head}<div class="insp-wait">Looking at it… (about 2 seconds)</div></div>`;
+  let note = '';
+  if (d.gone) note = noteHTML(`<b>${esc(name || 'This process')} has exited.</b> What Fleet saw before is below.`, 'warn');
+  else if (d.error) note = noteHTML(`<b>Couldn’t look at it just now.</b> ${esc(d.error)}`, 'warn');
+  if (!g) return `<div class="insp">${head}${note}</div>`;
+  const acc = INSP.acc, tot = Object.values(acc).reduce((a, b) => a + b, 0);
+  const vk = inspVerdict(acc, g);
+  const waits = Object.entries(acc).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]).map(([k, v]) =>
+    `<div class="wrow${WAIT_IDLE.has(k) ? ' idle' : ''}" data-wait="${esc(k)}"><span>${esc(WAIT_LABEL[k] || k)}</span><span class="wbar"><i style="width:${(v / tot * 100).toFixed(1)}%"></i></span><span class="wv">${shareText(v / tot)}</span></div>`).join('');
+  const wait = `<div class="insp-wait"><div class="verdict" data-verdict="${esc(vk || '')}"><span>Mostly waits on</span><b>${esc(vk ? VERDICT[vk] || vk : '…')}</b></div>`
+    + `<div class="waits">${waits}</div><div class="insp-sub" data-watched="1">Every thread, sampled every 0.1 s · ${INSP.looks} look${INSP.looks === 1 ? '' : 's'} (${Math.round(INSP.secs)} s of samples) since you opened it</div></div>`;
+  const c = g.cpu || {}, m = g.mem || {}, io = g.io, cg = g.cgroup, cache = g.cache;
+  const cards = [];
+  cards.push(['CPU', [kvRow('User', pct((c.user || 0) * 100), 'of one core'), c.system != null ? kvRow('System', pct(c.system * 100), 'of one core') : '',
+    c.ctx_vol != null ? kvRow('Switches: waits', perSec(c.ctx_vol), 'voluntary context switches: it blocked on something') : '',
+    c.ctx_invol != null ? kvRow('Switches: preempted', perSec(c.ctx_invol), 'involuntary: the scheduler took the core away') : '',
+    c.runq_s != null ? kvRow('Queued for a core', Math.round(c.runq_s * 1000) + ' ms/s') : '',
+    cg && cg.cpu_limit ? kvRow('CPU limit', num(cg.cpu_limit) + ' cores') : '', cg && cg.cpu_limit ? kvRow('Throttled', pct((cg.throttled || 0) * 100)) : '',
+    g.affinity ? kvRow('May run on', esc(g.affinity)) : '', g.last_cpu >= 0 ? kvRow('Last ran on', 'cpu' + g.last_cpu) : '',
+    kvRow('Priority', `nice ${g.nice || 0}` + (g.priority_class ? ' · ' + esc(g.priority_class) : ''))]]);
+  cards.push(['Memory', [kvRow('Resident', ibytes(m.rss)), m.anon != null ? kvRow('Its own (anon)', ibytes(m.anon)) : '', m.file != null ? kvRow('Files mapped', ibytes(m.file)) : '',
+    m.shmem ? kvRow('Shared', ibytes(m.shmem)) : '', m.private != null ? kvRow('Private', ibytes(m.private)) : '', m.swap != null ? kvRow('Swapped out', ibytes(m.swap)) : '',
+    m.peak != null ? kvRow('Peak', ibytes(m.peak)) : '', m.majflt != null ? kvRow('Page faults from disk', perSec(m.majflt)) : '', m.faults != null ? kvRow('Page faults', perSec(m.faults)) : '',
+    cg && cg.mem_limit ? kvRow('Its cgroup', `${ibytes(cg.mem_current)} of ${ibytes(cg.mem_limit)}`) : '', cg && cg.oom_kills ? kvRow('Out-of-memory kills', String(cg.oom_kills)) : '']]);
+  cards.push(['CPU cache', cache ? [kvRow('Cache misses', shareText(cache.miss_pct || 0), 'last-level cache misses, of its references'), kvRow('Misses', perSec(cache.misses)),
+    cache.ipc != null ? kvRow('Instructions per cycle', cache.ipc.toFixed(2), 'under ~0.8 while busy usually means it waits on memory') : '', kvRow('Threads counted', String(cache.threads))]
+    : [`<p class="insp-sub">${esc(g.cache_error || 'Not available here')}</p>`]]);
+  if (io) cards.push(['Disk', [kvRow('Reads', ibps(io.read)), kvRow('Writes', ibps(io.write)), io.other != null ? kvRow('Other I/O', ibps(io.other)) : '',
+    io.delayacct && io.blkio_delay != null ? kvRow('Blocked on I/O', pct(io.blkio_delay * 100), 'of the time, from the kernel’s delay accounting') : '']]);
+  const pr = cg && cg.pressure;
+  if (pr) cards.push([cg.path === '/' ? 'Whole machine stalled' : 'Its cgroup stalled', [['cpu', 'On CPU'], ['memory', 'On memory'], ['io', 'On I/O']].map(([k, l]) => pr[k] && pr[k].some
+    ? kvRow(l, `${pct(pr[k].some.avg10)} · ${pct(pr[k].some.avg60)} · ${pct(pr[k].some.avg300)}`, 'share of time some task waited: last 10 s · 1 min · 5 min') : '').concat([`<p class="insp-sub mono">${esc(cg.path)}</p>`])]);
+  const conns = g.conns || [], listen = conns.filter(x => x.state === 'listening'), est = conns.filter(x => x.remote);
+  cards.push(['Network', [kvRow('Sockets', String(g.conns_n || 0)), listen.length ? kvRow('Listens on', esc([...new Set(listen.map(x => x.proto + ' :' + x.local.split(':').pop()))].slice(0, 6).join(', '))) : '']
+    .concat(est.slice(0, 6).map(x => `<div class="kv mono"><span>${esc(x.remote)}</span><b>${esc(x.state)}</b></div>`))]);
+  cards.push(['Files', [kvRow('Open', g.fd_limit > 0 ? `${(g.fds || 0).toLocaleString()} of ${g.fd_limit.toLocaleString()}` : (g.fds || 0).toLocaleString())]
+    .concat((g.files || []).slice(0, 6).map(f => `<div class="kv mono"><span title="${esc(f)}">${esc(f)}</span></div>`))]);
+  cards.push(['Process', [kvRow('User', esc(g.user || '—')), kvRow('Parent', g.ppid ? `PID ${g.ppid}` : '—'), g.started ? kvRow('Started', sinceText(g.started)) : '',
+    kvRow('Threads', String(g.threads_n || '—')), g.exe ? `<div class="kv mono"><span title="${esc(g.exe)}">${esc(g.exe)}</span></div>` : '', g.cwd ? kvRow('Working dir', `<span class="mono">${esc(g.cwd)}</span>`) : '']]);
+  const th = (g.threads || []).filter(t => t.name || t.tid).slice(0, 8);
+  const threads = th.length ? `<div class="icard wide"><h4>Busiest threads</h4><table class="ithr"><tbody>${th.map(t => `<tr><td class="l">${esc(t.name || '—')}</td><td>${t.tid}</td><td>${t.total != null ? num(t.total) + ' s in all' : pct((t.cpu || 0) * 100)}</td><td class="l">${esc(WAIT_LABEL[t.doing] || t.doing || '')}</td></tr>`).join('')}</tbody></table></div>` : '';
+  return `<div class="insp">${head}${note}${wait}<div class="insp-grid">${cards.map(([h, rows]) => `<div class="icard"><h4>${h}</h4>${rows.filter(Boolean).join('')}</div>`).join('')}${threads}</div></div>`;
+}

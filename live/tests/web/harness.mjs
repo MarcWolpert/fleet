@@ -33,6 +33,10 @@ export function startServer(fx){
       if (u.pathname === '/api/cpus') return json((fx.cpus || {})[mid] || {});
       if (u.pathname === '/api/disks') return json((fx.disks || {})[mid] || {disks: [], per_process: true});
       if (u.pathname === '/api/net') return json(fx.net || {tailnet: 'tailnet', machines: []});
+      if (u.pathname === '/api/proc'){  // the Details drop-down: fx.proc(machine, pid, call number) answers
+        const pid = +u.searchParams.get('pid'); fx.procCalls = (fx.procCalls || []).concat([mid + ':' + pid]);
+        return json((typeof fx.proc === 'function' ? fx.proc(mid, pid, fx.procCalls.length) : null) || {pid, error: 'no fixture'});
+      }
       if (u.pathname === '/api/config') return json({path: '/dev/null', interval: 3, machines: [], status: {}, terminals: []});
       res.writeHead(404); return res.end();
     }
