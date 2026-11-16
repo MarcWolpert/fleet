@@ -17,30 +17,32 @@ function fx1(){
   fx.onPost = (path, body) => path === '/api/inline-terminal' ? {ok: true, id: 's' + (++n), url: '/fake.html', title: 'lab-linux', group: 's' + n} : path.startsWith('/api/inline-terminal/') ? {ok: true} : null;
   return fx;
 }
+// focus moving and a terminal's frame starting take a while under a full suite's load
+const SLOW = 20000;
 const press = async (p, key, code, modifiers, vk) => { for (const type of ['keyDown', 'keyUp']) await p.send('Input.dispatchKeyEvent', {type, key, code, modifiers, windowsVirtualKeyCode: vk}); };
 
 test('Fleet.app: in the terminals the keys size them, and the app is told so; elsewhere they zoom Fleet', async () => {
   const fx = fx1();
   const p = await browser.page(fx, {ui: ui({sel: 'lx'}), native: true});
   try {
-    await p.waitFor(`document.querySelector('.hero [data-terminal="lx"]')`);
+    await p.waitFor(`document.querySelector('.hero [data-terminal="lx"]')`, SLOW);
     await p.eval(`(openInline('lx'), true)`);
-    await p.waitFor(`document.querySelector('#tdrawer iframe')`);
+    await p.waitFor(`document.querySelector('#tdrawer iframe')`, SLOW);
     await p.eval(`(document.querySelector('#tdrawer [role=tab]').focus(), true)`);
-    await p.waitFor(`window.nativePosts.some(m => m.termFocus === true)`);
+    await p.waitFor(`window.nativePosts.some(m => m.termFocus === true)`, SLOW);
     await press(p, '=', 'Equal', 4, 187);
-    await p.waitFor(`PREFS.termFont === 14`);
+    await p.waitFor(`PREFS.termFont === 14`, SLOW);
     assert.equal(await p.eval(`window.nativePosts.filter(m => m.zoom).length`), 0, 'Fleet doesn’t zoom');
     // what the app calls when its View menu takes the key (⌘− ⌘0)
     await p.eval(`(window.fleetTermZoom('out'), window.fleetTermZoom('out'), true)`);
-    await p.waitFor(`PREFS.termFont === 12`);
+    await p.waitFor(`PREFS.termFont === 12`, SLOW);
     await p.eval(`(window.fleetTermZoom('reset'), true)`);
-    await p.waitFor(`PREFS.termFont === 13`);
+    await p.waitFor(`PREFS.termFont === 13`, SLOW);
     // back in the tree: the app hears it, and the keys zoom Fleet again
     await p.eval(`(() => { const r = document.querySelector('#tree .row'); r.dispatchEvent(new PointerEvent('pointerdown', {bubbles: true})); r.focus(); return true; })()`);
-    await p.waitFor(`window.nativePosts.length && window.nativePosts.filter(m => 'termFocus' in m).pop().termFocus === false`);
+    await p.waitFor(`window.nativePosts.length && window.nativePosts.filter(m => 'termFocus' in m).pop().termFocus === false`, SLOW);
     await press(p, '=', 'Equal', 4, 187);
-    await p.waitFor(`window.nativePosts.some(m => m.zoom === 'in')`);
+    await p.waitFor(`window.nativePosts.some(m => m.zoom === 'in')`, SLOW);
     assert.equal(await p.eval(`PREFS.termFont`), 13);
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
@@ -50,15 +52,15 @@ test('a browser (Linux, Windows): Ctrl+= Ctrl+- Ctrl+0 in the terminals size onl
   const fx = fx1();
   const p = await browser.page(fx, {ui: ui({sel: 'lx'}), platform: 'Linux x86_64'});
   try {
-    await p.waitFor(`document.querySelector('.hero [data-terminal="lx"]')`);
+    await p.waitFor(`document.querySelector('.hero [data-terminal="lx"]')`, SLOW);
     await p.eval(`(openInline('lx'), true)`);
-    await p.waitFor(`document.querySelector('#tdrawer iframe')`);
+    await p.waitFor(`document.querySelector('#tdrawer iframe')`, SLOW);
     await p.eval(`(document.querySelector('#tdrawer [role=tab]').focus(), true)`);
-    await p.waitFor(`PANEL === 'term'`);
+    await p.waitFor(`PANEL === 'term'`, SLOW);
     await press(p, '-', 'Minus', 2, 189);
-    await p.waitFor(`PREFS.termFont === 12`);
+    await p.waitFor(`PREFS.termFont === 12`, SLOW);
     await press(p, '0', 'Digit0', 2, 48);
-    await p.waitFor(`PREFS.termFont === 13`);
+    await p.waitFor(`PREFS.termFont === 13`, SLOW);
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
 });

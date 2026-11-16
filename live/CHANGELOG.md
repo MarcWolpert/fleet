@@ -14,6 +14,9 @@ packages, and a Flatpak), each carrying what it runs.
   graphs so the names get the room, and a toggle at the bottom turns the graphs off and on.
 - **Keys:** t shows or hides the terminals, r goes into the one you're on (when you aren't typing in a field).
 - **Escape closes any dialog**, wherever focus is.
+- **The terminals' list, like VS Code's:** with more than one terminal, a list on the right (split ones joined by
+  tree lines; click, double-click to rename, drag one onto another to split them), and **+ ∨** and **…** on the
+  terminals' bar for new terminals on any connected computer, clearing, renaming, killing and the rest.
 
 ## Fleet 0.0.1
 

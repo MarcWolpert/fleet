@@ -96,8 +96,11 @@ inline, below the page.
 - **They last:** each keeps running through a page reload, Fleet restarting or quitting (its shell lives in tmux),
   and reconnects by itself when the connection drops.
 - **Split, kill, rename:** split the one you're on (⌘\\), kill it (⌘⌫ on its tab), rename it, drag a tab onto a
-  terminal to split them there (⌘Z undoes it), and Ctrl+Tab between them. Right-click a tab or the bar for the
-  rest.
+  terminal to split them there (⌘Z undoes it), and Ctrl+Tab between them. With more than one, a list on the right
+  shows them all, split ones joined by tree lines: click one to go to it, double-click to rename, drag one onto
+  another to split them, hover to split or kill. **+ ∨** opens a new terminal on any connected computer, or splits
+  the one you're on; **…** has the rest (clear, rename, kill, text size, templates, reset), and right-click works on
+  a tab, a row of the list or the bar.
 - **Templates:** save the terminals you have open (which, on what, named what, split how) and launch them again
   later from the bar's menu or ⌘K; **Reset** goes back to the default.
 - **Its own text:** a text size of its own (A− A+, or ⌘+ ⌘− ⌘0 while you're in the terminals), apart from Fleet's

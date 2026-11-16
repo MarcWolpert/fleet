@@ -3068,7 +3068,8 @@ TTYD_BRIDGE_JS = r"""
   }
   window.addEventListener('message', function(e){
     if (e.source !== P) return;
-    var d = e.data; if (!d || d.fleet !== 'termFont') return;
+    var d = e.data; if (d && d.fleet === 'termClear'){ if (window.term && window.term.clear) window.term.clear(); return; }
+    if (!d || d.fleet !== 'termFont') return;
     if (typeof d.family === 'string' && /^[\w ,"'.\-]{1,260}$/.test(d.family)) family(d.family, 0);
     var n = Number(d.size); if (n >= 6 && n <= 32) apply(n, 0);
   });
