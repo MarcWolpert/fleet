@@ -1376,8 +1376,17 @@ document.addEventListener('toggle', e => { if (e.target.classList && e.target.cl
 /* ---------- polling ---------- */
 let lastSig = '', busy = false, fails = 0;
 function sigOf(){ return Object.keys(nodes).join('|') + '#' + PINS.join('|'); }
+// The Network tree's data comes on its own: the server runs tailscale status for /api/net, which can take seconds,
+// and the fleet's numbers never wait for it. One is on its way at a time (#144).
+let netBusy = false;
+function refreshNet(){
+  if (netBusy || S.tree !== 'network') return; netBusy = true;
+  fetch('/api/net', {cache:'no-store'}).then(r => r.json()).then(d => { NET = d; if (S.tree === 'network'){ updateTree(); renderMain(); } })
+    .catch(() => null).finally(() => { netBusy = false; });
+}
 async function refreshNow(){
   inspectTick();
+  refreshNet();
   if (busy) return; busy = true;
   try {
     const pinsAt = pinsSaves ? -1 : pinsSeq;   // a pin save on its way now or made before the answer: keep PINS (#95)
@@ -1395,7 +1404,6 @@ async function refreshNow(){
     if (nm && S.metric === 'net' && S.view !== 'details') jobs.push(fetch('/api/ifs?machine=' + encodeURIComponent(nm.id), {cache:'no-store'}).then(r => r.json()).then(d => { IFS[nm.id] = d; }));
     if (nm && S.metric === 'disk' && S.view !== 'details') jobs.push(fetch('/api/disks?machine=' + encodeURIComponent(nm.id), {cache:'no-store'}).then(r => r.json()).then(d => { DISKS[nm.id] = d; }));
     if (nm && S.view !== 'details' && !S.detailsDocked && ((S.metric === 'disk' && diskSel(nm).length) || (S.metric === 'gpu' && gpuSel(nm).length) || (S.metric === 'net' && ifSel(nm).length)) && nm.status === 'ok') jobs.push(fetch('/api/procs?machine=' + encodeURIComponent(nm.id), {cache:'no-store'}).then(r => r.json()).then(d => { PROCS = {machine:nm.id, list:d.procs || [], gpuProcs:!!d.gpu_procs}; }));
-    if (S.tree === 'network') jobs.push(fetch('/api/net', {cache:'no-store'}).then(r => r.json()).then(d => { NET = d; }));
     await Promise.all(jobs.map(p => p.catch(() => null)));
     fails = 0; $('conn').hidden = true; $('live').hidden = false;
     const sig = sigOf();
