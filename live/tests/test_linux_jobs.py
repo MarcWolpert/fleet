@@ -38,7 +38,7 @@ def derive(procs, **kw):
     """A machine after two readings 3 s apart (the first only sets where the counters start)."""
     m = fleet_live.Machine({"id": "m1", "name": "m1"}, 3)
     m.derive_linux(reading(T0, procs, **kw))
-    m.view = m.derive_linux(reading(T0 + 3, procs, **kw))
+    m.got(m.derive_linux(reading(T0 + 3, procs, **kw)))   # a reading arrives
     return m
 
 

@@ -110,7 +110,8 @@ class Attribution(unittest.TestCase):
     def setUpClass(cls):
         cls.m = fleet_live.Machine({"id": "nas", "name": "nas"}, 3)
         cls.m.derive_linux(nas(0))
-        cls.v = cls.m.view = cls.m.derive_linux(nas(1))
+        cls.v = cls.m.derive_linux(nas(1))
+        cls.m.got(cls.v)   # a reading arrives
 
     def test_host(self):
         self.assertEqual(r3(self.v["host"]), [4.85, 8.0, 0.0, 3.0, 3.0], "cpu, memory used, gpu, disk MB/s, physical network MB/s")
