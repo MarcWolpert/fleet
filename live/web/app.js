@@ -3573,6 +3573,23 @@ document.addEventListener('keydown', e => {
   else if (e.key === 'Home'){ e.preventDefault(); e.stopPropagation(); setSideW(SIDE_W.def, true); }
 }, true);
 
+// Escape closes the dialog that's open, wherever focus is (#396): the topmost (the last one opened). A menu that's
+// open takes Escape first, and so does a field where Escape cancels a rename.
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Escape') return;
+  const cx = $('ctxmenu'); if ((cx && !cx.hidden) || COLMENU.open) return;
+  if (e.target.closest && e.target.closest('.tdtl input, input.td-name, #tree input.tg-name')) return;
+  const open = [...document.querySelectorAll('body > .sheet-bg, #picker')].filter(x => !x.hidden && (x.id !== 'sheet' || SET.open) && (x.id !== 'picker' || PICK.open));
+  const top = open[open.length - 1]; if (!top) return;
+  e.preventDefault(); e.stopImmediatePropagation();
+  if (top.id === 'sheet') closeSettings();
+  else if (top.id === 'goto') closeGoto();
+  else if (top.id === 'termdlg') closeTermDialog();
+  else if (top.id === 'keys') closeKeys();
+  else if (top.id === 'picker') closePicker(true);   // as its own Escape does: focus back on its +
+  else { const b = top.querySelector('[aria-label="Close"]'); if (b) b.click(); else top.remove(); }
+}, true);
+
 // The super button (#331): Fleet's logo at the top right opens Go to anything, its key in the platform's notation
 (function(){ const b = document.querySelector('[data-super]'); if (!b) return;
   b.setAttribute('aria-label', `Go to anything (${MODK}K)`); b.title = `Go to anything: machines, containers, jobs and commands (${MODK}K)`; })();
