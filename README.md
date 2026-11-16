@@ -257,7 +257,7 @@ and `connect.json` (which machines connect when Fleet starts, and your saved set
 
 | Keys | Does |
 |---|---|
-| ⌘K | Go to anything: machines, VMs, projects, containers, jobs, groups (by name or kind), commands, themes |
+| ⌘K | Go to anything: machines, VMs, projects, containers, jobs, groups (by name or kind), commands, themes (or click the Fleet logo at the top right) |
 | ⌘F or `/` | Find in the panel you're in: filter the tree, find on the page, or filter Details |
 | ⌘[ ⌘] | Back, forward (also the ‹ › buttons and the mouse's side buttons) |
 | ⌘D, ⌘⇧D | Details on and off; dock it beside the overview |

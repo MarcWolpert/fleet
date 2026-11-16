@@ -3130,6 +3130,11 @@ function vmInspectPanel(p){
     + (node && termOk(node) ? `<div>${termBtn(node)}</div>` : '') + `</div></div>`;
 }
 
+// The super button (#331): Fleet's logo at the top right opens Go to anything, its key in the platform's notation
+(function(){ const b = document.querySelector('[data-super]'); if (!b) return;
+  b.setAttribute('aria-label', `Go to anything (${MODK}K)`); b.title = `Go to anything: machines, containers, jobs and commands (${MODK}K)`; })();
+document.addEventListener('click', e => { if (e.target.closest('[data-super]')) openGoto(); });
+
 // Open terminal in a specific terminal (#223): the ones installed here, the default ticked (the list comes from /api/config)
 const TERMS = {list:null, def:'', busy:null};
 function loadTerms(){

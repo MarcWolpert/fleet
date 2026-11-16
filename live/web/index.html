@@ -307,6 +307,11 @@ main{flex:1;min-width:0;overflow:auto;background:var(--win)}
 .side-note svg{width:12px;height:12px;vertical-align:-2px;display:inline-block}
 
 /* ---- settings, states ---- */
+.superbtn{display:inline-grid;place-items:center;width:36px;height:36px;margin-left:2px;flex:none;border-radius:10px;border:1px solid transparent}
+.superbtn:hover{background:var(--chrome-hover)}
+.superbtn:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.superbtn img{width:26px;height:26px;display:block}
+html.native .superbtn{width:32px;height:32px}
 .setbtn{display:inline-flex;align-items:center;gap:7px;height:36px;padding:0 13px;border-radius:10px;color:var(--ink-2);font:500 13px/1 var(--sans);flex:none;border:1px solid transparent}
 .setbtn svg{width:16px;height:16px}
 .setbtn:hover{background:var(--chrome-2);color:var(--ink);border-color:var(--line-2)}
@@ -820,6 +825,7 @@ html.hc .sub,html.hc .facts{color:var(--ink-2)}
     <button type="button" class="tutbtn" data-tutorial="1" aria-haspopup="dialog" title="How Fleet works: getting started, terms, keyboard"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6.5C5.5 5 8.5 5 12 7c3.5-2 6.5-2 9-.5v12c-2.5-1.5-5.5-1.5-9 .5-3.5-2-6.5-2-9-.5z"/><path d="M12 7v12"/></svg><span>Tutorial</span></button>
     <button type="button" class="zoomchip" id="zoomchip" hidden title="Zoom: click for 100% (⌘0)"></button>
     <button type="button" class="setbtn" data-settings="1" aria-haspopup="dialog"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span>Settings</span></button>
+    <button type="button" class="superbtn" data-super="1" aria-haspopup="dialog" aria-label="Go to anything (⌘K)" title="Go to anything: machines, containers, jobs and commands (⌘K)"><img src="icon.svg" alt="" width="26" height="26"></button>
   </header>
   <div class="toolbar">
     <div class="navbtns" role="group" aria-label="History"><button type="button" data-nav="back" aria-label="Back" title="Back (⌘[)" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg></button><button type="button" data-nav="fwd" aria-label="Forward" title="Forward (⌘])" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg></button></div>
