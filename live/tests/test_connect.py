@@ -102,6 +102,11 @@ class Api(unittest.TestCase):
         with open(fl.CONNECT_PATH) as f:
             self.assertEqual(json.load(f), {"auto": "all", "presets": {}})
 
+    def test_save_a_set_of_machines_ticked_by_hand(self):
+        r = self.f.api_connect({"save": "Picked", "machines": ["a", "here", "zzz"]})   # a is off now: it can still be picked
+        self.assertEqual((r["ok"], r["connect"]["presets"], r["connect"]["auto"]), (True, {"Picked": ["a"]}, "Picked"))
+        self.assertEqual(r["connect"]["starts"], ["here", "a"])
+
     def test_turning_a_machine_on_or_off(self):
         self.assertEqual(self.f.api_connect({"machine": "b", "on": False})["ok"], True)
         self.assertFalse(self.f.machines["b"].on.is_set())

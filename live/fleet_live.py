@@ -1456,7 +1456,8 @@ class Fleet:
 
     def api_connect(self, d):
         """Turn a machine on or off ({machine, on}), or set 'Connect automatically': {auto: all | none | a
-        saved set}, {save: name} (the SSH machines connected now, which it then picks), {delete: name}."""
+        saved set}, {save: name} (the SSH machines connected now, or {machines: [...]} ticked by hand; then it picks
+        that set), {delete: name}."""
         if "machine" in d:
             m = self.machines.get(str(d["machine"]))
             return {"ok": bool(m and m.turn(bool(d.get("on")))), "connect": self.connect_state()}
@@ -1465,7 +1466,13 @@ class Fleet:
             name = " ".join(str(d["save"]).split())[:60]
             if not name or name.lower() in ("all", "none"):
                 return {"ok": False, "error": "Give it a name other than All or None.", "connect": self.connect_state()}
-            conn["presets"][name] = [m.id for m in self.machines.values() if m.cfg.get("kind") != "local" and m.on.is_set()]
+            ssh_ids = [m.id for m in self.machines.values() if m.cfg.get("kind") != "local"]
+            picked = d.get("machines")
+            if isinstance(picked, list):   # ticked by hand (Choose machines…); SSH machines only, in Fleet's order
+                want = {str(x) for x in picked}
+                conn["presets"][name] = [i for i in ssh_ids if i in want]
+            else:                          # the machines connected now
+                conn["presets"][name] = [i for i in ssh_ids if self.machines[i].on.is_set()]
             conn["auto"] = name
         elif "delete" in d:
             conn["presets"].pop(str(d["delete"]), None)
