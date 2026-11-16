@@ -256,7 +256,7 @@ class EachCounterHasItsOwnClock(unittest.TestCase):
     def test_the_collector_stamps_each_counter_right_before_reading_it(self):
         self.assertNotRegex(self.between("$o.tp = ", ".TotalProcessorTime"), r"Get-CimInstance|Get-Net|Bounded")
         self.assertEqual(self.between("$o.tn = ", "Get-NetAdapterStatistics"), "UnixNow; foreach ($st in ")
-        self.assertEqual(self.between("Invoke-Bounded 'docker' 'stats", "$o.td = "), ' --no-stream --format "{{json .}}"\'; ')
+        self.assertNotRegex(self.between("Wait-Bounded $ds", "$o.td = "), r"Get-|Bounded")   # docker stats: see #167
 
 class ClockLikeTaskManager(unittest.TestCase):
     """#152: Processor Frequency is the nominal clock (or the P-state's); Task Manager's Speed scales it by
@@ -324,6 +324,21 @@ class ProcessDetailsOnlyForNewPids(unittest.TestCase):
     def test_pids_that_are_gone_are_forgotten(self):
         line = "foreach ($k in @($cmdCache.Keys)) { if (-not $live.ContainsKey($k)) { $cmdCache.Remove($k) } }"
         self.assertTrue(line in self.SRC, line)
+
+class DockerStatsRunsAlongside(unittest.TestCase):
+    """#167: docker stats takes 1-2 s, so it starts before the counters' 1 s sample and is collected after the
+    process list; its BlockIO and NetIO are stamped with the moment it exited."""
+    SRC = fl.ps_compact(open(os.path.join(LIVE, "collect_windows.ps1"), encoding="utf-8").read())
+
+    def test_started_before_the_counter_sample_and_collected_after_the_processes(self):
+        order = [self.SRC.index(x) for x in ("$ds = Start-Bounded 'docker' 'stats", "Get-Counter -Counter", "$o.procs = $plist", "Wait-Bounded $ds")]
+        self.assertEqual(order, sorted(order))
+        self.assertEqual(self.SRC.count("Wait-Bounded $ds"), 1)
+
+    def test_its_counters_are_stamped_when_it_exited(self):
+        line = "$o.td = UnixNow; try { $o.td = ([DateTimeOffset]$ds.p.ExitTime.ToUniversalTime()).ToUnixTimeMilliseconds() / 1000.0 } catch {}"
+        self.assertTrue(line in self.SRC, line)
+        self.assertTrue(self.SRC.index("Wait-Bounded $ds") < self.SRC.index(line))
 
 
 if __name__ == "__main__":

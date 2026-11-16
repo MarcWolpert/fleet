@@ -55,6 +55,14 @@ $o.ncpu = [int]$cs.NumberOfLogicalProcessors
 $o.cpu_model = (@(Get-CimInstance Win32_Processor)[0].Name).Trim()
 $o.mem = @([double]$cs.TotalPhysicalMemory, [double]$os.FreePhysicalMemory * 1024)
 
+$wsl = @(); $raw = (Wait-Bounded (Start-Bounded 'wsl.exe' '-l -v')) -replace "`0", ''
+foreach ($line in $raw -split "`r?`n") { if ($line -match '^\s*(\*)?\s*(\S+)\s+(Running|Stopped|Installing|Converting)\s+(\d)') { $wsl += @{ name = $Matches[2]; state = $Matches[3]; default = [bool]$Matches[1] } } }
+$o.wsl = $wsl
+# docker stats takes 1-2 s (the daemon waits for a second sample of every container): it runs alongside the counters'
+# 1 s sample and the process list, and is collected after them, so a reading still fits its interval
+$dockerUp = @($wsl | Where-Object { $_.name -eq 'docker-desktop' -and $_.state -eq 'Running' }).Count -gt 0
+$ds = $null; if ($dockerUp) { $ds = Start-Bounded 'docker' 'stats --no-stream --format "{{json .}}"' }
+
 # Task Manager's Speed: the frequency scaled by % Processor Performance (over 100 in turbo); fleet_live.py does the sum
 $paths = @('\Processor(*)\% Processor Time', '\Processor Information(*)\Processor Frequency',
   '\Processor Information(*)\% Processor Performance', '\Processor Information(*)\% of Maximum Frequency',
@@ -151,14 +159,11 @@ $o.ifs = @(Get-NetAdapter | ForEach-Object {
      addrs = $(if ($loop % 10 -eq 0 -or -not $addrCache.ContainsKey($_.Name)) { $addrCache[$_.Name] = @(Get-NetIPAddress -InterfaceIndex $_.ifIndex -AddressFamily IPv4 | ForEach-Object { "$($_.IPAddress)/$($_.PrefixLength)" }) }; $addrCache[$_.Name]) }
 })
 
-$wsl = @(); $raw = (Wait-Bounded (Start-Bounded 'wsl.exe' '-l -v')) -replace "`0", ''
-foreach ($line in $raw -split "`r?`n") { if ($line -match '^\s*(\*)?\s*(\S+)\s+(Running|Stopped|Installing|Converting)\s+(\d)') { $wsl += @{ name = $Matches[2]; state = $Matches[3]; default = [bool]$Matches[1] } } }
-$o.wsl = $wsl
-
 $o.containers = @(); $o.dstats = @()
-if (@($wsl | Where-Object { $_.name -eq 'docker-desktop' -and $_.state -eq 'Running' }).Count -gt 0) {
+if ($dockerUp) {
   $o.containers = Invoke-Bounded 'docker' 'ps --no-trunc --format "{{json .}}"'
-  $o.dstats = Invoke-Bounded 'docker' 'stats --no-stream --format "{{json .}}"'; $o.td = UnixNow
+  $o.dstats = @((Wait-Bounded $ds) -split "`r?`n" | Where-Object { $_ })
+  $o.td = UnixNow; try { $o.td = ([DateTimeOffset]$ds.p.ExitTime.ToUniversalTime()).ToUnixTimeMilliseconds() / 1000.0 } catch {}
 }
 
 if ($loop % 10 -eq 0) { $taskCache = @(Get-ScheduledTask | Where-Object { $_.TaskPath -notlike '\Microsoft\*' } | ForEach-Object {
