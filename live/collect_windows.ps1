@@ -75,6 +75,7 @@ public static class FleetDxgi {
       for (uint i = 0; f.EnumAdapters1(i, out a) == 0; i++) {
         try {
           Desc d;
+          if (a.GetDesc1(out d) == 0 && (d.Flags & 2) != 0) continue;   // DXGI_ADAPTER_FLAG_SOFTWARE: Microsoft Basic Render Driver
           if (a.GetDesc1(out d) == 0)
             res.Add(string.Format("0x{0:x8}_0x{1:x8}|{2}|{3}", d.LuidHigh, d.LuidLow, (ulong)d.DedicatedVideoMemory, d.Description));
         } finally { Marshal.ReleaseComObject(a); }
@@ -143,19 +144,22 @@ foreach ($s in $samples) {
 }
 $o.lcpus = @($lcpu.Keys | Sort-Object | ForEach-Object { @{ n = $_; pct = $lcpu[$_]; mhz = [int]$freq[$_]; perf = [double]$perf[$_]; maxf = [double]$maxf[$_] } })
 
-# GPUs: real adapters are the ones with dedicated memory in use, listed in LUID order; Fleet names and orders them by
-# LUID (DXGI's adapter list) and pairs nvidia-smi's rows by name.
+# GPUs: an adapter with dedicated memory in use, or a hardware adapter in DXGI's list (an integrated GPU has no dedicated
+# memory, only shared; virtual displays aren't in DXGI's list, and its software adapter is skipped), listed in LUID order.
+# Fleet names and orders them by LUID (DXGI's adapter list) and pairs nvidia-smi's rows by name.
 $gpuUtil = @{}
 foreach ($k in $eng.Keys) { $l = $k.Split('|')[0]; if ($eng[$k] -gt [double]$gpuUtil[$l]) { $gpuUtil[$l] = $eng[$k] } }
 # each engine type (3d, copy, videodecode, ...) at its busiest engine, per adapter, like Task Manager
 $engT = @{}
 foreach ($k in $eng.Keys) { $p = $k.Split('|'); $tk = $p[0] + '|' + $p[2]; if ($eng[$k] -gt [double]$engT[$tk]) { $engT[$tk] = $eng[$k] } }
-$o.gpus = @($adMem.Keys | Where-Object { $adMem[$_] -gt 0 } | Sort-Object | ForEach-Object {
-  $l = $_; $e = @{}; foreach ($tk in $engT.Keys) { $p = $tk.Split('|', 2); if ($p[0] -eq $l) { $e[$p[1]] = $engT[$tk] } }
-  @{ luid = $l; util = [double]$gpuUtil[$l]; dedicated = $adMem[$l]; shared = [double]$adShared[$l]; eng = $e } })
-# again when an adapter is new (a driver restart gives it a new LUID)
-if ($loop % 10 -eq 0 -or @($o.gpus | Where-Object { $adapters.luid -notcontains $_.luid }).Count) {
+$cands = @(@($adMem.Keys) + @($adShared.Keys) | Sort-Object -Unique)
+# the adapter list first, again when an adapter is new (a driver restart gives it a new LUID)
+if ($loop % 10 -eq 0 -or @($cands | Where-Object { $adMem[$_] -gt 0 -and $adapters.luid -notcontains $_ }).Count) {
   $adapters = @(try { [FleetDxgi]::Read() | ForEach-Object { $f = $_.Split('|', 3); @{ luid = $f[0]; vram = [double]$f[1]; name = $f[2] } } } catch {}) }
+$hw = @{}; foreach ($a in $adapters) { $hw[[string]$a.luid] = 1 }
+$o.gpus = @($cands | Where-Object { $adMem[$_] -gt 0 -or $hw.ContainsKey($_) } | ForEach-Object {
+  $l = $_; $e = @{}; foreach ($tk in $engT.Keys) { $p = $tk.Split('|', 2); if ($p[0] -eq $l) { $e[$p[1]] = $engT[$tk] } }
+  @{ luid = $l; util = [double]$gpuUtil[$l]; dedicated = [double]$adMem[$l]; shared = [double]$adShared[$l]; eng = $e } })
 $o.adapters = $adapters
 # NVIDIA's own numbers; drivers without the newer fields fail the whole query, so fall back to the basic one
 $nv = @(Invoke-Bounded 'nvidia-smi' '--query-gpu=index,name,utilization.gpu,memory.used,memory.total,utilization.memory,temperature.gpu,power.draw,power.limit,clocks.gr,clocks.max.gr,clocks.mem,fan.speed,utilization.encoder,utilization.decoder --format=csv,noheader,nounits')

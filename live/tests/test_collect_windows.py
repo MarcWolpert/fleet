@@ -472,5 +472,21 @@ class ScriptPairsUp(unittest.TestCase):
         self.assertEqual(ps_unbalanced("$a = 'it''s (' + \"`\" {\" + \"$(@{ b = '}' }.b)\"  # )\n<# ] #>\n$c = @'\n{ \"\n'@"), [])
 
 
+class IntegratedGpus(unittest.TestCase):
+    """#323: an integrated GPU has no dedicated memory (it uses shared system memory), so 'dedicated memory in use' left
+    it out. A GPU is one with dedicated memory in use or a hardware adapter in DXGI's list; DXGI's software adapter
+    (Microsoft Basic Render Driver) is not one, and virtual displays aren't in DXGI's list at all."""
+    def setUp(self):
+        self.ps = open(os.path.join(LIVE, "collect_windows.ps1"), encoding="utf-8").read()
+
+    def test_dxgi_lists_hardware_adapters_only(self):
+        self.assertIn("(d.Flags & 2) != 0", self.ps, "DXGI_ADAPTER_FLAG_SOFTWARE skipped")
+
+    def test_a_gpu_is_one_with_dedicated_memory_or_in_dxgis_hardware_list(self):
+        gpus = self.ps[self.ps.index("$o.gpus = @("):]
+        self.assertIn("Where-Object { $adMem[$_] -gt 0 -or $hw.ContainsKey($_) }", gpus.split("\n")[0])
+        self.assertLess(self.ps.index("$adapters = @(try { [FleetDxgi]::Read()"), self.ps.index("$o.gpus = @("), "the adapter list is read first")
+
+
 if __name__ == "__main__":
     unittest.main()
