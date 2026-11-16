@@ -1469,8 +1469,12 @@ def restart_self(fleet, reason):
     print("%s; restarting" % reason, flush=True)
     save_state(fleet)
     stop_collectors(fleet)
-    args = [x for x in sys.argv[1:] if x not in ("--open", "--open-if-unseen")] + ["--open-if-unseen"]
-    os.execv(sys.executable, [sys.executable, os.path.abspath(__file__)] + args)
+    args = [sys.executable, os.path.abspath(__file__)] + [x for x in sys.argv[1:] if x not in ("--open", "--open-if-unseen")] + ["--open-if-unseen"]
+    if platform.system() == "Windows":
+        # os.execv there is the C runtime's _wexecv: it joins argv with spaces and quotes nothing, so quote
+        # each argument the way the new process splits it again (C:\Program Files\... stays one argument).
+        args = [subprocess.list2cmdline([x]) for x in args]
+    os.execv(sys.executable, args)
 
 
 # ---------------------------------------------------------------- settings
