@@ -112,6 +112,7 @@ class Mac:
         self.now = now
         self.libc = FakeLibc(ticks or [[100, 50, 800, 0]] * 8)
         self.docker = docker
+        self.responsible = {}   # pid -> the process macOS holds responsible for it (#210); none: it can't tell
 
     def run(self, cmd, **kw):
         line = " ".join(cmd)
@@ -135,6 +136,7 @@ class Mac:
                                                                                      machine=lambda: "arm64", system=lambda: "Darwin")))
         stack.enter_context(mock.patch.object(fl, "time", types.SimpleNamespace(time=lambda: self.now, sleep=lambda s: None)))
         stack.enter_context(mock.patch.dict(os.environ, {"HOME": self.home}))
+        stack.enter_context(mock.patch.object(fl.MacCollector, "responsible_pid", staticmethod(lambda pid: self.responsible.get(pid, 0))))
         c = fl.MacCollector()
         c.libc = self.libc
         return c
@@ -281,6 +283,15 @@ class VirtualizationVms(unittest.TestCase):
         mac.now += 3
         c.snapshot()
         self.assertEqual(self.lsof_calls(mac), ["lsof -nP -p 700 -F n"])
+
+    def test_a_vm_macos_holds_docker_responsible_for_is_dockers_without_asking_lsof(self):
+        # #210: macOS names the app responsible for an XPC service; Docker's backend asked for this VM
+        mac = Mac(dict(ps(*self.PROCS), **self.FILES))
+        mac.responsible = {500: 400}
+        snap = mac.collector(self).snapshot()
+        self.assertEqual([v["name"] for v in snap["vms"]], ["fleet-lab", "VM 700", "nas-lab"])
+        self.assertEqual({p[0]: p[11] for p in snap["procs"]}[500], "dockervm")
+        self.assertEqual(self.lsof_calls(mac), ["lsof -nP -p 600 -F n", "lsof -nP -p 700 -F n"], "the open files only where macOS can't tell")
 
     def test_a_new_vm_that_gets_an_old_vms_pid_is_not_taken_for_it(self):
         mac = Mac(dict(ps(*self.PROCS), **self.FILES))
