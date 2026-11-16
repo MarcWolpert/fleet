@@ -320,7 +320,7 @@ class Machine:
                 p.stdin.close()  # Linux: the script itself; python3 - runs it at EOF
         err_tail = collections.deque(maxlen=5)
         threading.Thread(target=lambda: [err_tail.append(l.decode("utf-8", "replace").strip()) for l in p.stderr], daemon=True).start()
-        heard, stalled = [time.time()], []   # when the stream last brought a line; whether the watchdog ended it
+        heard, stalled, bad = [time.time()], [], [False]   # when the last good reading came; whether the watchdog ended the session; bad readings since
         def watchdog():   # a hung docker, wsl.exe or nvidia-smi call leaves SSH up (sshd answers keepalives) and the read blocked
             while p.poll() is None:
                 if time.time() - heard[0] > self.stall:
@@ -330,7 +330,6 @@ class Machine:
                 time.sleep(min(1.0, self.stall / 4))
         threading.Thread(target=watchdog, daemon=True).start()
         for line in p.stdout:
-            heard[0] = time.time()
             line = line.strip()
             if not line:
                 continue
@@ -346,13 +345,15 @@ class Machine:
                     view = self.derive_linux(raw)
             except Exception as e:
                 err_tail.append("bad reading: %s" % e)
+                bad[0] = True   # not a reading: the deadline keeps running
                 continue
             if view:
+                heard[0], bad[0] = time.time(), False
                 self.got(view)
         p.wait()
-        tail = " ".join(x for x in err_tail if x)
+        tail = " ".join(dict.fromkeys(x for x in err_tail if x))
         if stalled:
-            msg = "timed out: no reading in %g s" % self.stall + ("; " + tail if tail else "")
+            msg = ("no good reading in %g s" if bad[0] else "timed out: no reading in %g s") % self.stall + ("; " + tail if tail else "")
         else:
             msg = tail or "connection closed (exit %s)" % p.returncode
         self.set_status("offline", msg[:300])

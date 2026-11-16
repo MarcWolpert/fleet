@@ -154,6 +154,8 @@ class Silent:
         def out():
             for line in lines:
                 time.sleep(gap)
+                if self.killed:
+                    return   # a killed ssh's pipe ends
                 yield line
             if hang:
                 self.gone.wait(10)
@@ -209,6 +211,37 @@ class ReadDeadline(unittest.TestCase):
 
     def test_the_deadline_is_a_minute_or_ten_readings(self):
         self.assertEqual([fleet_live.Machine({"id": "x", "name": "x"}, i).stall for i in (2, 3, 6, 10)], [60.0, 60.0, 60.0, 100.0])
+
+
+def bad_line():
+    """A reading the server can't use: no "t", so derive_linux fails on it."""
+    return base64.b64encode(zlib.compress(json.dumps({"ncpu": 1}).encode())) + b"\n"
+
+
+class BadReadings(unittest.TestCase):
+    """Only a good reading counts for the deadline: a session that keeps sending readings the server can't use is
+    ended, and the machine goes offline saying why, instead of staying "live" with an old view or "connecting"."""
+
+    def test_after_a_good_one(self):
+        m, fake = machine(), Silent([linux_line(1000.0)] + [bad_line()] * 20, gap=0.1, hang=False)
+        m.stall = 0.4
+        took = session(m, fake)
+        self.assertEqual((fake.killed, m.status, m.error), (True, "offline", "no good reading in 0.4 s; bad reading: 't'"))
+        self.assertLess(took, 1.5)
+        self.assertEqual(m.view["t"], 1000.0, "the last good reading stays, shown as stale")
+
+    def test_from_the_start(self):
+        m, fake = machine(), Silent([bad_line()] * 20, gap=0.1, hang=False)
+        m.stall = 0.4
+        session(m, fake)
+        self.assertEqual((fake.killed, m.status, m.error, m.view), (True, "offline", "no good reading in 0.4 s; bad reading: 't'", None))
+
+    def test_a_bad_reading_now_and_then_control(self):
+        m, fake = machine(), Silent([linux_line(1000.0 + i) if i % 2 == 0 else bad_line() for i in range(10)], gap=0.1, hang=False)
+        m.stall = 0.4
+        session(m, fake)
+        self.assertEqual((fake.killed, m.status), (False, "offline"))
+        self.assertTrue(m.error.startswith("bad reading: 't'"), m.error)
 
 
 if __name__ == "__main__":
