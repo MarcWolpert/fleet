@@ -15,7 +15,7 @@ Usage: python3 fleet_live.py [--port 4518] [--config PATH] [--open]
 import argparse, base64, collections, ctypes, ctypes.util, glob, http.server, json, os, platform, plistlib, shlex
 import re, shutil, subprocess, sys, threading, time, tomllib, urllib.parse, webbrowser, zlib
 
-VERSION = "0.1.0"
+VERSION = "0.0.1"
 HERE = os.path.dirname(os.path.abspath(__file__))
 H = 60
 METRICS = ("cpu", "mem", "gpu", "disk", "net")
