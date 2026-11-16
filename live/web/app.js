@@ -2845,3 +2845,16 @@ function termMenu(id){
     ...(list.length ? [] : [{label:n && n.kind !== 'machine' ? 'Open shell' : 'Open terminal', run:() => openTerminal(id)}]),
     '—', {label:'Change the default…', run:() => openSettings()}]};
 }
+
+// The zoom level by Settings when it isn't 100% (#225): Fleet.app calls this after every zoom and on every load
+window.fleetZoomed = z => {
+  const c = $('zoomchip'); if (!c) return;
+  const pctz = Math.round(Number(z) * 100);
+  c.hidden = !(pctz > 0) || pctz === 100;
+  c.textContent = pctz + '%';
+  c.setAttribute('aria-label', `Zoom ${pctz}%. Click for 100%`);
+};
+document.addEventListener('click', e => {
+  if (!e.target.closest('#zoomchip')) return;
+  try { window.webkit.messageHandlers.fleet.postMessage({zoom:'reset'}); } catch (x) {}
+});

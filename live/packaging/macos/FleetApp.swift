@@ -106,7 +106,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         if tries == 6 && server == nil && !serverAnswers() { startServer() }  // ~3 s without a server: run our own
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { self.load() }
     }
-    func webView(_ w: WKWebView, didFinish n: WKNavigation!) { tries = 0 }
+    func webView(_ w: WKWebView, didFinish n: WKNavigation!) { tries = 0; showZoom() }
+    // the page shows the zoom level by Settings when it isn't 100% (#225)
+    func showZoom() { web.evaluateJavaScript("window.fleetZoomed && window.fleetZoomed(\(Double(web.pageZoom)))", completionHandler: nil) }
 
     func serverAnswers() -> Bool {
         var ok = false
@@ -195,6 +197,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         if how == "out" { next = steps.last(where: { $0 < cur - 0.001 }) ?? steps.first! }
         web.pageZoom = next
         UserDefaults.standard.set(Double(next), forKey: "FleetZoom")
+        showZoom()
     }
     @objc func zoomIn(_ s: Any?) { zoom("in") }
     @objc func zoomOut(_ s: Any?) { zoom("out") }
