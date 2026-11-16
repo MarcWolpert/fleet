@@ -104,6 +104,12 @@ The point is to keep profiting from upstream work without merge collisions.
 
 ## Safety: real machines and actions
 
+This repo names machines and projects by neutral placeholders (`nas`,
+`win-desktop`, `win-laptop`, `shop-*`, `shop-prod`). The real names are in the
+untracked `CLAUDE.local.md`, and every rule below applies to the real ones.
+Never write real machine, project or company names, IPs, paths or personal
+emails into this repo, its commit messages, issues or PRs.
+
 - Agents and tests **only read** from real machines (Marc's Mac, nas
   and its Unraid VMs, win-desktop, win-laptop). Never install, start, stop
   or kill anything on them, and never run a Fleet action against them, without
