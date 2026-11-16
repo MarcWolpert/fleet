@@ -104,7 +104,7 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-r
 .side-note b{color:var(--ink-2);font-weight:600}
 
 main{flex:1;min-width:0;overflow:auto;background:var(--win)}
-.wrap{max-width:none;padding:20px 24px 48px;display:flex;flex-direction:column;gap:16px}
+.wrap{max-width:none;padding:20px 24px 48px;display:flex;flex-direction:column;gap:16px;container-type:inline-size}
 .hero{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
 .hero .tile{width:46px;height:46px;border-radius:12px}
 .hero .tile svg{width:24px;height:24px}
@@ -115,7 +115,7 @@ main{flex:1;min-width:0;overflow:auto;background:var(--win)}
 .hs .k{font-size:11px;color:var(--ink-3);text-transform:uppercase;letter-spacing:.07em}
 .hs .v{font:600 20px/1.25 var(--mono)}
 .hs .s{font-size:12px;color:var(--ink-3)}
-.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(440px,1fr));gap:16px}
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(440px,100%),1fr));gap:16px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 18px;min-width:0}
 .card-h{display:flex;align-items:center;gap:8px 12px;flex-wrap:wrap;margin-bottom:12px}
 .card-h h2{margin:0;font-size:14.5px;font-weight:600}
@@ -167,7 +167,7 @@ main{flex:1;min-width:0;overflow:auto;background:var(--win)}
 .rank .track{height:12px}
 .rank .bar{height:12px;border-radius:0 4px 4px 0;min-width:3px}
 
-.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(190px,100%),1fr));gap:12px}
 .st{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
 .st .k{font-size:12px;color:var(--ink-3)}
 .st .v{font:600 21px/1.3 var(--mono)}
@@ -191,7 +191,7 @@ main{flex:1;min-width:0;overflow:auto;background:var(--win)}
 
 .res .lab small{display:block;font-size:11px;font-weight:400;color:var(--ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .gtag{font:500 10.5px/1 var(--mono);color:var(--ink-2);border:1px solid var(--line-2);border-radius:5px;padding:2px 5px;margin-left:4px;flex:none;white-space:nowrap}
-.gpus{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px}
+.gpus{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(300px,100%),1fr));gap:12px}
 .gpu{background:var(--card-2);border-radius:10px;padding:12px 14px;min-width:0}
 .gpu-h{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:10px}
 .gpu-h .k{font-size:11px;color:var(--ink-3);text-transform:uppercase;letter-spacing:.07em}
@@ -214,6 +214,9 @@ main{flex:1;min-width:0;overflow:auto;background:var(--win)}
   .side{width:auto;border-right:0;border-bottom:1px solid var(--line);max-height:52vh}
   main{overflow:visible}
   .wrap{padding:16px}
+}
+/* the compact card layout follows the main column's own width (docked Details narrows it), not the window's */
+@container (max-width: 600px){
   .grid2{grid-template-columns:minmax(0,1fr)}
   .res{grid-template-columns:64px minmax(0,1fr)}
   .res .tot{grid-column:2;text-align:left}
@@ -292,7 +295,7 @@ main{flex:1;min-width:0;overflow:auto;background:var(--win)}
 .lgroups{display:flex;flex-direction:column;gap:14px;margin-top:6px}
 .lgh{display:flex;align-items:baseline;gap:10px;font-size:12.5px;color:var(--ink-3);margin-bottom:6px}
 .lgh b{color:var(--ink);font-weight:600;font-size:13px}
-.lgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(86px,1fr));gap:6px}
+.lgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(86px,100%),1fr));gap:6px}
 .lcell{position:relative;height:56px;border:1px solid var(--line);border-radius:7px;background:var(--card-2);overflow:hidden}
 .lcell svg{position:absolute;inset:0;width:100%;height:100%}
 .lcell .lt{position:absolute;left:6px;top:4px;font:500 10.5px/1 var(--mono);color:var(--ink-3)}
@@ -406,7 +409,7 @@ button.lcell:hover{border-color:color-mix(in srgb, var(--ink) 25%, transparent)}
 .cpustats .hero-stats{margin:0 0 6px;justify-content:flex-start}
 .cpustats .hs{text-align:left}
 .cpuproc{margin:18px 0 8px;font-size:13.5px;font-weight:600}
-.ggrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px;margin-top:4px}
+.ggrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(200px,100%),1fr));gap:10px;margin-top:4px}
 .gcell{position:relative;height:150px;border:1px solid var(--line);border-radius:10px;background:var(--card-2);overflow:hidden;padding:0;font:inherit;color:inherit;cursor:pointer;text-align:left}
 .gcell:hover{border-color:color-mix(in srgb, var(--ink) 25%, transparent)}
 .gcell.sel{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent) inset}
@@ -447,7 +450,7 @@ html.native .setbtn{height:32px}
 .dockbtn svg{width:16px;height:16px}
 .dockbtn:hover{color:var(--ink);background:color-mix(in srgb, var(--ink) 5%, transparent)}
 .dockbtn.on{color:var(--accent);background:color-mix(in srgb, var(--accent-bg) 12%, transparent)}
-.kgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:8px;margin-top:4px}
+.kgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(190px,100%),1fr));gap:8px;margin-top:4px}
 .kcell{position:relative;height:118px;border:1px solid var(--line);border-radius:10px;background:var(--card-2);overflow:hidden;padding:0;font:inherit;color:inherit;cursor:pointer;text-align:left}
 .kcell:hover{border-color:color-mix(in srgb, var(--ink) 25%, transparent)}
 .kcell.sel{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent) inset}
@@ -465,6 +468,7 @@ html.native .setbtn{height:32px}
 .hero>.tile{flex:none}
 .hero>div:nth-child(2){flex:1 1 420px;min-width:0}
 .hero .hero-stats{margin-left:0;flex:0 0 auto;flex-wrap:nowrap}
+@container (max-width: 600px){.hero .hero-stats{flex:0 1 auto;flex-wrap:wrap;row-gap:8px}}
 .hero>.btn{flex:none;margin-left:0!important}
 /* Tiles: text in its own rows, the graph in its own band below: nothing sits on the line */
 .lcell,.gcell,.kcell{display:flex;flex-direction:column;gap:3px;padding:7px 9px 0}
@@ -545,7 +549,7 @@ html.native .setbtn{height:32px}
 .nrate span{overflow:hidden;text-overflow:ellipsis;max-width:100%}
 
 /* Settings → Appearance: one swatch per theme */
-.thgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(132px,1fr));gap:10px;margin-bottom:12px}
+.thgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(132px,100%),1fr));gap:10px;margin-bottom:12px}
 .thsw{position:relative}
 .thsw-b{display:flex;flex-direction:column;gap:6px;width:100%;padding:6px;border-radius:11px;border:1px solid var(--line);background:var(--card)}
 .thsw-b:hover{border-color:var(--line-2)}
@@ -603,7 +607,7 @@ kbd{display:inline-block;min-width:22px;padding:2px 7px;border-radius:6px;border
 .wrow.idle .wbar i{background:var(--ink-3)}.wrow.idle{color:var(--ink-3)}
 .wv{font-family:var(--mono);text-align:right;color:var(--ink)}
 .insp-sub{font-size:11.5px;color:var(--ink-3);margin:0}
-.insp-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:10px}
+.insp-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(230px,100%),1fr));gap:10px}
 .icard{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:9px 11px;display:flex;flex-direction:column;gap:3px;min-width:0}
 .icard.wide{grid-column:1/-1}
 .icard h4{margin:0 0 3px;font-size:10.5px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3)}
@@ -637,7 +641,7 @@ tr.fmatch>td{background:color-mix(in srgb, var(--stale) 16%, transparent)!import
 .fcur{outline:2px solid color-mix(in srgb, var(--stale) 75%, transparent);outline-offset:-2px}
 
 /* Each GPU: a group of metric tiles per GPU */
-.ggroups .lgrid{grid-template-columns:repeat(auto-fill,minmax(138px,1fr))}
+.ggroups .lgrid{grid-template-columns:repeat(auto-fill,minmax(min(138px,100%),1fr))}
 .ggroup.sel .lgh .lgbtn{color:var(--ink)}
 .ggroup.sel .lcell{border-color:color-mix(in srgb, var(--accent) 45%, transparent)}
 .gmc .lt{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
