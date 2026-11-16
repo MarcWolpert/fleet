@@ -40,6 +40,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     var web: FleetWebView!
     var server: Process?
     var tries = 0
+    var quitting = false
+    let log = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/Fleet.log")
 
     func applicationDidFinishLaunching(_ note: Notification) {
         buildMenu()
@@ -157,14 +159,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         var env = ProcessInfo.processInfo.environment  // apps opened from Finder get a short PATH
         env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:" + (env["PATH"] ?? "")
         p.environment = env
-        let log = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/Fleet.log")
         FileManager.default.createFile(atPath: log.path, contents: nil)
         if let h = try? FileHandle(forWritingTo: log) { p.standardOutput = h; p.standardError = h }
+        p.terminationHandler = { q in DispatchQueue.main.async { self.serverStopped(q) } }
         if (try? p.run()) != nil { server = p }
+    }
+
+    // Our server stopped on its own (a machines.toml it can't read, the port taken, a crash): say why, from the
+    // end of its log, rather than reload an empty window forever (#190). Its restarts after a settings
+    // change exec in place, so they never get here.
+    func serverStopped(_ p: Process) {
+        guard !quitting, p === server else { return }
+        if serverAnswers() { server = nil; return }  // another Fleet Live answers on the port: use that one
+        let a = NSAlert()
+        a.messageText = "Fleet's server stopped"
+        let tail = logTail((try? String(contentsOf: log, encoding: .utf8)) ?? "", lines: 6)
+        a.informativeText = (tail.isEmpty ? "" : tail + "\n\n") + "The whole log is in ~/Library/Logs/Fleet.log."
+        a.addButton(withTitle: "Start Again")
+        a.addButton(withTitle: "Quit")
+        if a.runModal() == .alertFirstButtonReturn {
+            tries = 0
+            startServer()
+        } else {
+            NSApp.terminate(nil)
+        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ s: NSApplication) -> Bool { true }
     func applicationWillTerminate(_ n: Notification) {
+        quitting = true  // the server we stop now isn't one that stopped on its own
         guard let p = server, p.isRunning else { return }
         p.terminate()  // SIGTERM: the server saves its state and stops its SSH sessions
         let deadline = Date().addingTimeInterval(3)
@@ -283,6 +306,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         NSApp.helpMenu = help
         NSApp.windowsMenu = win
     }
+}
+
+/// The last `lines` lines of a log that have anything on them.
+func logTail(_ text: String, lines n: Int) -> String {
+    text.split(separator: "\n").filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }.suffix(n).joined(separator: "\n")
 }
 
 extension NSColor {
