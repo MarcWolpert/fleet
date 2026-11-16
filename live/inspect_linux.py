@@ -242,18 +242,28 @@ def snapshot(tids):
     s = stat(P + "/stat")
     io = kv(rd(P + "/io"))
     st = kv(rd(P + "/status"))
-    th = {}
-    run = wait = 0
+    th, sched = {}, {}
     for t in tids:
         ts = stat("%s/task/%d/stat" % (P, t))
         if not ts:
             continue
         sch = rd("%s/task/%d/schedstat" % (P, t)).split()
         if len(sch) >= 2:
-            run += int(sch[0])
-            wait += int(sch[1])
+            sched[t] = (int(sch[0]), int(sch[1]))   # ns on a core, ns waiting in a run queue, over the thread's life
         th[t] = int(ts[14]) + int(ts[15])
-    return {"t": time.time(), "stat": s, "io": io, "status": st, "threads": th, "run_ns": run, "wait_ns": wait}
+    return {"t": time.time(), "stat": s, "io": io, "status": st, "threads": th, "sched": sched}
+
+
+def sched_split(a, b, dt):
+    """(running, queued for a core) in core-seconds per second, from each thread's schedstat change. A thread
+    that exits during the look has no reading at the end and adds nothing (its lifetime would be subtracted);
+    one that starts during it began at zero, so all of its time is inside the look."""
+    run = wait = 0
+    for t, (r1, w1) in b["sched"].items():
+        r0, w0 = a["sched"].get(t, (0, 0))
+        run += max(0, r1 - r0)
+        wait += max(0, w1 - w0)
+    return run / 1e9 / dt, wait / 1e9 / dt
 
 
 def main():
@@ -297,6 +307,7 @@ def main():
     dt = max(0.05, b["t"] - a["t"])
     s, st = b["stat"], b["status"]
     d = lambda f: int(s[f]) - int(a["stat"][f]) if a["stat"] else 0
+    run_s, runq_s = sched_split(a, b, dt)
     boot = time.time() - float(rd("/proc/uptime").split()[0])
     # threads: their CPU over the sample and what they mostly did
     names = {}
@@ -365,7 +376,7 @@ def main():
         "cpu": {"user": d(14) / HZ / dt, "system": d(15) / HZ / dt,
                 "ctx_vol": (int(st.get("voluntary_ctxt_switches", 0)) - int(a["status"].get("voluntary_ctxt_switches", 0))) / dt,
                 "ctx_invol": (int(st.get("nonvoluntary_ctxt_switches", 0)) - int(a["status"].get("nonvoluntary_ctxt_switches", 0))) / dt,
-                "run_s": (b["run_ns"] - a["run_ns"]) / 1e9 / dt, "runq_s": max(0, b["wait_ns"] - a["wait_ns"]) / 1e9 / dt},
+                "run_s": run_s, "runq_s": runq_s},
         "mem": {"rss": kb(st.get("VmRSS", "0")), "anon": kb(st.get("RssAnon", "0")), "file": kb(st.get("RssFile", "0")),
                 "shmem": kb(st.get("RssShmem", "0")), "swap": kb(st.get("VmSwap", "0")), "peak": kb(st.get("VmHWM", "0")),
                 "virt": kb(st.get("VmSize", "0")), "minflt": d(10) / dt, "majflt": d(12) / dt},

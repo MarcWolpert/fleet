@@ -138,6 +138,10 @@ class Hist:
             for i, v in enumerate(vals):
                 q[i].append(round(float(v), 4))
 
+    def keys(self, prefix):
+        with self.lock:
+            return [k for k in self.d if k.startswith(prefix)]
+
     def get(self, key, n=5):
         with self.lock:
             q = self.d.get(key)
@@ -1633,9 +1637,8 @@ class Fleet:
         own = record and live
         spec.update({"os": view["os"] + (" · " + view["arch"] if view.get("arch") else ""), "cpu_model": view.get("cpu_model", ""),
                      "uptime": fmt_uptime(view.get("uptime", 0)), "cap": view["cap"], "cronLabel": view.get("cronLabel", "Cron jobs"),
-                     "gpus": [{"name": g["name"], "mem": g.get("mem", ""),
-                               "m": [[k, lim, self.leaf("%s/gpu%d/%s" % (mid, gi, k), [(g.get("m") or {}).get(k, 0.0)], own)["cpu"]] for k, lim in gpu_metric_order(g)]}
-                              for gi, g in enumerate(view["gpus"])], "ncpu": view["ncpu"],
+                     "gpus": [{"name": g["name"], "mem": g.get("mem", ""), "m": self.gpu_metrics(mid, gi, g, own)} for gi, g in enumerate(view["gpus"])],
+                     "ncpu": view["ncpu"],
                      "groups": view.get("groups", [])})
         if view.get("note"):
             spec["note"] = {"label": "How this is counted.", "text": view["note"]}
@@ -1735,6 +1738,18 @@ class Fleet:
         if record:
             HIST.push(key, u)
         return hist_obj(key)
+
+    def gpu_metrics(self, mid, gi, g, record):
+        """One GPU's tiles: [metric, limit, history] for each metric it reports now. A metric it reported before but
+        not now (Windows' compute and video processing engines are counted only while a process holds them) reads 0
+        while it's away, so its history keeps time with the others and a comeback isn't drawn next to old values (#290)."""
+        m, prefix = g.get("m") or {}, "%s/gpu%d/" % (mid, gi)
+        out = [[k, lim, self.leaf(prefix + k, [m.get(k, 0.0)], record)["cpu"]] for k, lim in gpu_metric_order(g)]
+        if record:
+            for key in HIST.keys(prefix):
+                if key[len(prefix):] not in m:
+                    HIST.push(key, [0.0])
+        return out
 
     def gpu_leaf(self, key, gu, n, record):
         """What a node uses of each of its machine's n GPUs, with history: {"gpu0": [...], "gpu1": [...]}."""
@@ -2067,6 +2082,7 @@ INSPECT_SECS = 1.5
 INSPECT_LOCK = threading.Lock()
 INSPECT_CACHE = {}   # (machine, pid) -> (time, result)
 INSPECT_BUSY = {}    # (machine, pid) -> Event while a look is running
+REACHES_OUT = {"/api/proc"}   # the GETs that start work on a machine: they need what a write needs (#287)
 
 
 def inspect_mac(pid):
@@ -2184,6 +2200,11 @@ def mac_inspect_script(pid, secs):
     return MAC_IMPORTS + "INSPECT_SECS = %r\n\n" % secs + own_source("inspect_mac")[0] + "\n\nprint(json.dumps(inspect_mac(%d)))\n" % int(pid)
 
 
+def windows_inspect_script(pid):
+    with open(os.path.join(HERE, "inspect_windows.ps1"), encoding="utf-8") as f:
+        return "$FleetPid=%d\n$FleetSecs=%s\n" % (pid, INSPECT_SECS) + ps_compact(f.read())
+
+
 def inspect_process(m, pid):
     key = (m.id, pid)
     with INSPECT_LOCK:
@@ -2201,20 +2222,25 @@ def inspect_process(m, pid):
         return c[1] if c else {"pid": pid, "error": "no answer"}
     cfg = m.cfg
     try:
-        if cfg.get("kind") == "local" and sys.platform == "darwin":
+        # this computer: the inspector of what it runs on, as local_loop picks its collector (validate_config
+        # drops a local machine's os); a machine over SSH: its configured os
+        local = platform.system() if cfg.get("kind") == "local" else None
+        if local == "Darwin":
             out = inspect_mac(pid)
         else:
-            if cfg.get("kind") == "local":
+            if local == "Windows":   # the short starter the local collector uses, the script on stdin (#269)
+                cmd, stdin = ps_launch(windows_inspect_script(pid))
+            elif local:
                 cmd, stdin = [sys.executable, os.path.join(HERE, "inspect_linux.py"), str(pid), str(INSPECT_SECS)], None
             elif cfg.get("os") == "macos":
                 cmd, stdin = ["ssh"] + SSH_MARK + [cfg["ssh"], "python3 -"], mac_inspect_script(pid, INSPECT_SECS).encode()
             elif cfg.get("os") == "windows":
-                script = "$FleetPid=%d\n$FleetSecs=%s\n" % (pid, INSPECT_SECS) + ps_compact(open(os.path.join(HERE, "inspect_windows.ps1"), encoding="utf-8").read())
-                enc = base64.b64encode(script.encode("utf-16-le")).decode()
+                enc = base64.b64encode(windows_inspect_script(pid).encode("utf-16-le")).decode()
                 cmd, stdin = ["ssh"] + SSH_MARK + [cfg["ssh"], "powershell -NoProfile -NonInteractive -EncodedCommand " + enc], None
             else:
                 cmd = ["ssh"] + SSH_MARK + [cfg["ssh"], "python3 - %d %s" % (pid, INSPECT_SECS)]
-                stdin = open(os.path.join(HERE, "inspect_linux.py"), "rb").read()
+                with open(os.path.join(HERE, "inspect_linux.py"), "rb") as f:
+                    stdin = f.read()
             r = subprocess.run(cmd, input=stdin, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
             lines = [l for l in r.stdout.decode("utf-8", "replace").splitlines() if l.startswith("{")]
             if lines:
@@ -2552,10 +2578,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         return json.loads(self.rfile.read(min(n, 1 << 20)) or b"null")
 
     def do_GET(self):
-        if not self.allowed():
+        u = urllib.parse.urlparse(self.path)
+        # A look at a process opens an SSH session or runs a helper container. A page on any site can send a
+        # no-cors GET with Fleet's own Host, so this GET passes the write gate too (#287).
+        if not self.allowed(write=u.path in REACHES_OUT):
             self.send_error(403)
             return
-        u = urllib.parse.urlparse(self.path)
         if u.path == "/api/config":
             f = self.fleet
             st = {m.id: {"status": m.status, "error": m.error} for m in f.machines.values()}

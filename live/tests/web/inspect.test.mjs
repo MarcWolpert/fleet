@@ -34,6 +34,8 @@ async function open(fx){
   await p.waitFor(`document.querySelectorAll('.ptbl tbody tr[data-pid]').length === 12`);
   return p;
 }
+const settle = ms => new Promise(r => setTimeout(r, ms));
+async function polls(p, n = 3){ for (let i = 0; i < n; i++){ await p.eval(`(refreshNow(), true)`); await settle(150); } await settle(300); }
 
 test('clicking a process opens its drop-down right under it, asks for that process, and closes again', async () => {
   const fx = fixture(); fx.proc = () => look();
@@ -56,6 +58,66 @@ test('clicking a process opens its drop-down right under it, asks for that proce
     assert.equal(await p.eval(`!!${PANEL}`), false);
     await click(p, 'tr[data-pid="101"] [data-select]');
     assert.equal(await p.eval(`!!${PANEL}`), false);
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
+test('a look is asked for with Fleet\'s own header, which a page on another site can\'t send (#287)', async () => {
+  const fx = fixture(); fx.proc = () => look();
+  const p = await open(fx);
+  try {
+    await click(p, 'tr[data-pid="103"] td:nth-child(4)');
+    await p.waitFor(`document.querySelector('tr.pinsp [data-wait]')`);
+    assert.deepEqual(fx.procCalls.slice(0, 1), ['lx:103']);
+    assert.deepEqual((fx.refused || []).map(r => r.path), [], 'no look turned away');
+    assert.equal(await p.eval(`${PANEL}.textContent.includes('didn’t answer')`), false);
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
+const WATCHED = `(document.querySelector('tr.pinsp [data-watched]') || {}).textContent || ''`;
+
+test('a look the server answers twice (its answer is shared for a second) counts once (#288)', async () => {
+  const T1 = Date.now() / 1000 - 5, A = look({t: T1}), B = look({t: T1 + 2, waits: {disk: 20}});
+  const fx = fixture(); fx.proc = (mid, pid, n) => n <= 2 ? A : B;
+  const p = await open(fx);
+  try {
+    await click(p, 'tr[data-pid="103"] td:nth-child(4)');
+    await p.waitFor(`document.querySelector('tr.pinsp [data-wait]')`);
+    await p.eval(`(refreshNow(), true)`);                     // the server's cached answer: the same look, t and all
+    for (let i = 0; i < 50 && fx.procCalls.length < 2; i++) await settle(20);
+    await settle(200);
+    assert.equal(fx.procCalls.length, 2);
+    assert.match(await p.eval(WATCHED), /· 1 look \(2 s of samples\)/);
+    assert.deepEqual(await p.eval(WAITS), {events: '60%', disk: '30%', cpu: '10%'});
+    await p.eval(`(refreshNow(), true)`);                     // a new look
+    await p.waitFor(`/· 2 looks/.test(${WATCHED})`);
+    assert.match(await p.eval(WATCHED), /· 2 looks \(3 s of samples\)/);
+    assert.deepEqual(await p.eval(WAITS), {disk: '65%', events: '30%', cpu: '5%'});
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
+test('the answer for a process you just left doesn\'t let a second look start for the new one (#288)', async () => {
+  const held = [], fx = fixture();
+  fx.proc = (mid, pid) => new Promise(r => held.push({pid, send: () => r(look({pid, name: pid === 101 ? 'nginx' : 'postgres', t: 5000 + pid}))}));
+  const release = pid => held.filter(h => h.pid === pid).forEach(h => h.send());
+  const p = await open(fx);
+  try {
+    await click(p, 'tr[data-pid="101"] td:nth-child(4)');
+    for (let i = 0; i < 50 && held.length < 1; i++) await settle(20);
+    await click(p, 'tr[data-pid="103"] td:nth-child(4)');    // 101's look is still on its way
+    for (let i = 0; i < 50 && held.length < 2; i++) await settle(20);
+    assert.deepEqual(fx.procCalls, ['lx:101', 'lx:103']);
+    release(101);                                             // the stale answer comes back while 103's is on its way
+    await settle(200);
+    await polls(p);
+    assert.deepEqual(fx.procCalls, ['lx:101', 'lx:103'], 'one look at a time for 103');
+    release(103);
+    await p.waitFor(`/· 1 look\\b/.test(${WATCHED})`);
+    await settle(200);
+    assert.match(await p.eval(WATCHED), /· 1 look \(2 s of samples\)/);
+    assert.match(await p.eval(`${PANEL}.textContent`), /postgres/);
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
 });
@@ -102,16 +164,71 @@ test('while a process is open the rows hold their places; Resume live order sort
   } finally { await p.close(); }
 });
 
-test('Esc closes it; a process that exits or a machine that fails says so', async () => {
-  const fx = fixture(); let ans = look({pid: 103, gone: true});
-  fx.proc = () => ans;
+test('a drop-down off screen asks nothing: another machine, another view; back on its machine it looks again (#288)', async () => {
+  const fx = fixture(); fx.proc = () => look();
+  const p = await open(fx);
+  try {
+    await click(p, 'tr[data-pid="103"] td:nth-child(4)');
+    await p.waitFor(`document.querySelector('tr.pinsp [data-wait]')`);
+    const n0 = fx.procCalls.length;
+    await click(p, '#tree .row[data-select="lx2"] .nm');                    // another machine in the tree
+    await p.waitFor(`document.querySelector('.ptbl').dataset.mid === 'lx2' && !${PANEL}`);
+    await polls(p);
+    assert.equal(fx.procCalls.length, n0, 'no look while Details shows lx2');
+    await click(p, '#tree .row[data-select="lx"] .nm');                     // back: the drop-down is still open, and looks again
+    await p.waitFor(`document.querySelector('.ptbl').dataset.mid === 'lx' && ${PANEL}`);
+    await p.eval(`(refreshNow(), true)`);
+    await p.waitFor(`document.querySelector('[data-watched]') && /\\b2 looks\\b/.test(document.querySelector('[data-watched]').textContent)`);
+    assert.deepEqual(fx.procCalls.slice(n0), ['lx:103']);
+    const n1 = fx.procCalls.length;
+    await click(p, '#metrics [data-metric="cpu"]');                          // the overview
+    await p.waitFor(`!document.querySelector('.ptbl')`);
+    await polls(p);
+    assert.equal(fx.procCalls.length, n1, 'no look from the overview');
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
+test('closing the docked Details panel stops the open drop-down\'s looks (#288)', async () => {
+  const fx = fixture(); fx.proc = () => look();
+  const p = await browser.page(fx, {ui: ui({sel: 'lx', detailsDocked: true}), width: 1400, height: 800});
+  try {
+    await p.waitFor(`document.querySelectorAll('.dpanel .ptbl tbody tr[data-pid]').length === 12`);
+    await click(p, '.dpanel tr[data-pid="103"] td:nth-child(4)');
+    await p.waitFor(`document.querySelector('.dpanel tr.pinsp [data-wait]')`);
+    const n0 = fx.procCalls.length;
+    await click(p, '.dpanel [data-closedock]');
+    await p.waitFor(`!document.querySelector('.dpanel')`);
+    await polls(p);
+    assert.equal(fx.procCalls.length, n0);
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
+test('a process that has exited is not asked about again; its drop-down still says so (#288)', async () => {
+  const fx = fixture(); fx.proc = () => look({pid: 103, gone: true});
   const p = await open(fx);
   try {
     await click(p, 'tr[data-pid="103"] td:nth-child(4)');
     await p.waitFor(`${PANEL} && ${PANEL}.textContent.includes('exited')`);
-    ans = {pid: 103, error: 'lab-linux took too long to answer'};
+    await polls(p);
+    assert.deepEqual(fx.procCalls, ['lx:103']);
+    assert.ok(await p.eval(`${PANEL}.textContent.includes('exited')`));
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
+test('Esc closes it; a process that exits or a machine that fails says so', async () => {
+  // the machine fails first: an exited process is not asked about again (#288), so its look comes last
+  const fx = fixture(); let ans = {pid: 103, error: 'lab-linux took too long to answer'};
+  fx.proc = () => ans;
+  const p = await open(fx);
+  try {
+    await click(p, 'tr[data-pid="103"] td:nth-child(4)');
+    await p.waitFor(`${PANEL} && ${PANEL}.textContent.includes('lab-linux took too long to answer')`);
+    ans = look({pid: 103, gone: true});
     await p.eval(`(refreshNow(), true)`);
-    await p.waitFor(`${PANEL}.textContent.includes('lab-linux took too long to answer')`);
+    await p.waitFor(`${PANEL}.textContent.includes('exited')`);
     await p.eval(`(() => { document.body.focus(); document.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape', bubbles: true})); return true; })()`);
     await p.waitFor(`!${PANEL}`);
     assert.deepEqual(p.errors, []);
@@ -147,9 +264,33 @@ test('a refresh keeps where you scrolled the docked Details panel and the page b
   } finally { await p.close(); }
 });
 
+test('May run on: a Linux CPU list as Linux sends it, a Windows mask as its CPUs (#289)', async () => {
+  // Linux sends Cpus_allowed_list (affinity), so a process pinned to one CPU is a bare number; Windows sends
+  // ProcessorAffinity, a bitmask (affinity_mask), -1 when every one of 64 CPUs is allowed
+  const cases = [[{affinity: '3'}, '3'], [{affinity: '5'}, '5'], [{affinity: '1'}, '1'], [{affinity: '0-15,32'}, '0-15,32'], [{affinity: '7-7'}, '7-7'],
+    [{affinity: undefined, affinity_mask: '16777215'}, 'CPUs 0–23'], [{affinity: undefined, affinity_mask: '5'}, 'CPUs 0, 2'],
+    [{affinity: undefined, affinity_mask: '-1'}, 'CPUs 0–63'], [{affinity: undefined, affinity_mask: '1'}, 'CPUs 0'],
+    [{affinity: undefined, affinity_mask: '18446744069414584320'}, 'CPUs 32–63']];
+  const fx = fixture(); let ans = null; fx.proc = () => ans;
+  const p = await open(fx);
+  const runsOn = `(([...document.querySelectorAll('tr.pinsp .kv')].find(k => k.querySelector('span').textContent === 'May run on') || {}).textContent || '').replace('May run on', '')`;
+  try {
+    const got = [];
+    for (const [over] of cases){
+      ans = look(over);
+      if (await p.eval(`!!${PANEL}`)) await click(p, 'tr[data-pid="103"] td:nth-child(4)');
+      await click(p, 'tr[data-pid="103"] td:nth-child(4)');
+      await p.waitFor(`document.querySelector('tr.pinsp [data-wait]')`);
+      got.push(await p.eval(runsOn));
+    }
+    assert.deepEqual(got, cases.map(c => c[1]));
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
 test('a Windows process: affinity reads as CPUs and handles are called handles (regression)', async () => {
   const fx = fixture();
-  fx.proc = () => look({affinity: '16777215', fds: 620, fd_limit: -1, handles: 620, files: [], priority_class: 'Normal', cgroup: null, cache: null,
+  fx.proc = () => look({affinity: undefined, affinity_mask: '16777215', fds: 620, fd_limit: -1, handles: 620, files: [], priority_class: 'Normal', cgroup: null, cache: null,
     cache_error: 'Windows doesn\'t expose per-process CPU cache counters without a kernel driver'});
   const p = await open(fx);
   try {

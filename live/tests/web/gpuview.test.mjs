@@ -81,6 +81,38 @@ test('clicking a GPU\'s tile picks that GPU, as before; a pinned metric goes fir
   } finally { await p.close(); }
 });
 
+// Each tile's pin, hit where a mouse would click it (its centre): the element there must be the pin, not the
+// tile's select button under it. A label too long for its tile used to clip the pin, which sat inside it (#291).
+// The tile is scrolled into view, never the pin: scrollIntoView would also scroll the clipping label.
+const PIN_MISSES = `[...document.querySelectorAll('.ggroup [data-gm]')].map(t => {
+  const pin = t.querySelector('[data-tpin]'); t.scrollIntoView({block: 'center'});
+  const b = pin.getBoundingClientRect(), at = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2), tb = t.getBoundingClientRect();
+  const inside = b.width > 0 && b.left >= tb.left && b.right <= tb.right;
+  return (at && at.closest('[data-tpin]') === pin && inside) ? null : t.closest('.ggroup').dataset.gpu + ':' + t.dataset.gm + ' hits ' + (at ? at.className : 'nothing');
+}).filter(Boolean)`;
+
+test('every GPU metric tile\'s pin can be clicked with a mouse, at every width; the label gives way instead (#291)', async () => {
+  const fx = fx2(), lx = fx.fleet.machines.find(m => m.id === 'lx');
+  // the longest labels next to wide values: Mem. controller at 100%, Mem. clock at 10.50 GHz, Temperature, Video encode
+  lx.gpus[0].m = NVM.map(([k, lim, h]) => [k, lim, k === 'memctl' ? flat(100) : k === 'memclock' ? flat(10500) : k === 'encode' ? flat(100) : k === 'temp' ? flat(100) : h]);
+  for (const width of [1500, 1100, 900]){
+    const p = await browser.page(fx, {ui: ui({sel: 'lx', metric: 'gpu', gpuView: 'each'}), width});
+    try {
+      await p.waitFor(`document.querySelectorAll('.ggroups > .ggroup').length === 2`);
+      assert.deepEqual(await p.eval(PIN_MISSES), [], `at ${width}px`);
+      if (width === 900){   // a real click on Mem. controller's pin pins it, and doesn't pick the GPU
+        const at = await p.eval(`(() => { const t = ${TILE('gpu0', 'memctl')}; t.scrollIntoView({block: 'center'}); const b = t.querySelector('[data-tpin]').getBoundingClientRect(); return {x: b.left + b.width / 2, y: b.top + b.height / 2}; })()`);
+        await p.clickAt(at.x, at.y);
+        await p.waitFor(`${GROUPS}[0].tiles[0] === 'memctl'`);
+        assert.equal(await p.eval(`document.querySelectorAll('.ggroup.sel').length`), 0, 'no GPU picked');
+        // the label is still there, cut short if it must be, and says what it is in full on hover
+        assert.match(await p.eval(`${TILE('gpu0', 'memctl')}.querySelector('.lt').textContent`), /^Mem\. controller$/);
+      }
+      assert.deepEqual(p.errors, []);
+    } finally { await p.close(); }
+  }
+});
+
 test('Base is counted on each GPU by what it uses there, not all on GPU 0 (#116)', async () => {
   const fx = fx2(), lx = fx.fleet.machines.find(m => m.id === 'lx'), lx2 = fx.fleet.machines.find(m => m.id === 'lx2');
   const h = g => ({cpu: flat(1), mem: flat(2), gpu: flat(g), disk: flat(0), net: flat(0)});

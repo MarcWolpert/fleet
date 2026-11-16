@@ -85,7 +85,8 @@ const KEEP = {pending:null, t:0};
 const FIRST = {checked:false, fresh:(() => { try { return localStorage.getItem('fleet-live-ui') === null; } catch (e) { return false; } })()};
 try { const k = JSON.parse(sessionStorage.getItem('fleet-scroll') || 'null'); if (k && k.pos) Object.assign(KEEP, {pending:k, t:Date.now()}); } catch (e) {}   // the panel you're in: 'tree', 'main' or 'details'
 // the process open in the Details drop-down (see "One process, up close")
-const INSP = {mid:null, pid:0, name:'', order:null, gorder:null, data:null, good:null, acc:{}, samples:0, secs:0, looks:0, busy:false, cacheLooks:[]};
+// gen: which opening of the drop-down a look belongs to; lastT: when the server took the last look counted (#288)
+const INSP = {mid:null, pid:0, name:'', order:null, gorder:null, data:null, good:null, acc:{}, samples:0, secs:0, looks:0, busy:false, cacheLooks:[], gen:0, lastT:null};
 let DATA = null, PINS = [], WINDOW = 180, INTERVAL = 3, CPUS = {}, PROCS = {machine:null, list:[]}, NET = null, DISKS = {}, IFS = {};
 const nodes = {}, roots = [];
 const zero = () => new Array(H).fill(0);
@@ -842,7 +843,8 @@ function gpuEachCard(m){
       const pts = h.map((v, i) => `${(i/(H-1)*100).toFixed(1)},${(56 - Math.min(v, max)/max*52).toFixed(1)}`);
       const val = gpuValText(unit, now), sub = lim ? 'of ' + gpuValText(unit, lim) : '';
       return `<div class="lcell gmc${tpinned('gpum', m.id, g.key + ':' + k) ? ' pinned' : ''}" data-gm="${esc(k)}" title="${esc(full)}"><button type="button" class="tsel" data-gsel="${esc(g.key)}" aria-pressed="${on}" aria-label="GPU ${gi} ${esc(full)} ${esc(val)}${sub ? ' ' + esc(sub) : ''}"></button>`
-        + `<span class="trow"><span class="lt">${esc(label)}${tpinBtn('gpum', m.id, g.key + ':' + k, label)}</span><span class="lv">${esc(val)}</span></span><span class="lm">${sub ? esc(sub) : '&nbsp;'}</span>`
+        // the pin beside the label, not inside it: a label too long for the tile is cut short, the pin never is (#291)
+        + `<span class="trow"><span class="lt">${esc(label)}</span>${tpinBtn('gpum', m.id, g.key + ':' + k, label)}<span class="lv">${esc(val)}</span></span><span class="lm">${sub ? esc(sub) : '&nbsp;'}</span>`
         + `<svg viewBox="0 0 100 56" preserveAspectRatio="none" aria-hidden="true"><path d="M0,56L${pts.join('L')}L100,56Z" fill="var(--accent-bg)" fill-opacity=".35"/><polyline points="${pts.join(' ')}" fill="none" stroke="var(--accent)" stroke-width="1.4" vector-effect="non-scaling-stroke"/></svg></div>`;
     }).join('');
     const pt = /passed through/.test(g.mem || '') ? `<p class="lhint">Its use shows inside that VM, not on this host.</p>` : '';
@@ -1435,7 +1437,7 @@ document.addEventListener('click', e => {
   if (e.target.closest('[data-inspclose]')){ closeInspect(); return; }
   const lb = e.target.closest('[data-lookback]'); if (lb){ PREFS = Object.assign({}, PREFS, {cacheLookback:+lb.dataset.lookback}); lastMainHTML = ''; renderMain(); savePrefs('the cache lookback'); return; }
   const look = e.target.closest('[data-vmlook]');
-  if (look && typeof INSP.pid === 'string'){ INSP.via = look.dataset.vmlook; INSP.data = null; INSP.good = null; INSP.acc = {}; INSP.samples = 0; INSP.secs = 0; INSP.looks = 0; INSP.cacheLooks = []; lastMainHTML = ''; renderMain(); inspectTick(); return; }
+  if (look && typeof INSP.pid === 'string'){ INSP.via = look.dataset.vmlook; INSP.gen++; INSP.busy = false; INSP.lastT = null; INSP.data = null; INSP.good = null; INSP.acc = {}; INSP.samples = 0; INSP.secs = 0; INSP.looks = 0; INSP.cacheLooks = []; lastMainHTML = ''; renderMain(); inspectTick(); return; }
   const prow = e.target.closest('.ptbl tbody tr[data-pid]');
   if (prow && !e.target.closest('button, a, input, select, label')){
     const k = prow.dataset.pid;   // a process in Docker Desktop's VM is keyed d:<container>:<pid>
@@ -2204,24 +2206,32 @@ const VERDICT = {cpu:'CPU: it is running most of the time it isn’t idle', cpuw
 function toggleInspect(mid, pid, row){
   if (INSP.pid === pid && INSP.mid === mid){ closeInspect(); return; }
   const tbl = row && row.closest('.ptbl');
-  Object.assign(INSP, {via:null, mid, pid, name:'', data:null, good:null, acc:{}, samples:0, secs:0, looks:0, busy:false, cacheLooks:[],
+  Object.assign(INSP, {via:null, mid, pid, name:'', data:null, good:null, acc:{}, samples:0, secs:0, looks:0, busy:false, cacheLooks:[], gen:INSP.gen + 1, lastT:null,
     order:tbl ? [...tbl.querySelectorAll('tbody tr[data-pid]')].map(r => +r.dataset.pid) : null,
     gorder:tbl ? [...tbl.querySelectorAll('[data-gtoggle]')].map(b => b.dataset.gtoggle) : null});
   const pr = PROCS.list.find(p => p[0] === pid); INSP.name = pr ? pr[1] : '';
   lastMainHTML = ''; renderMain(); inspectTick();
 }
-function closeInspect(){ if (!INSP.pid) return; Object.assign(INSP, {via:null, mid:null, pid:0, order:null, gorder:null, data:null, good:null, acc:{}, looks:0}); lastMainHTML = ''; renderMain(); }
+function closeInspect(){ if (!INSP.pid) return; Object.assign(INSP, {via:null, mid:null, pid:0, order:null, gorder:null, data:null, good:null, acc:{}, looks:0, busy:false, gen:INSP.gen + 1, lastT:null}); lastMainHTML = ''; renderMain(); }
 async function inspectTick(){
   // a process in Docker's VM is looked at only the way you picked (#218): a helper container, or its own container
   if (!INSP.pid || INSP.busy || (typeof INSP.pid === 'string' && !INSP.via)) return;
-  const mid = INSP.mid, pid = INSP.pid;
+  // only while its drop-down is on screen, and not once the process has exited: Details on another machine or
+  // closed, or another view, asks the machine nothing; back on its machine, the looks go on (#288)
+  if (!document.querySelector('tr.pinsp') || (INSP.data && INSP.data.gone)) return;
+  const mid = INSP.mid, pid = INSP.pid, gen = INSP.gen;
   INSP.busy = true;
   let d;
   const q = typeof pid === 'string' ? `key=${encodeURIComponent(pid)}&via=${INSP.via}` : `pid=${pid}`;
-  try { d = await (await fetch(`/api/proc?machine=${encodeURIComponent(mid)}&${q}`, {cache:'no-store'})).json(); }
+  // X-Fleet: a look reaches out to the machine, so the server wants proof it comes from this page (#287)
+  try { d = await (await fetch(`/api/proc?machine=${encodeURIComponent(mid)}&${q}`, {cache:'no-store', headers:{'X-Fleet':'1'}})).json(); }
   catch (e) { d = {pid, error:'Fleet didn’t answer'}; }
+  // the answer for a drop-down since closed or moved to another process: that one's own look is on its way (#288)
+  if (INSP.gen !== gen) return;
   INSP.busy = false;
-  if (INSP.pid !== pid || INSP.mid !== mid) return;
+  // the server shares a look for a second after it ends, so the next poll can bring the same one again: count it once
+  if (d.t != null && d.t === INSP.lastT) return;
+  INSP.lastT = d.t;
   INSP.data = d; INSP.looks++;
   if (!d.error && !d.gone){
     INSP.good = d; if (d.name) INSP.name = d.name;
@@ -2251,10 +2261,13 @@ const ibytes = b => b == null ? '—' : memText(b / 1073741824);
 const ibps = b => b == null ? '—' : rateText(b / 1e6);
 const perSec = v => v == null ? '—' : (v >= 100 ? Math.round(v).toLocaleString() : v >= 1 ? v.toFixed(1) : v > 0 ? '<1' : '0') + '/s';
 const kvRow = (k, v, title) => `<div class="kv"${title ? ` title="${esc(title)}"` : ''}><span>${esc(k)}</span><b>${v}</b></div>`;
-// "0-15,32" stays as it is; a Windows bitmask (16777215) becomes "CPUs 0–23"
-function affinityText(a){
-  if (!/^\d+$/.test(a)) return a;
-  let m = BigInt(a), i = 0, runs = [], start = -1;
+// Where a process may run (#289): Linux's CPU list (affinity, "0-15,32", or "3" for one CPU) as Linux sends it;
+// Windows' bitmask (affinity_mask, 16777215 becomes "CPUs 0–23"; -1, a full 64-bit mask, "CPUs 0–63")
+function affinityText(g){
+  const a = g.affinity_mask;
+  if (a == null || a === '') return g.affinity || '';
+  if (!/^-?\d+$/.test(a)) return a;
+  let m = BigInt.asUintN(64, BigInt(a)), i = 0, runs = [], start = -1;
   for (; m > 0n || start >= 0; i++, m >>= 1n){ const on = (m & 1n) === 1n; if (on && start < 0) start = i; if (!on && start >= 0){ runs.push(start === i - 1 ? String(start) : `${start}–${i - 1}`); start = -1; } }
   return runs.length ? 'CPUs ' + runs.join(', ') : a;
 }
@@ -2297,7 +2310,7 @@ function inspectPanel(p){
     c.ctx_invol != null ? kvRow('Switches: preempted', perSec(c.ctx_invol), 'involuntary: the scheduler took the core away') : '',
     c.runq_s != null ? kvRow('Queued for a core', Math.round(c.runq_s * 1000) + ' ms/s') : '',
     cg && cg.cpu_limit ? kvRow('CPU limit', num(cg.cpu_limit) + ' cores') : '', cg && cg.cpu_limit ? kvRow('Throttled', pct((cg.throttled || 0) * 100)) : '',
-    g.affinity ? kvRow('May run on', esc(affinityText(g.affinity))) : '', g.last_cpu >= 0 ? kvRow('Last ran on', 'cpu' + g.last_cpu) : '',
+    affinityText(g) ? kvRow('May run on', esc(affinityText(g))) : '', g.last_cpu >= 0 ? kvRow('Last ran on', 'cpu' + g.last_cpu) : '',
     kvRow('Priority', `nice ${g.nice || 0}` + (g.priority_class ? ' · ' + esc(g.priority_class) : ''))]]);
   cards.push(['Memory', [kvRow('Resident', ibytes(m.rss)), m.anon != null ? kvRow('Its own (anon)', ibytes(m.anon)) : '', m.file != null ? kvRow('Files mapped', ibytes(m.file)) : '',
     m.shmem ? kvRow('Shared', ibytes(m.shmem)) : '', m.private != null ? kvRow('Private', ibytes(m.private)) : '', m.swap != null ? kvRow('Swapped out', ibytes(m.swap)) : '',
