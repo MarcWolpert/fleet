@@ -182,6 +182,10 @@ Tailscale network): each machine, its interfaces and bridges, the containers on 
 each VM's interface (vnet0 is app-vm's), with traffic in and out on every row. Here the bridge br0 is
 selected: its traffic over time, and what's attached to it.
 
+Group in this tree the same way. A machine's networks group into a **response**, and machines whose networks
+are grouped into responses group into a **cutter**. Machines without responses still make a fleet, and a
+group of containers a division.
+
 ### Which machines connect at start
 
 <img src="docs/fleet/screenshots/connect.png" alt="The Connect when Fleet starts dialog: backup-box, home-server and its VM app-vm ticked, workstation not, saved as the set Always on" width="520">

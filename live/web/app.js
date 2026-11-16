@@ -44,6 +44,8 @@ const IC = {
   gsection:'<circle cx="12" cy="12" r="5.6"/><path d="M12 9.2V12l2 1.3"/><path d="M5.5 4.5H3.5v15h2M18.5 4.5h2v15h-2"/>',
   gsquadron:'<path d="M12 3.5l3.4 6H8.6z"/><path d="M6 12.5l3.4 6H2.6z"/><path d="M18 12.5l3.4 6h-6.8z"/>',
   gtaskforce:'<path d="M12 3.5l2.5 5.1 5.6.8-4.1 3.9 1 5.6-5-2.7-5 2.7 1-5.6-4.1-3.9 5.6-.8z"/>',
+  gresponse:'<circle cx="12" cy="12" r="7.5"/><circle cx="12" cy="12" r="3.4"/><path d="M6.7 6.7l2.9 2.9M17.3 6.7l-2.9 2.9M6.7 17.3l2.9-2.9M17.3 17.3l-2.9-2.9"/>',
+  gcutter:'<path d="M2.5 15.5h19l-2.6 4H5.6z"/><path d="M6.5 15.5v-4h8.5l2.2 4"/><path d="M10.5 11.5v-7M10.5 6.5h4.5"/>',
   upload:'<path d="M12 15V4.5M7.5 9L12 4.5 16.5 9"/><path d="M5 14.5v3a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3"/>',
   palette:'<path d="M12 3.5a8.5 8.5 0 1 0 0 17c1.2 0 1.8-.8 1.8-1.7 0-.5-.2-.9-.5-1.2-.3-.4-.5-.8-.5-1.3 0-1 .8-1.8 1.8-1.8h2.1a3.8 3.8 0 0 0 3.8-3.8C20.5 6.9 16.7 3.5 12 3.5z"/><circle cx="7.5" cy="11.5" r="1"/><circle cx="10" cy="7.5" r="1"/><circle cx="14.5" cy="7.5" r="1"/>',
   trash:'<path d="M4.5 7h15M10 11v6M14 11v6M6.5 7l1 12.5a2 2 0 0 0 2 1.8h5a2 2 0 0 0 2-1.8l1-12.5M9.5 7V4.5h5V7"/>',
@@ -3241,14 +3243,17 @@ function divParent(pk, members){
 function divisionsChanged(){ buildDivisions(); renderSpaces(); renderTree(); if (PICK.open) renderPickerList(); }
 
 // What a group is called comes from what's in it (#25): machines make a fleet, VMs a flotilla, containers a
-// division, cron jobs a section, Docker Compose projects or services a squadron; anything mixed, a task force.
+// division, cron jobs a section, Docker Compose projects or services a squadron; anything mixed, a task force. In the
+// network tree, networks make a response, and machines whose networks are grouped into responses make a cutter (#407).
 const GKIND = {fleet:['Fleet', 'fleet'], flotilla:['Flotilla', 'flotilla'], division:['Division', 'division'], section:['Section', 'section'],
-  squadron:['Squadron', 'squadron'], taskforce:['Task force', 'task force']};
+  squadron:['Squadron', 'squadron'], taskforce:['Task force', 'task force'], response:['Response', 'response'], cutter:['Cutter', 'cutter']};
+const hasResponse = n => ((PREFS.tgroups || {})['network|' + n.id] || []).some(g => g.ids.length && g.ids.every(id => id.startsWith('net:if:')));
 function groupKind(ms){
   const k = n => n.kind === 'machine' ? (n.parent ? 'flotilla' : 'fleet') : n.kind === 'container' || n.kind === 'ncontainer' ? 'division'
-    : n.kind === 'cron' || n.kind === 'cronfolder' ? 'section' : n.kind === 'project' || n.kind === 'service' ? 'squadron' : n.kind === 'nmachine' ? 'fleet' : 'taskforce';
-  const ks = new Set((ms || []).map(k));
-  return ks.size === 1 ? [...ks][0] : 'taskforce';
+    : n.kind === 'cron' || n.kind === 'cronfolder' ? 'section' : n.kind === 'project' || n.kind === 'service' ? 'squadron' : n.kind === 'nmachine' ? 'fleet'
+    : n.kind === 'if' ? 'response' : 'taskforce';
+  const ks = new Set((ms || []).map(k)), kind = ks.size === 1 ? [...ks][0] : 'taskforce';
+  return kind === 'fleet' && ms.every(n => n.kind === 'nmachine') && ms.some(hasResponse) ? 'cutter' : kind;
 }
 function newGroupName(list, ids){
   const word = GKIND[groupKind(ids.map(id => nodes[id] || netNodes[id]).filter(Boolean))][0], names = new Set(list.map(g => g.name));

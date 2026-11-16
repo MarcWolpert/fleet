@@ -19,6 +19,9 @@
   --t-base:#8a8984; --t-compose:#3987e5; --t-container:#199e70; --t-vm:#d95926;
   --track:#ffffff10; --panel:#1a1a1d; --edge:#000000; --rd:#8fc1ff; --wr:#ffab7a;
   --g-fleet:#923c8d; --g-flotilla:#d95926; --g-division:#199e70; --g-section:#e185d9; --g-squadron:#3987e5; --g-taskforce:#c9a913;
+  /* the network tree's kinds (#407) take the colours of kinds that only appear in the machine tree, so every theme and
+     colour-blind palette covers them: a response as a squadron, a cutter as a flotilla */
+  --g-response:var(--g-squadron); --g-cutter:var(--g-flotilla);
   --chrome-hover:#252529; --chrome-act:#2b2b30; --pop:#18181b; --press:#3a3a41; --stale:#f6d32d; --warn:#ffa66b; --on-accent:#ffffff;
   --mono:"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
   --sans:Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
