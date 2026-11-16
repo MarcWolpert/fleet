@@ -849,6 +849,7 @@ class MacCollector:
         self.docker_cache = ([], {})
         self.gpu_info = self.read_gpus()
         self.disk_names = {}
+        self.vz_owners = {}
 
     def disk_info(self, dn):
         if dn not in self.disk_names:
@@ -858,6 +859,24 @@ class MacCollector:
             except Exception:
                 self.disk_names[dn] = {}
         return self.disk_names[dn]
+
+    def vz_owner(self, pid):
+        """Whose Virtualization.framework VM a process runs, from the files it holds open: "docker" for Docker
+        Desktop's (its kernel in Docker.app, its disk under com.docker.docker), a UTM VM's name from the .utm
+        bundle its disk is in, or "" when they don't say (asked again the next reading)."""
+        if pid not in self.vz_owners:
+            own = ""
+            for line in run(["lsof", "-nP", "-p", str(pid), "-F", "n"]).splitlines():
+                if re.match(r"n.*(/Docker\.app/Contents/|/com\.docker\.docker/)", line):
+                    own = "docker"
+                    break
+                m = re.match(r"n.*/([^/]+)\.utm/", line)
+                if m and not own:
+                    own = m.group(1)
+            if not own:
+                return ""
+            self.vz_owners[pid] = own
+        return self.vz_owners[pid]
 
     def read_gpus(self):
         """Every GPU in this Mac (Apple silicon's, or an Intel Mac's integrated and discrete ones), in IOAccelerator order."""
@@ -1037,16 +1056,21 @@ class MacCollector:
             return " ".join(out)
         vms = {}
         docker_vm = None
+        self.vz_owners = {pid: own for pid, own in self.vz_owners.items() if pid in by_pid}
         for p in procs:
             a = p[10]
             if "com.apple.Virtualization.VirtualMachine" in a or re.search(r"qemu-system-\w+", a) or "prl_vm_app" in a:
                 anc = ancestry(p).lower()
-                if "docker" in anc:
+                m = re.search(r"([^/]+)\.utm", a) or re.search(r"-name\s+(?:guest=)?([^,\s]+)", a) or re.search(r"([^/]+)\.pvm", a)
+                # Apple's Virtualization VMs run in an XPC service launchd starts (parent pid 1, arguments only
+                # the service's path), so neither says whose VM it is; its open files do.
+                vz = "com.apple.Virtualization.VirtualMachine" in a and not m and "docker" not in anc
+                own = self.vz_owner(p[0]) if vz else ""
+                if "docker" in anc or own == "docker":
                     docker_vm = p
                     p[11] = "dockervm"
                     continue
-                m = re.search(r"([^/]+)\.utm", a) or re.search(r"-name\s+(?:guest=)?([^,\s]+)", a) or re.search(r"([^/]+)\.pvm", a)
-                name = m.group(1) if m else ("UTM VM" if "utm" in anc else "VM %d" % p[0])
+                name = m.group(1) if m else own or ("UTM VM" if "utm" in anc else "VM %d" % p[0])
                 acc = vms.setdefault(name, {"name": name, "u": [0.0] * 5, "running": True, "ifs": [], "cpus": ""})
                 acc["u"][0] += p[5]
                 acc["u"][1] += p[6]

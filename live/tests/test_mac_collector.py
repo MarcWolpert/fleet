@@ -190,5 +190,79 @@ class CpuTicks(unittest.TestCase):
         self.assertEqual(mac.libc.freed, [])
 
 
+PS_ARGS = "ps -A -o pid=,args="
+PS_STAT = "ps -A -o pid=,ppid=,user=,state=,rss=,time=,comm="
+VZ = "/System/Library/Frameworks/Virtualization.framework/Versions/A/XPCServices/com.apple.Virtualization.VirtualMachine.xpc/Contents/MacOS/com.apple.Virtualization.VirtualMachine"
+
+
+def ps(*rows):
+    """Both ps listings the collector reads, from (pid, ppid, user, rss KiB, cpu time, args) rows (comm is args' first word)."""
+    return {PS_ARGS: "".join("%5d %s\n" % (r[0], r[5]) for r in rows),
+            PS_STAT: "".join("%5d %5d %-8s Ss %8d %10s %s\n" % (r[0], r[1], r[2], r[3], r[4], r[5].split(" ")[0]) for r in rows)}
+
+
+def lsof_files(pid, *paths):
+    """lsof -nP -p <pid> -F n: the process, then each open file's descriptor and name."""
+    return {"lsof -nP -p %d -F n" % pid: "p%d\nfcwd\nn/\nftxt\nn%s\n" % (pid, VZ) + "".join("f%d\nn%s\n" % (3 + i, x) for i, x in enumerate(paths))}
+
+
+class VirtualizationVms(unittest.TestCase):
+    """#103: Apple's Virtualization framework runs each VM in an XPC service that launchd starts (parent
+    pid 1, arguments only the service's path). The files it holds open say whose VM it is: Docker
+    Desktop's (not a VM here; its containers are listed on their own) or a UTM VM's, by its bundle name."""
+
+    PROCS = (
+        (1, 0, "root", 20000, "1:00.00", "/sbin/launchd"),
+        (400, 1, "someone", 300000, "0:30.00", "/Applications/Docker.app/Contents/MacOS/com.docker.backend"),
+        (500, 1, "someone", 2097152, "10:00.00", VZ),
+        (600, 1, "someone", 1048576, "5:00.00", VZ),
+        (700, 1, "someone", 524288, "1:00.00", VZ),
+        (800, 1, "someone", 262144, "2:00.00", "/opt/homebrew/bin/qemu-system-aarch64 -name guest=nas-lab,debug-threads=on -m 2048"),
+        (900, 1, "someone", 200000, "0:10.00", "/Applications/UTM.app/Contents/MacOS/UTM"),
+    )
+    FILES = dict(lsof_files(500, "/Applications/Docker.app/Contents/Resources/linuxkit/kernel",
+                            "/Users/someone/Library/Containers/com.docker.docker/Data/vms/0/data/Docker.raw",
+                            "/Users/someone/src/blog/compose.yaml"),
+                 **lsof_files(600, "/Users/someone/Library/Containers/com.utmapp.UTM/Data/Documents/fleet-lab.utm/Data/3F2A.img",
+                              "/Users/someone/src/app/docker/entrypoint.sh"),  # a shared folder: "docker" in a path says nothing
+                 **lsof_files(700, "/Users/someone/vms/lab/disk.img"))
+
+    def lsof_calls(self, mac):
+        return [x for x in mac.calls if x.startswith("lsof -nP -p")]
+
+    def test_docker_desktops_vm_is_not_a_vm_and_utm_vms_are_named(self):
+        mac = Mac(dict(ps(*self.PROCS), **self.FILES))
+        snap = mac.collector(self).snapshot()
+        self.assertEqual(snap["vms"], [
+            {"name": "fleet-lab", "u": [0.0, 1.0, 0.0, 0.0, 0.0], "running": True, "ifs": [], "cpus": ""},
+            {"name": "VM 700", "u": [0.0, 0.5, 0.0, 0.0, 0.0], "running": True, "ifs": [], "cpus": ""},
+            {"name": "nas-lab", "u": [0.0, 0.25, 0.0, 0.0, 0.0], "running": True, "ifs": [], "cpus": ""},
+        ])
+        self.assertEqual({p[0]: p[11] for p in snap["procs"]},
+                         {1: "base", 400: "base", 500: "dockervm", 600: "vm:fleet-lab", 700: "vm:VM 700", 800: "vm:nas-lab", 900: "base"})
+        self.assertEqual(self.lsof_calls(mac), ["lsof -nP -p 500 -F n", "lsof -nP -p 600 -F n", "lsof -nP -p 700 -F n"],
+                         "only Virtualization processes their arguments don't name")
+
+    def test_open_files_are_read_once_per_vm_and_again_for_one_they_did_not_name(self):
+        mac = Mac(dict(ps(*self.PROCS), **self.FILES))
+        c = mac.collector(self)
+        c.snapshot()
+        del mac.calls[:]
+        mac.now += 3
+        c.snapshot()
+        self.assertEqual(self.lsof_calls(mac), ["lsof -nP -p 700 -F n"])
+
+    def test_a_new_vm_that_gets_an_old_vms_pid_is_not_taken_for_it(self):
+        mac = Mac(dict(ps(*self.PROCS), **self.FILES))
+        c = mac.collector(self)
+        c.snapshot()
+        mac.out.update(ps(*(p for p in self.PROCS if p[0] != 600)))  # fleet-lab stops
+        mac.now += 3
+        c.snapshot()
+        mac.out.update(ps(*self.PROCS), **lsof_files(600, "/Users/someone/vms/other/disk.img"))  # another VM gets pid 600
+        mac.now += 3
+        self.assertEqual([v["name"] for v in c.snapshot()["vms"]], ["VM 600", "VM 700", "nas-lab"])
+
+
 if __name__ == "__main__":
     unittest.main()
