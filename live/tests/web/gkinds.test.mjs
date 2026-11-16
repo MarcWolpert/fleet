@@ -24,8 +24,9 @@ test('the kind comes from the members', async () => {
   try {
     assert.deepEqual(await p.eval(`[groupKind([{kind: 'machine'}, {kind: 'machine'}]), groupKind([{kind: 'machine', parent: {}}, {kind: 'machine', parent: {}}]), groupKind([{kind: 'container'}]),
       groupKind([{kind: 'cron'}, {kind: 'cron'}]), groupKind([{kind: 'project'}, {kind: 'service'}]), groupKind([{kind: 'machine'}, {kind: 'container'}]),
-      groupKind([{kind: 'machine'}, {kind: 'machine', parent: {}}]), groupKind([{kind: 'base'}, {kind: 'group'}]), groupKind([{kind: 'nmachine'}]), groupKind([{kind: 'ncontainer'}]), groupKind([{kind: 'if'}])]`),
-      ['fleet', 'flotilla', 'division', 'section', 'squadron', 'taskforce', 'taskforce', 'taskforce', 'fleet', 'division', 'response']);
+      groupKind([{kind: 'machine'}, {kind: 'machine', parent: {}}]), groupKind([{kind: 'base'}, {kind: 'group'}]), groupKind([{kind: 'nmachine'}]), groupKind([{kind: 'ncontainer'}]), groupKind([{kind: 'if'}]),
+      groupKind([{kind: 'if'}, {kind: 'ncontainer'}]), (PREFS.tgroups = {'network|lx': [{id: 'r', name: 'R', ids: ['net:if:lx:eth0']}]}, groupKind([{kind: 'machine', id: 'lx'}]))]`),
+      ['fleet', 'flotilla', 'division', 'section', 'squadron', 'taskforce', 'taskforce', 'taskforce', 'fleet', 'division', 'response', 'taskforce', 'fleet']);
   } finally { await p.close(); }
 });
 
