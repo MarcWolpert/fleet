@@ -2,8 +2,17 @@
 // Colour vision (#219) and higher contrast (#220), in Settings › Appearance.
 import {test, before, after} from 'node:test';
 import assert from 'node:assert/strict';
-import {launch} from './harness.mjs';
+import fs from 'node:fs';
+import path from 'node:path';
+import vm from 'node:vm';
+import {launch, WEB} from './harness.mjs';
 import {fixture, ui} from './fixtures.mjs';
+
+// themes.js on its own, as the page loads it
+const ctx = {}; vm.createContext(ctx);
+vm.runInContext(fs.readFileSync(path.join(WEB, 'themes.js'), 'utf8') + '\n;globalThis.T = {FLEET_THEMES, GROUP_KEYS, themeTokens, themeAccess, themeContrast, CVD_SAFE, CVD_MONO};', ctx);
+const plain = x => JSON.parse(JSON.stringify(x));
+const {FLEET_THEMES, themeContrast} = ctx.T, GROUP_KEYS = plain(ctx.T.GROUP_KEYS);
 
 let browser;
 before(async () => { browser = await launch(); });
@@ -79,4 +88,32 @@ test('higher contrast: the faintest text is 7:1 or more on a dark and a light th
     await p.waitFor(`document.documentElement.classList.contains('hc') && document.documentElement.dataset.cvd === 'deutan'`);
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
+});
+
+// The colour-vision colours sit on the theme's own surfaces: statuses are the text of the offline, auth and dns pills,
+// group colours are a desktop tile's glyph and a group's outline in the tree. Each keeps the 3:1 that status colours get
+// with the mode off (and that non-text UI needs) on the cards, the main view and the side bar, on every built-in theme,
+// dark and light, and the colours still stay apart for the reader they're for.
+test('colour vision keeps statuses and group colours at 3:1 on every theme\'s surfaces, and still apart (#219)', () => {
+  const STATUS = ['run', 'warn', 'stale'], SERIES = ['t-base', 't-compose', 't-container', 't-vm'];
+  assert.ok(FLEET_THEMES.some(t => !t.dark) && FLEET_THEMES.some(t => t.dark), 'light and dark themes both checked');
+  for (const th of FLEET_THEMES) for (const kind of ['protan', 'deutan', 'tritan', 'mono']){
+    const off = plain(ctx.T.themeTokens(th)), v = plain(ctx.T.themeAccess(ctx.T.themeTokens(th), {cvd: kind})).vars;
+    const pal = plain((kind === 'mono' ? ctx.T.CVD_MONO : ctx.T.CVD_SAFE)[off.dark ? 'dark' : 'light']), name = `${th.name}, ${kind}`;
+    for (const k of [...STATUS, ...GROUP_KEYS]) for (const s of ['card', 'win', 'side'])
+      assert.ok(themeContrast(v[k], v[s]) >= 3, `${name}: ${k} ${v[k]} on ${s} ${v[s]} is ${themeContrast(v[k], v[s]).toFixed(2)}:1`);
+    // only the mode's own colours change, and a colour of the checked palette that already reads is kept as it is
+    // (monochromacy's group greys close up instead, and keep their order)
+    for (const k of Object.keys(v)) if (!(k in pal)) assert.equal(v[k], off.vars[k], `${name}: ${k} is the theme's`);
+    for (const [k, x] of Object.entries(pal)) if (!(kind === 'mono' && GROUP_KEYS.includes(k)) && ['card', 'win', 'side'].every(s => themeContrast(x, v[s]) >= 3))
+      assert.equal(v[k], x, `${name}: ${k} kept`);
+    const byL = xs => GROUP_KEYS.slice().sort((a, b) => seen(xs[a], 'none')[0] - seen(xs[b], 'none')[0]);
+    if (kind === 'mono') assert.deepEqual(byL(v), byL(pal), `${name}: the group greys keep their order`);
+    const view = kind === 'mono' ? 'none' : kind, at = ks => ks.map(k => v[k]);
+    assert.ok(worst(at(STATUS), view) >= 8, `${name}: live, offline and stale stay apart (${worst(at(STATUS), view).toFixed(1)})`);
+    assert.ok(worst(at(SERIES), view) >= 8, `${name}: the four workload types stay apart`);
+    // six greys between 3:1 and white leave about 7 between neighbours on the lightest dark cards (Nord's)
+    const gmin = kind === 'mono' ? 5 : 8;
+    assert.ok(worst(at(GROUP_KEYS), view) >= gmin, `${name}: the six kinds of group stay apart (${worst(at(GROUP_KEYS), view).toFixed(1)})`);
+  }
 });

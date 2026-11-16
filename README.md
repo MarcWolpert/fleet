@@ -166,7 +166,7 @@ Download Fleet from [Releases](https://github.com/MarcWolpert/fleet/releases/lat
 
 | | |
 |---|---|
-| **macOS** (Apple silicon) | `Fleet-<version>-macos-arm64.zip`: unzip, drag **Fleet.app** to Applications, open it. It needs Python 3.11 or newer on the Mac (`brew install python`). |
+| **macOS** (Apple silicon) | `Fleet-<version>-macos-arm64.zip`: unzip, drag **Fleet.app** to Applications, open it. Fleet.app isn't notarized yet, so the first time macOS says it can't verify it: choose **Done**, then System Settings › Privacy & Security › **Open Anyway**. If macOS says the app is damaged instead, run `xattr -dr com.apple.quarantine /Applications/Fleet.app` once. It needs Python 3.11 or newer on the Mac (`brew install python`). |
 | **Linux** (x64 or arm64) | `fleet-<version>-linux-x64.tar.gz` or `-linux-arm64.tar.gz`: `tar -xzf fleet-*.tar.gz && fleet-*/install.sh`, then open Fleet from your app menu or run `fleet`. It needs Python 3.11+; the window is Chrome, Chromium or Edge in app mode when one is installed, otherwise your browser. `uninstall.sh` removes it. |
 
 Or run it from source, anywhere with Python 3.11+:

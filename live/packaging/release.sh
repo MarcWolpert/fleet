@@ -4,8 +4,9 @@
 #
 # Checks that VERSION in live/fleet_live.py and the top of live/CHANGELOG.md say <version>, that this is a clean
 # main equal to origin/main, and that the tag fleet-v<version> is new (prefixed so Fleet's tags never collide with
-# Mission Center's own v0.x tags in this fork). Then it runs every test and builds both packages. Only with
-# --publish does it tag, push the tag and publish the GitHub release with both packages and the changelog's notes.
+# Mission Center's own v0.x tags in this fork). Then it runs every test and builds the Mac app and the Linux package.
+# Only with --publish does it tag, push the tag and publish the GitHub release with its three packages (macOS arm64,
+# Linux x64, Linux arm64) and the changelog's notes.
 set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
 LIVE=$(cd "$HERE/.." && pwd)
@@ -43,7 +44,7 @@ if [ "$PUBLISH" != "--publish" ]; then
   ls -1 "$MAC" "$LINUX_X64" "$LINUX_ARM64" 2>/dev/null | sed 's/^/  /'
   exit 0
 fi
-[ -f "$MAC" ] || die "no $MAC: publish from a Mac so the release has both packages"
+[ -f "$MAC" ] || die "no $MAC: publish from a Mac so the release has all three packages"
 git tag -a "$TAG" -m "Fleet $WANT"
 git push origin "$TAG"
 gh release create "$TAG" "$MAC" "$LINUX_X64" "$LINUX_ARM64" --title "Fleet $WANT" --notes-file "$NOTES" --latest
