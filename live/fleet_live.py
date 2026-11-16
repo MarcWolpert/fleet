@@ -1067,22 +1067,170 @@ def timer_last(line):
 
 
 SHELLS = ("sh", "bash", "dash", "ash", "zsh", "ksh", "mksh", "busybox")
+SH_RESERVED = ("{", "}", "!", "if", "then", "else", "elif", "fi", "do", "done", "while", "until", "exec")
+SH_REDIRECT = re.compile(r"&>>?|\d*(?:>>|>&|>\||<&|<>|<<<|<<-?|>|<)")   # each takes a word: its file, fd or here-doc tag
+
+
+def sh_word(line, i):
+    """The shell word that starts at line[i]: (its pieces, where it ends). A piece is text as the program gets it (quotes
+    gone), or None where the shell expands something ($name, ${...}, $(...), `...`, a glob, a leading ~): any text."""
+    out, n = [], len(line)
+
+    def text(s):
+        if out and out[-1] is not None:
+            out[-1] += s
+        else:
+            out.append(s)
+
+    def expands():
+        if not out or out[-1] is not None:
+            out.append(None)
+
+    def closing(j, open_, close):   # just past what closes the bracket opened before line[j]
+        depth = 1
+        while j < n and depth:
+            depth += (line[j] == open_) - (line[j] == close)
+            j += 2 if line[j] == "\\" else 1
+        return j
+
+    while i < n and line[i] not in " \t\n;&|()<>":
+        c = line[i]
+        if c == "'":
+            j = line.find("'", i + 1)
+            j = n if j < 0 else j
+            text(line[i + 1:j])
+            i = j + 1
+        elif c == "\\":
+            text(line[i + 1:i + 2])
+            i += 2
+        elif c == '"':
+            i += 1
+            while i < n and line[i] != '"':
+                if line[i] == "\\" and line[i + 1:i + 2] in ("$", "`", '"', "\\"):
+                    text(line[i + 1])
+                    i += 2
+                elif line[i] in "$`" and line[i + 1:i + 2] not in ("", '"', " "):
+                    i = sh_expansion(line, i, closing)
+                    expands()
+                else:
+                    text(line[i])
+                    i += 1
+            i += 1
+        elif c in "$`" and line[i + 1:i + 2] not in ("", " ", "\t"):
+            i = sh_expansion(line, i, closing)
+            expands()
+        elif c in "*?[" or (c == "~" and not out):
+            i += 1
+            expands()
+        else:
+            text(c)
+            i += 1
+    return out, i
+
+
+def sh_expansion(line, i, closing):
+    """Where the expansion at line[i] ($name, $1, ${...}, $(...), $((...)), `...`) ends."""
+    if line[i] == "`":
+        j = i + 1
+        while j < len(line) and line[j] != "`":
+            j += 2 if line[j] == "\\" else 1
+        return j + 1
+    if line[i + 1] in "({":
+        return closing(i + 2, line[i + 1], ")" if line[i + 1] == "(" else "}")
+    m = re.compile(r"[A-Za-z_]\w*|[0-9@*#?$!-]").match(line, i + 1)
+    return m.end() if m else i + 1
+
+
+def sh_last_command(line):
+    """The words of the last simple command of a shell line, as the program it runs gets them, or None. Each word is
+    its texts with any text between each two (what the shell expands). A shell execs a line's last command in its
+    own place (dash, cron's /bin/sh on Debian and Ubuntu, does so past a `cd X &&` or a guard, and with
+    redirections applied), so it is what cron's child runs then. The line splits at && || ; | & and brackets;
+    redirections and their words, VAR=value before the command and reserved words go."""
+    cmds, cur, i, n, target = [], [], 0, len(line), False
+    while i < n:
+        c = line[i]
+        m = SH_REDIRECT.match(line, i)
+        if c in " \t":
+            i += 1
+        elif m:
+            i, target = m.end(), True
+        elif line.startswith(("&&", "||"), i) or c in ";&|()\n":
+            cmds.append(cur)
+            cur, target = [], False
+            i += 2 if line.startswith(("&&", "||"), i) else 1
+        elif c == "#":   # a comment, from a word's start to the end of the line
+            break
+        else:
+            start = i
+            pieces, i = sh_word(line, i)
+            raw = line[start:i]
+            if target:
+                target = False
+            elif cur or not (raw in SH_RESERVED or re.match(r"[A-Za-z_]\w*=", raw)):
+                cur.append(pieces)
+    cmds = [c for c in cmds + [cur] if c]
+    if not cmds:
+        return None
+    words = []   # a command line's words are what it holds between spaces: a quoted "7 days" is two of them
+    for pieces in cmds[-1]:
+        w = [""]
+        for p in pieces:
+            if p is None:
+                w.append("")
+                continue
+            segs = re.split(r"\s+", p)
+            w[-1] += segs[0]
+            for seg in segs[1:]:
+                if w != [""]:
+                    words.append(w)
+                w = [seg]
+        if w != [""]:
+            words.append(w)
+    return words or None
+
+
+def sh_runs(words, got):
+    """Whether the command line got (its words) is the command words (from sh_last_command): word for word, where
+    each word's texts come in order and anything may lie between them. Linear: nothing is tried twice."""
+    if len(got) != len(words):
+        return False
+    for w, s in zip(words, got):
+        if len(w) == 1:
+            if s != w[0]:
+                return False
+            continue
+        if len(s) < len(w[0]) + len(w[-1]) or not s.startswith(w[0]) or not s.endswith(w[-1]):
+            return False
+        at, end = len(w[0]), len(s) - len(w[-1])
+        for part in w[1:-1]:
+            at = s.find(part, at, end)
+            if at < 0:
+                return False
+            at += len(part)
+    return True
 
 
 def cron_job(jobs, cmd):
     """Index of the crontab job a process cron started runs, from its command line (cmd), or None. Cron
-    hands the job's line (up to an unescaped %, with \\% as %) to `sh -c`; a shell may exec a lone command
-    in its place, and a script then runs as `<interpreter> <script>`."""
+    hands the job's line (up to an unescaped %, with \\% as %) to `sh -c`; a shell may exec the line's last
+    command in its place (a lone command, or the one after a `cd X &&`, without its redirections), and a
+    script then runs as `<interpreter> <script>`."""
     words = cmd.split()
     shell = len(words) > 2 and os.path.basename(words[0]) in SHELLS and words[1] == "-c"
     got = " ".join(words[2:] if shell else words)
     cut = len(cmd) >= 300  # the collector keeps 300 characters of a command line
-    for exact in (True, False):
-        for i, j in enumerate(jobs):
-            line = " ".join(re.split(r"(?<!\\)%", j["cmd"])[0].replace("\\%", "%").split())
-            if not line:
-                continue
-            if got == line or (cut and line.startswith(got)) or (not exact and not shell and got.endswith(" " + line)):
+    lines = []
+    for j in jobs:
+        line = " ".join(re.split(r"(?<!\\)%", j["cmd"])[0].replace("\\%", "%").split())
+        lines.append((line, sh_last_command(line) if line and not shell else None))
+    gw = got.split()
+    tests = (lambda line, last: got == line or (cut and line.startswith(got)),                  # sh -c <line>, or the line itself
+             lambda line, last: last and sh_runs(last, gw),                                     # the line's last command
+             lambda line, last: not shell and (got.endswith(" " + line) or (last and len(gw) > len(last) and sh_runs(last, gw[-len(last):]))))
+    for test in tests:
+        for i, (line, last) in enumerate(lines):
+            if line and test(line, last):
                 return i
     return None
 
