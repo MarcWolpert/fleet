@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""The server itself: how it restarts itself. Nothing here starts, stops or replaces a real process: os.execv,
-save_state and stop_collectors are replaced by mocks.
+"""The server itself: how it restarts itself, and when it reopens the app window. Nothing here starts, stops
+or replaces a real process or opens a window: os.execv, save_state, stop_collectors and open_app_window are
+replaced by mocks, time runs on a fake clock, and saved state goes to a temporary file.
 
 Run: python3 -m unittest discover -s live/tests -p 'test_*.py'   (or live/tests/run.sh)
 """
@@ -9,6 +10,7 @@ import io
 import ntpath
 import os
 import sys
+import tempfile
 import unittest
 from unittest import mock
 
@@ -62,6 +64,70 @@ class RestartSelf(unittest.TestCase):
         exe = "/usr/bin/python3"
         got = self.restart("Linux", exe, "/srv/fleet/live/fleet_live.py", ["/srv/fleet/live/fleet_live.py", "--port", "4519", "--open-if-unseen"])
         self.assertEqual(got, (exe, [exe, "/srv/fleet/live/fleet_live.py", "--port", "4519", "--open-if-unseen"]))
+
+
+class Clock:
+    """Fake time for fleet_live: sleep() moves the clock on, and a Fleet window's polls of /api/fleet land in
+    LAST_CLIENT as the clock passes them."""
+
+    def __init__(self, t, polls=()):
+        self.t, self.polls = t, sorted(polls)
+
+    def time(self):
+        return self.t
+
+    def sleep(self, secs):
+        self.t += secs
+        while self.polls and self.polls[0] <= self.t:
+            fleet_live.LAST_CLIENT[0] = self.polls.pop(0)
+
+
+SINCE = 100000.0   # when the server restarted, or the UI files changed
+
+
+class ReopenIfUnseen(unittest.TestCase):
+    """After a restart or a UI change the app window is reopened only if no Fleet window is left. A visible page
+    polls every 2 s; Chrome runs the timers of a page hidden for 5 minutes (minimized or covered) only about
+    once a minute, so a window seen in the last minute is waited for until a minute after its last poll."""
+
+    def setUp(self):
+        self.addCleanup(fleet_live.LAST_CLIENT.__setitem__, 0, fleet_live.LAST_CLIENT[0])
+
+    def reopen(self, last_poll, polls=()):
+        """Returns when the window was opened (None if it wasn't) and when reopen_if_unseen gave up waiting."""
+        fleet_live.LAST_CLIENT[0] = last_poll
+        clock, opened = Clock(SINCE, polls), []
+        with mock.patch.object(fleet_live, "time", clock), \
+                mock.patch.object(fleet_live, "open_app_window", side_effect=lambda url: opened.append((url, clock.t))):
+            fleet_live.reopen_if_unseen("http://127.0.0.1:4518/", SINCE)
+        self.assertLessEqual(len(opened), 1)
+        return (opened[0][1] - SINCE if opened else None), clock.t - SINCE
+
+    def test_a_visible_window_is_seen_at_its_next_poll(self):
+        self.assertEqual(self.reopen(SINCE - 1, [SINCE + 1, SINCE + 3]), (None, 1.0))
+
+    def test_a_hidden_window_polling_once_a_minute_is_left_alone(self):
+        self.assertEqual(self.reopen(SINCE - 30, [SINCE + 30]), (None, 30.0))
+        self.assertEqual(self.reopen(SINCE - 5, [SINCE + 56]), (None, 56.0), "a minute and a bit between two polls")
+
+    def test_no_window_for_a_while_reopens_after_eight_seconds(self):
+        self.assertEqual(self.reopen(SINCE - 3600), (8.0, 8.0))
+        self.assertEqual(self.reopen(0.0), (8.0, 8.0), "no window since Fleet started")
+
+    def test_a_window_closed_just_before_reopens_once_it_would_have_polled(self):
+        self.assertEqual(self.reopen(SINCE - 20), (55.0, 55.0))
+
+    def test_the_last_poll_survives_a_restart(self):
+        # restart_self saves state before it replaces the process; the new process loads it before it
+        # starts waiting for a window.
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(fleet_live, "STATE_PATH", os.path.join(d, "state.json")):
+            fleet = mock.Mock(machines={})
+            fleet_live.LAST_CLIENT[0] = SINCE - 30
+            with contextlib.redirect_stdout(io.StringIO()) as out:
+                fleet_live.save_state(fleet)
+            fleet_live.LAST_CLIENT[0] = 0.0      # a new process
+            fleet_live.load_state(fleet)
+        self.assertEqual((fleet_live.LAST_CLIENT[0], out.getvalue()), (SINCE - 30, ""))
 
 
 if __name__ == "__main__":
