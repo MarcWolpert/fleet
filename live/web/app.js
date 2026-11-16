@@ -1551,6 +1551,7 @@ async function refreshNow(){
     INTERVAL = DATA.interval || 3; WINDOW = DATA.window_s || INTERVAL * H; if (pinsAt === pinsSeq) PINS = DATA.pins || []; if (!prefsBusy && pg === prefsGen){ PREFS = DATA.prefs || {}; applyTheme(currentTheme()); } if (!tpinBusy) TPINS = DATA.tilepins || {};
     build(DATA);
     renderAutoConn();
+    noteBoot(DATA.boot);
     // the first launch (no UI settings saved yet): the tutorial, as a welcome, once (#284)
     if (!FIRST.checked){
       FIRST.checked = true;
@@ -3058,11 +3059,40 @@ function openInline(id){
   TD.list.push(s); TD.active = key; renderDrawer();
   api('/api/inline-terminal', {node:id, then:PREFS.inlineCmd || '', theme:termTheme(), fontSize:termFontPx()}).then(r => {
     if (!TD.list.includes(s)){ if (r.ok) api('/api/inline-terminal/close', {id:r.id}).catch(() => {}); return; }  // closed while it opened
-    if (r.ok) Object.assign(s, {id:r.id, url:r.url, title:r.title || s.title, pending:false, live:true});
+    if (r.ok){ Object.assign(s, {id:r.id, url:r.url, title:r.title || s.title, pending:false, live:true}); if (TD.active === s.key) keepActive(s); }
     else Object.assign(s, {pending:false, error:r.error || 'Couldn’t open an inline terminal'});
     renderDrawer();
   }).catch(() => { Object.assign(s, {pending:false, error:'Couldn’t reach Fleet'}); renderDrawer(); });
 }
+// Kept terminals (#337): the server keeps them, their shells in tmux. The page shows the kept ones when it loads, attaches
+// the one you're on (the rest when you go to them), and attaches them again when Fleet restarts (a new boot).
+function noteBoot(boot){
+  if (!boot || boot === TD.boot) return;
+  const again = !!TD.boot; TD.boot = boot;
+  if (again) TD.list.forEach(s => { if (s.live) s.url = null; });   // their ttyd ended with the old Fleet
+  syncTerms();
+}
+async function syncTerms(){
+  let d; try { const r = await fetch('/api/inline-terminals', {cache:'no-store'}); if (!r.ok) return; d = await r.json(); } catch (e) { return; }
+  TD.avail = {tmux:!!d.tmux, ttyd:!!d.ttyd};
+  const kept = d.terminals || [], ids = new Set(kept.map(t => t.id));
+  TD.list = TD.list.filter(s => !s.live || ids.has(s.id));   // closed elsewhere
+  kept.forEach(t => { if (!TD.list.some(s => s.id === t.id)) TD.list.push({key:'k' + (++TD.seq), id:t.id, node:t.node, title:t.title, live:true, url:null}); });
+  if (!TD.list.some(s => s.key === TD.active)){ const a = TD.list.find(s => s.id === PREFS.termActive) || TD.list[TD.list.length - 1]; TD.active = a ? a.key : ''; }
+  renderDrawer();
+}
+function attachInline(s){
+  if (s.attaching) return; s.attaching = true;
+  api('/api/inline-terminal/attach', {id:s.id, theme:termTheme(), fontSize:termFontPx()}).then(r => {
+    s.attaching = false;
+    if (!TD.list.includes(s)) return;
+    if (r.ok){ s.url = r.url; s.title = r.title || s.title; s.error = ''; }
+    else if (r.gone){ TD.list = TD.list.filter(x => x !== s); }
+    else s.error = r.error || 'Couldn’t attach to that terminal';
+    renderDrawer();
+  }).catch(() => { s.attaching = false; s.error = 'Couldn’t reach Fleet'; renderDrawer(); });
+}
+function keepActive(s){ if (s && s.live && PREFS.termActive !== s.id){ PREFS = Object.assign({}, PREFS, {termActive:s.id}); savePrefs('the terminal you’re on'); } }
 function closeInline(id){
   const s = TD.list.find(x => x.id === id); if (!s) return;
   TD.list = TD.list.filter(x => x !== s);
@@ -3083,7 +3113,7 @@ function renderDrawer(){
   if (!TD.list.length){ if (d){ d.hidden = true; placeDrawer(); } return; }
   if (!d){
     d = document.createElement('section'); d.id = 'tdrawer'; d.className = 'tdrawer'; d.setAttribute('aria-label', 'Inline terminals');
-    d.innerHTML = `<div class="td-grip" role="separator" aria-orientation="horizontal" aria-label="Resize the terminal" tabindex="0"></div><div class="td-bar"><div class="td-tabs" role="tablist" aria-label="Inline terminals"></div><div class="td-size" role="group" aria-label="Terminal text size"><button type="button" data-tdfont="-1" aria-label="Smaller terminal text" title="Smaller text (its own size, apart from Fleet’s zoom)">A−</button><span data-tdfontnow aria-live="polite"></span><button type="button" data-tdfont="1" aria-label="Larger terminal text" title="Larger text">A+</button></div></div><div class="td-frames"></div>`;
+    d.innerHTML = `<div class="td-grip" role="separator" aria-orientation="horizontal" aria-label="Resize the terminal" tabindex="0"></div><div class="td-bar"><div class="td-tabs" role="tablist" aria-label="Inline terminals"></div><span class="td-note" hidden title="tmux keeps each terminal's shell running through a reload, and through Fleet restarting or quitting">A reload starts a new shell: install tmux to keep them (brew install tmux, sudo apt install tmux)</span><div class="td-size" role="group" aria-label="Terminal text size"><button type="button" data-tdfont="-1" aria-label="Smaller terminal text" title="Smaller text (its own size, apart from Fleet’s zoom)">A−</button><span data-tdfontnow aria-live="polite"></span><button type="button" data-tdfont="1" aria-label="Larger terminal text" title="Larger text">A+</button></div></div><div class="td-frames"></div>`;
     $('mcol').appendChild(d);
     if (typeof ResizeObserver === 'function'){ TD.ro = new ResizeObserver(() => placeDrawer()); TD.ro.observe($('mcol')); }
   }
@@ -3096,16 +3126,21 @@ function renderDrawer(){
   TD.list.forEach(s => {
     let p = fr.querySelector(`[data-tdpane="${s.key}"]`);
     if (!p){ p = document.createElement('div'); p.className = 'td-pane'; p.dataset.tdpane = s.key; p.id = 'tdp-' + s.key; p.setAttribute('role', 'tabpanel'); p.setAttribute('aria-labelledby', 'tdt-' + s.key); fr.appendChild(p); }
-    if (s.url && !p.querySelector('iframe')){
+    const fr0 = p.querySelector('iframe');
+    if (s.url && fr0 && fr0.getAttribute('src') !== s.url) fr0.setAttribute('src', s.url);   // the same frame, on Fleet's new ttyd
+    if (s.url && !fr0){
       p.textContent = '';
       const f = document.createElement('iframe'); f.src = s.url; f.title = 'Terminal: ' + s.title; f.setAttribute('allow', 'clipboard-read; clipboard-write');
       f.addEventListener('load', () => { if (TD.active === s.key) f.focus(); }, {once:true});
       p.appendChild(f);
-    } else if (!s.url){
+    } else if (!s.url && !fr0){
       p.innerHTML = s.error ? `<div class="td-msg" role="alert">${esc(s.error)}</div>` : `<div class="td-msg">Starting ${esc(s.title)}…</div>`;
     }
     p.hidden = s.key !== TD.active;
+    if (s.key === TD.active && s.live && !s.url && !s.error) attachInline(s);
   });
+  const note = d.querySelector('.td-note');
+  note.hidden = !(TD.avail && !TD.avail.tmux);
   placeDrawer();
 }
 function setTermH(h, keep){
@@ -3117,7 +3152,7 @@ function setTermH(h, keep){
 document.addEventListener('click', e => {
   const x = e.target.closest('#tdrawer [data-tdclose]'); if (x){ closeInline(x.dataset.tdclose); return; }
   const fz = e.target.closest('#tdrawer [data-tdfont]'); if (fz){ setTermFont(termFont() + Number(fz.dataset.tdfont)); return; }
-  const t = e.target.closest('#tdrawer [data-tdtab]'); if (t){ TD.active = t.dataset.tdtab; renderDrawer(); }
+  const t = e.target.closest('#tdrawer [data-tdtab]'); if (t){ TD.active = t.dataset.tdtab; keepActive(TD.list.find(x => x.key === TD.active)); renderDrawer(); }
 });
 document.addEventListener('pointerdown', e => {
   const g = e.target.closest('#tdrawer .td-grip'); if (!g || e.button !== 0) return;

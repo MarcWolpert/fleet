@@ -72,7 +72,8 @@ ready for SSH and tests it. Offline machines say why, in plain language, with th
 on a machine's row turns its connection off and on; **Auto** picks which machines Fleet connects to when
 it starts (none until you choose, all, or a set you tick), so a start at login asks for no key you didn't
 want. **Open terminal** sshes to a machine, or opens a shell in a container, in the terminal you pick, or
-**inline**, split below the page, each scrolling on its own, with its own text size (A− A+) apart from Fleet's zoom (with [ttyd](https://github.com/tsl0922/ttyd): `brew install ttyd`
+**inline**, split below the page, each scrolling on its own, with its own text size (A− A+) apart from Fleet's zoom; each keeps running through a reload, Fleet restarting
+or quitting (its shell lives in tmux), and reconnects when the connection drops (with [ttyd](https://github.com/tsl0922/ttyd): `brew install ttyd`
 or `sudo apt install ttyd`; Settings › Terminal picks a login shell, tmux or your own command, and can make inline the default).
 
 **Spaces and groups.** Pin any machine, VM, project, container or group to the space bar. Drag a box over

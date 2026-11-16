@@ -26,6 +26,8 @@ PINS_PATH = os.path.expanduser("~/.config/fleet/pins.json")
 TILEPINS_PATH = os.path.expanduser("~/.config/fleet/tilepins.json")  # pinned tiles and CPU groups, per machine
 PREFS_PATH = os.path.expanduser("~/.config/fleet/ui.json")  # UI layout (Details columns per detail type)
 CONNECT_PATH = os.path.expanduser("~/.config/fleet/connect.json")  # which machines Fleet connects to when it starts, and saved sets
+TERMS_PATH = os.path.expanduser("~/.config/fleet/terminals.json")  # the inline terminals: which, on what, named what (#337)
+BOOT = "%x" % int(time.time() * 1000)   # this server's start: the page notices a restart (#337)
 PINS_LOCK = threading.Lock()
 
 
@@ -257,10 +259,9 @@ def reap_leftover_collectors():
 
 
 def stop_collectors(fleet):
-    for sid in list(INLINE):   # inline terminals end with Fleet, and so does the page made for them
-        close_inline(sid)
-    for path in [x for x in TTYD_INDEX.values() if x]:
-        shutil.rmtree(os.path.dirname(path), ignore_errors=True)
+    stop_inline()   # ttyd ends with Fleet; the inline terminals' shells stay, in tmux (#337)
+    if RUN_DIR.get("path"):
+        shutil.rmtree(RUN_DIR.pop("path"), ignore_errors=True)
     TTYD_INDEX.clear()
     for m in fleet.machines.values():
         p = m.proc
@@ -1756,7 +1757,8 @@ class Fleet:
             if s:
                 machines.append(strip_procs(s))
         return {"t": time.time(), "interval": self.interval, "window_s": self.interval * H, "machines": machines,
-                "pins": load_pins(), "tilepins": load_tilepins(), "prefs": load_prefs(), "connect": self.connect_state()}
+                "pins": load_pins(), "tilepins": load_tilepins(), "prefs": load_prefs(), "connect": self.connect_state(),
+                "boot": BOOT}
 
     def connect_state(self):
         conn = load_connect()
@@ -2444,10 +2446,112 @@ def open_terminal(choice, argv, title):
 
 
 # Inline terminals (#329): ttyd serves a terminal running the same command as Open terminal, on loopback only, at a
-# random port and an unguessable path, for one client, letting only its own page connect. The page frames it.
-INLINE = {}   # session id -> {"proc", "url", "title", "t"}
+# random port and an unguessable path, letting only its own page connect. The page frames it.
+# They're durable (#337): the shell runs in a tmux session on Fleet's own tmux socket, made when the terminal is, so it
+# outlives ttyd, a page reload, Fleet restarting and Fleet quitting; ttyd only attaches to it, and is started again
+# when needed. Closing the terminal's tab ends its shell. Which terminals there are is kept in terminals.json.
+INLINE = {}   # id -> {"node", "then", "title", "t", and while Fleet runs: "proc" (its ttyd), "url"}
 INLINE_LOCK = threading.Lock()
-INLINE_MAX = 6
+INLINE_MAX = 24
+TMUX_SOCKET = "fleet-inline"
+TMUX_CONF = """# Fleet's inline terminals: tmux only keeps the shell; it shows nothing and takes no keys of its own
+set -g prefix None
+unbind-key C-b
+set -g status off
+set -g mouse on
+set -g history-limit 50000
+set -sg escape-time 0
+set -g default-terminal "xterm-256color"
+set -g aggressive-resize on
+set -g set-titles off
+set -g allow-rename off
+"""
+# ssh exits 255 when the connection drops (or can't be made): try again; any other exit is the shell's, and ends it
+RECONNECT_SH = ('while :; do "$@"; s=$?; [ "$s" = 255 ] || exit "$s"; '
+                'printf "\\r\\n[Fleet] The connection dropped; reconnecting…\\r\\n"; sleep "${FLEET_RECONNECT_WAIT:-3}"; done')
+RUN_DIR = {}   # "path": a private folder for this run (ttyd's page, tmux's settings), removed when Fleet stops
+
+
+def run_dir():
+    if not RUN_DIR.get("path") or not os.path.isdir(RUN_DIR["path"]):
+        RUN_DIR["path"] = tempfile.mkdtemp(prefix="fleet-run-")
+    return RUN_DIR["path"]
+
+
+def tmux_path():
+    return shutil.which("tmux") or next((p for p in ("/opt/homebrew/bin/tmux", "/usr/local/bin/tmux", "/usr/bin/tmux") if os.path.exists(p)), None)
+
+
+def tmux_conf():
+    path = os.path.join(run_dir(), "tmux.conf")
+    if not os.path.exists(path):
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(TMUX_CONF)
+    return path
+
+
+def tmux(*args):
+    t = tmux_path()
+    if not t:
+        return None
+    return subprocess.run([t, "-L", TMUX_SOCKET] + list(args), capture_output=True, text=True, timeout=10)
+
+
+def tmux_sessions():
+    r = tmux("list-sessions", "-F", "#{session_name}")
+    return r.stdout.split() if r and r.returncode == 0 else []
+
+
+def reconnecting(argv):
+    return ["sh", "-c", RECONNECT_SH, "fleet"] + list(argv) if argv and argv[0] == "ssh" else list(argv)
+
+
+def session_argv(sid, argv, tmux_bin):
+    """What ttyd runs: attach to the terminal's tmux session (made again, running argv, if its shell has ended);
+    without tmux, argv itself (a page reload then starts a new shell)."""
+    if not tmux_bin:
+        return reconnecting(argv)
+    return [tmux_bin, "-L", TMUX_SOCKET, "-f", tmux_conf(), "new-session", "-A", "-s", "fleet-" + sid] + reconnecting(argv)
+
+
+def save_terms():
+    with INLINE_LOCK:
+        keep = [{"id": k, "node": v["node"], "then": v["then"], "title": v["title"], "t": v["t"]} for k, v in sorted(INLINE.items(), key=lambda kv: kv[1]["t"])]
+    try:
+        os.makedirs(os.path.dirname(TERMS_PATH), exist_ok=True)
+        tmp = TERMS_PATH + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump({"terminals": keep}, f, indent=1)
+        os.replace(tmp, TERMS_PATH)
+    except OSError:
+        pass
+
+
+def load_terms():
+    try:
+        with open(TERMS_PATH) as f:
+            kept = json.load(f).get("terminals", [])
+    except (OSError, ValueError, AttributeError):
+        kept = []
+    with INLINE_LOCK:
+        for t in kept[:INLINE_MAX]:
+            if isinstance(t, dict) and re.match(r"^[A-Za-z0-9_-]{6,40}$", str(t.get("id", ""))) and t["id"] not in INLINE:
+                INLINE[t["id"]] = {"node": str(t.get("node", "")), "then": str(t.get("then", ""))[:300], "title": str(t.get("title", ""))[:120],
+                                   "t": float(t.get("t") or 0), "proc": None, "url": None}
+
+
+def prune_tmux():
+    """End Fleet's tmux sessions that no terminal holds any more (one closed while Fleet wasn't running to end it)."""
+    for name in tmux_sessions():
+        if name.startswith("fleet-") and name[6:] not in INLINE:
+            tmux("kill-session", "-t", "=" + name)
+
+
+def list_inline():
+    with INLINE_LOCK:
+        return [{"id": k, "node": v["node"], "title": v["title"], "live": bool(v.get("proc") and v["proc"].poll() is None)}
+                for k, v in sorted(INLINE.items(), key=lambda kv: kv[1]["t"])]
 
 
 def ttyd_path():
@@ -2456,7 +2560,7 @@ def ttyd_path():
 
 def ttyd_argv(ttyd, token, argv, opts, index=None):
     lo = "lo0" if platform.system() == "Darwin" else "lo"
-    a = [ttyd, "--port", "0", "--interface", lo, "--once", "--writable", "--check-origin", "--base-path", "/" + token]
+    a = [ttyd, "--port", "0", "--interface", lo, "--writable", "--check-origin", "--base-path", "/fleet-" + token]   # fleet-: Fleet's own, for reap_leftover_ttyd
     for k, v in opts.items():
         a += ["--client-option", "%s=%s" % (k, v)]
     if index:
@@ -2538,11 +2642,10 @@ def ttyd_index(ttyd):
                 port = int(m.group(1))
                 break
         if port:
-            with urllib.request.urlopen("http://127.0.0.1:%d/%s/" % (port, token), timeout=5) as r:
+            with urllib.request.urlopen("http://127.0.0.1:%d/fleet-%s/" % (port, token), timeout=5) as r:
                 page = inject_index(r.read().decode("utf-8", "replace"))
             if page:
-                d = tempfile.mkdtemp(prefix="fleet-ttyd-")
-                path = os.path.join(d, "index.html")
+                path = os.path.join(run_dir(), "ttyd-%d.html" % len(TTYD_INDEX))
                 fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
                 with os.fdopen(fd, "w") as f:
                     f.write(page)
@@ -2551,7 +2654,9 @@ def ttyd_index(ttyd):
     finally:
         if p and p.poll() is None:
             p.kill()
+        if p:
             p.wait(timeout=5)
+            p.stdout.close()
     TTYD_INDEX[ttyd] = path
     return path
 
@@ -2571,7 +2676,8 @@ def inline_argv(fleet, node_id, then=""):
     return argv, title
 
 
-def open_inline(argv, title, opts):
+def start_ttyd(argv, opts):
+    """A ttyd serving argv; (its process, its url)."""
     ttyd = ttyd_path()
     if not ttyd:
         raise RuntimeError("Inline terminals use ttyd, which isn't installed here: brew install ttyd (macOS), sudo apt install ttyd (Debian, Ubuntu).")
@@ -2590,25 +2696,100 @@ def open_inline(argv, title, opts):
     if not port:
         p.kill()
         raise RuntimeError("ttyd didn't start: " + (" ".join(x for x in seen if x)[-200:] or "no answer"))
-    threading.Thread(target=lambda: [None for _ in p.stdout], daemon=True).start()   # keep its output drained
-    sid = token[:12]
+    def drain():   # keep its output drained, and close the pipe when it ends
+        try:
+            for _ in p.stdout:
+                pass
+        finally:
+            p.stdout.close()
+    threading.Thread(target=drain, daemon=True).start()
+    return p, "http://127.0.0.1:%d/fleet-%s/" % (port, token)
+
+
+def new_inline(fleet, node_id, then, opts):
+    """A new inline terminal on node_id: its shell (in tmux when there is tmux), kept in the setup, and a ttyd on it."""
+    argv, title = inline_argv(fleet, node_id, then)
+    if not ttyd_path():
+        start_ttyd(argv, opts)   # says how to get ttyd
     with INLINE_LOCK:
-        INLINE[sid] = {"proc": p, "url": "http://127.0.0.1:%d/%s/" % (port, token), "title": title, "t": time.time()}
-        old = sorted(INLINE, key=lambda k: INLINE[k]["t"])[:-INLINE_MAX]
-    for k in old:
-        close_inline(k)
-    return {"id": sid, "url": INLINE[sid]["url"], "title": title}
+        if len(INLINE) >= INLINE_MAX:
+            raise RuntimeError("Fleet keeps at most %d inline terminals; close one first." % INLINE_MAX)
+        sid = secrets.token_urlsafe(9).replace("-", "x").replace("_", "y")
+        INLINE[sid] = {"node": node_id, "then": (then or "").strip(), "title": title, "t": time.time(), "proc": None, "url": None}
+    t = tmux_path()
+    if t:   # the shell starts now, whether or not a page ever connects
+        tmux("-f", tmux_conf(), "new-session", "-d", "-s", "fleet-" + sid, "-x", "160", "-y", "40", *reconnecting(argv))
+    save_terms()
+    try:
+        return attach_inline(fleet, sid, opts)
+    except Exception:
+        close_inline(sid)
+        raise
+
+
+def attach_inline(fleet, sid, opts):
+    """The url of the terminal's ttyd, starting one (on its tmux session) when none runs: after Fleet restarted, or
+    when a page shows a terminal kept from before. KeyError for one Fleet doesn't have."""
+    with INLINE_LOCK:
+        s = INLINE[sid]
+        if s.get("proc") and s["proc"].poll() is None:
+            return {"id": sid, "url": s["url"], "title": s["title"]}
+        node, then = s["node"], s["then"]
+    argv, title = inline_argv(fleet, node, then)
+    p, url = start_ttyd(session_argv(sid, argv, tmux_path()), dict(opts, titleFixed=title) if opts else {})
+    with INLINE_LOCK:
+        if sid not in INLINE:   # closed meanwhile
+            stop_ttyd({"proc": p})
+            raise KeyError(sid)
+        INLINE[sid].update(proc=p, url=url, title=title)
+    return {"id": sid, "url": url, "title": title}
+
+
+def stop_ttyd(s):
+    p = s.get("proc")
+    if p and p.poll() is None:
+        try:
+            p.terminate()
+            threading.Thread(target=p.wait, daemon=True).start()   # reaped, never a zombie
+        except Exception:
+            pass
+    s["proc"], s["url"] = None, None
 
 
 def close_inline(sid):
+    """End an inline terminal: its ttyd, its shell, and its place in the setup."""
     with INLINE_LOCK:
         s = INLINE.pop(sid, None)
-    if s and s["proc"].poll() is None:
-        try:
-            s["proc"].terminate()
-        except Exception:
-            pass
-    return bool(s)
+    if not s:
+        return False
+    stop_ttyd(s)
+    tmux("kill-session", "-t", "=fleet-" + sid)
+    save_terms()
+    return True
+
+
+def stop_inline():
+    """Fleet stops or restarts: every ttyd ends; the shells (in tmux) and the setup stay for the next Fleet."""
+    with INLINE_LOCK:
+        for s in INLINE.values():
+            stop_ttyd(s)
+
+
+def reap_leftover_ttyd():
+    """Stop ttyd servers an earlier Fleet left behind (it was killed before it could): ttyd with Fleet's base path,
+    orphaned or children of this pid from before an exec. The shells in tmux are left alone."""
+    if platform.system() == "Windows":
+        return 0
+    killed = 0
+    for line in run(["ps", "-axo", "pid=,ppid=,command="]).splitlines():
+        f = line.strip().split(None, 2)
+        if len(f) == 3 and " --base-path /fleet-" in f[2] and os.path.basename(f[2].split()[0]) == "ttyd" and int(f[1]) in (1, os.getpid()):
+            try:
+                os.kill(int(f[0]), 15)
+                killed += 1
+            except OSError:
+                pass
+    return killed
 
 
 def terminal_target(fleet, node_id):
@@ -2729,6 +2910,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.send_error(403)
             return
         u = urllib.parse.urlparse(self.path)
+        if u.path == "/api/inline-terminals":   # #337: the kept terminals, and what this computer has for them
+            return self.send_json({"terminals": list_inline(), "tmux": bool(tmux_path()), "ttyd": bool(ttyd_path())})
         if u.path == "/api/config":
             f = self.fleet
             st = {m.id: {"status": m.status, "error": m.error} for m in f.machines.values()}
@@ -2788,8 +2971,18 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if u.path == "/api/inline-terminal":   # #329: start one; {node, then, theme, fontSize}
             d = self.read_json() or {}
             try:
-                argv, title = inline_argv(self.fleet, str(d.get("node", "")), str(d.get("then", "")))
-                return self.send_json(dict(open_inline(argv, title, inline_opts(d, title)), ok=True))
+                node = str(d.get("node", ""))
+                title = (self.fleet.machines[node].name if node in self.fleet.machines else node)
+                return self.send_json(dict(new_inline(self.fleet, node, str(d.get("then", "")), inline_opts(d, title)), ok=True))
+            except Exception as e:
+                return self.send_json({"ok": False, "error": str(e)[:300]})
+        if u.path == "/api/inline-terminal/attach":   # #337: a kept one, after a reload or a restart; {id, theme, fontSize}
+            d = self.read_json() or {}
+            sid = str(d.get("id", ""))
+            try:
+                return self.send_json(dict(attach_inline(self.fleet, sid, inline_opts(d, INLINE.get(sid, {}).get("title", ""))), ok=True))
+            except KeyError:
+                return self.send_json({"ok": False, "gone": True, "error": "That terminal was closed."})
             except Exception as e:
                 return self.send_json({"ok": False, "error": str(e)[:300]})
         if u.path == "/api/inline-terminal/close":
@@ -2862,6 +3055,10 @@ def main():
     with open(a.config, "rb") as f:
         cfg = tomllib.load(f)
     cfg["__path"] = a.config
+    if reap_leftover_ttyd():
+        print("stopped inline terminal servers left by an earlier run", flush=True)
+    load_terms()   # the inline terminals kept from before (#337); their shells may still be running, in tmux
+    prune_tmux()
     n = reap_leftover_collectors()
     if n:
         print("stopped %d leftover collector session(s) from an earlier run" % n, flush=True)
