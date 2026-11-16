@@ -78,7 +78,10 @@ let TPINS = {}, PREFS = {}, prefsBusy = false, prefsGen = 0;
 // where you've been, for Back and Forward (see "Panels, find, back and forward")
 const NAV = {stack:[], i:-1, applying:false};
 const TF = {q:'', open:false}, FIND = {q:'', i:0, n:0};
-let PANEL = null;   // the panel you're in: 'tree', 'main' or 'details'
+let PANEL = null;
+// where you've scrolled (#221): pending positions from before a reload of the page, restored once their panes are long enough
+const KEEP = {pending:null, t:0};
+try { const k = JSON.parse(sessionStorage.getItem('fleet-scroll') || 'null'); if (k && k.pos) Object.assign(KEEP, {pending:k, t:Date.now()}); } catch (e) {}   // the panel you're in: 'tree', 'main' or 'details'
 // the process open in the Details drop-down (see "One process, up close")
 const INSP = {mid:null, pid:0, name:'', order:null, gorder:null, data:null, good:null, acc:{}, samples:0, secs:0, looks:0, busy:false, cacheLooks:[]};
 let DATA = null, PINS = [], WINDOW = 180, INTERVAL = 3, CPUS = {}, PROCS = {machine:null, list:[]}, NET = null, DISKS = {}, IFS = {};
@@ -1281,18 +1284,43 @@ function renderMain(){
   if (full === lastMainHTML) return;
   lastMainHTML = full;
   // the panels inside are rebuilt: keep where each was scrolled (the docked Details, the page beside it, wide tables)
-  const SCROLLERS = '.split > .wrap, .dpanel, .pscroll, .scroll-x';
-  const scrolled = [...main.querySelectorAll(SCROLLERS)].map(e => [e.scrollTop, e.scrollLeft]);
+  const pos = scrollSnapshot(main);
   const sel = getSelection(), ends = sel.rangeCount && !sel.isCollapsed && main.contains(sel.anchorNode) && main.contains(sel.focusNode) && selStart == null
     ? [selEnd(main, sel.anchorNode, sel.anchorOffset), selEnd(main, sel.focusNode, sel.focusOffset)] : null;
   main.innerHTML = full;
-  const now = [...main.querySelectorAll(SCROLLERS)];
-  if (now.length === scrolled.length) now.forEach((e, i) => { if (scrolled[i][0]) e.scrollTop = scrolled[i][0]; if (scrolled[i][1]) e.scrollLeft = scrolled[i][1]; });
+  scrollRestore(main, pos);
+  if (KEEP.pending){   // after a reload: back where you were, as soon as each pane is long enough
+    if (KEEP.pending.ctx !== scrollCtx() || Date.now() - KEEP.t > 15000) KEEP.pending = null;
+    else { const left = scrollRestore(main, KEEP.pending.pos); KEEP.pending = Object.keys(left).length ? {ctx:KEEP.pending.ctx, pos:left} : null; }
+  }
   markPanel(); if (FIND.q) applyFind(false);
   if (ends){ const x = selAt(main, ends[0]), y = selAt(main, ends[1]); if (x && y) try { sel.setBaseAndExtent(x[0], x[1], y[0], y[1]); } catch (e) {} }
   if (refocus){ const all = main.querySelectorAll(refocus), e = all[refocusAt] || all[0]; if (e){ e.focus({preventScroll:true}); if (selStart != null && e.setSelectionRange) try { e.setSelectionRange(selStart, selStop, selDir); } catch (x) {} } }
 }
 function renderAll(){ renderSpaces(); renderToolbar(); renderTree(); renderMain(); refreshTip(); }
+// Scrolled panes, each known by what it is (not where it sits in a list, which changes when a table comes or goes)
+const SCROLLERS = '.split > .wrap, .dpanel, .pscroll, .scroll-x';
+function scrollKey(e){
+  if (e.matches('main')) return 'main';
+  if (e.matches('.dpanel')) return 'dpanel';
+  if (e.matches('.split > .wrap')) return 'wrap';
+  const sec = e.closest('section'), h = sec && sec.querySelector('h2, h3');
+  return (e.matches('.pscroll') ? 'p:' : 'x:') + (e.closest('.dpanel') ? 'd:' : '') + (h ? h.textContent.trim() : '');
+}
+function scrollCtx(){ return [S.sel, S.view, S.metric, S.detailsDocked ? 'dock' : ''].join('|'); }
+function scrollSnapshot(root){ const o = {}; [root, ...root.querySelectorAll(SCROLLERS)].forEach(e => { if (e.scrollTop || e.scrollLeft) o[scrollKey(e)] = [e.scrollTop, e.scrollLeft]; }); return o; }
+// put each pane back; returns the ones not yet long enough to get there
+function scrollRestore(root, pos){
+  const left = {};
+  [root, ...root.querySelectorAll(SCROLLERS)].forEach(e => { const k = scrollKey(e), v = pos[k]; if (!v) return; e.scrollTop = v[0]; e.scrollLeft = v[1]; if (Math.abs(e.scrollTop - v[0]) > 1) left[k] = v; });
+  return left;
+}
+let keepTimer = 0;
+document.addEventListener('scroll', () => {
+  clearTimeout(keepTimer);
+  keepTimer = setTimeout(() => { try { sessionStorage.setItem('fleet-scroll', JSON.stringify({ctx:scrollCtx(), pos:scrollSnapshot($('main'))})); } catch (e) {} }, 150);
+}, true);
+['wheel', 'touchstart', 'keydown', 'mousedown'].forEach(t => addEventListener(t, () => { KEEP.pending = null; }, {capture:true, passive:true}));
 
 /* ---------- tooltips ---------- */
 const tip = $('tip');
