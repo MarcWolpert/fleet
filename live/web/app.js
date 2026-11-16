@@ -184,10 +184,31 @@ function ctxOf(key){
     bt:(metric, i) => { const o = {base:0, compose:0, container:0, vm:0}; roots.forEach(r => { const b = byType(r, metric, i); for (const k in o) o[k] += b[k]; }); return o; },
     cap:metric => roots.filter(r => hasData(r)).reduce((s, r) => s + capOf(r, metric), 0)};
   const m = nodes[key];
-  if (m && m.kind === 'division' && !m.parent) return {name:m.name,
-    bt:(metric, i) => { const o = {base:0, compose:0, container:0, vm:0}; m.children.forEach(r => { const b = byType(r, metric, i); for (const k in o) o[k] += b[k]; }); return o; },
-    cap:metric => m.children.filter(r => hasData(r)).reduce((s, r) => s + capOf(r, metric), 0)};
+  if (m && m.kind === 'division' && !m.parent) return {name:m.name, bt:(metric, i) => divBt(m, metric, i),
+    cap:metric => divHosts(m).filter(r => hasData(r)).reduce((s, r) => s + capOf(r, metric), 0)};
   return {name:m.name, bt:(metric, i) => byType(m, metric, i), cap:metric => capOf(m.kind === 'machine' ? m : hostOf(m), metric)};
+}
+// A group with nothing above it counts against the machines its members run on (#294): a group of machines, their
+// own; a group of things on several machines (Pins only groups anything), the machines those are on.
+const topMachine = n => n.kind === 'machine' && !n.parent;
+function divHosts(d, seen = new Set([d])){
+  const out = new Set();
+  d.children.forEach(c => {
+    if (topMachine(c)) out.add(c);
+    else if (c.kind === 'division' && !c.parent){ if (!seen.has(c)){ seen.add(c); divHosts(c, seen).forEach(h => out.add(h)); } }
+    else { const h = hostOf(c); if (h.kind === 'machine') out.add(h); }
+  });
+  return [...out];
+}
+// ...and adds up its members by type: a machine by what's in it, anything else as what it is
+function divBt(d, metric, i, seen = new Set([d])){
+  const o = {base:0, compose:0, container:0, vm:0};
+  d.children.forEach(c => {
+    const b = topMachine(c) ? byType(c, metric, i) : c.kind === 'division' && !c.parent ? (seen.has(c) ? {} : (seen.add(c), divBt(c, metric, i, seen)))
+      : {[c.type]:i == null ? cur(c, metric) : c.series[metric][i]};
+    for (const k in o) o[k] += b[k] || 0;
+  });
+  return o;
 }
 function cronCount(n){ let c = 0; (function v(x){ if (x.kind === 'cron') c++; x.children.forEach(v); })(n); return c; }
 function shareOfHost(n, metric){   // under a host without a reading there's no host to take a share of: a VM's is of its own capacity
@@ -2723,12 +2744,20 @@ function buildDivisions(){
       const members = g.ids.map(id => nodes[id]).filter(Boolean); if (!members.length) return;
       const types = new Set(members.map(m => m.type));
       const d = {id:'div:' + g.id, name:g.name, kind:'division', type:types.size === 1 ? [...types][0] : 'base', children:members,
-        parent:pk === 'root' ? null : (nodes[pk] || null), gkind:groupKind(members)};
+        parent:divParent(pk, members), gkind:groupKind(members)};
       d.color = `var(--g-${d.gkind})`;
       d.series = sumSeries(members); d.gseries = members.reduce((t, c) => addG(t, c.gseries), {});
       nodes[d.id] = d;
     });
   }
+}
+// What a group hangs off (#294): the node its key names, or, for one saved at the top of Pins only or inside another
+// group's space (whose key names no node of the tree), the nearest node all its members are under; nothing when
+// they're on different machines (or are machines), so it counts against those machines (ctxOf).
+function divParent(pk, members){
+  const at = nodes[pk]; if (at && at.kind !== 'division') return at;
+  const above = n => { const a = []; for (let p = n.parent; p; p = p.parent) a.push(p); return a; };
+  return members.slice(1).reduce((common, m) => { const up = above(m); return common.filter(p => up.includes(p)); }, above(members[0]))[0] || null;
 }
 function divisionsChanged(){ buildDivisions(); renderSpaces(); renderTree(); if (PICK.open) renderPickerList(); }
 
