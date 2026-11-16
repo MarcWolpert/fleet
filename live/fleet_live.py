@@ -1050,7 +1050,7 @@ class MacCollector:
                 for x in ifs:
                     if x["name"] == cur_if:
                         x.setdefault("addrs6", []).append(m6.group(1))
-            m = re.search(r"inet (\d+\.\d+\.\d+\.\d+) netmask (0x[0-9a-f]+)", line)
+            m = re.search(r"inet (\d+\.\d+\.\d+\.\d+)(?: --> \S+)? netmask (0x[0-9a-f]+)", line)  # "A --> B": point-to-point (utun)
             if m:
                 bits = bin(int(m.group(2), 16)).count("1")
                 for x in ifs:

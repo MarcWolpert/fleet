@@ -471,5 +471,88 @@ class NetPerProcess(unittest.TestCase):
         c.snapshot()
         self.assertEqual([(x.cmd, x.killed, x.done) for x in mac.started], [(NETTOP, True, True), (NETTOP, False, False)])
 
+
+NETSTAT = "netstat -ib"
+LSOF_TCP = "lsof -nP -iTCP -sTCP:ESTABLISHED -F pn"
+
+
+def netstat(step):
+    """netstat -ib, `step` readings in (3 s apart): en0 takes in 3 MB and sends 1.5 MB per reading, lo0 0.3 MB
+    each way, utun3 30 kB in; the rest is still. Link rows carry the byte counters; address rows are skipped."""
+    rows = [("lo0", 16384, "<Link#1>", "", 50000000 + 300000 * step, 50000000 + 300000 * step),
+            ("en0", 1500, "<Link#11>", "aa:bb:cc:00:11:22", 3000000000 + 3000000 * step, 500000000 + 1500000 * step),
+            ("en1", 1500, "<Link#12>", "aa:bb:cc:00:11:33", 0, 0),
+            ("bridge0", 1500, "<Link#14>", "aa:bb:cc:00:11:44", 0, 1000),
+            ("utun3", 1280, "<Link#20>", "", 200000 + 30000 * step, 100000),
+            ("gif0*", 1280, "<Link#2>", "", 0, 0)]
+    out = "Name       Mtu   Network       Address            Ipkts Ierrs     Ibytes    Opkts Oerrs     Obytes  Coll\n"
+    for name, mtu, net, addr, rx, tx in rows:
+        out += "%-10s %-5d %-13s %-17s %8d %5d %10d %8d %5d %10d %5d\n" % (name, mtu, net, addr, rx // 1000, 0, rx, tx // 1000, 0, tx, 0)
+        if name == "en0":
+            out += "%-10s %-5d %-13s %-17s %8d %5s %10d %8d %5s %10d %5s\n" % (name, mtu, "192.0.2", "192.0.2.20", rx // 1000, "-", rx, tx // 1000, "-", tx, "-")
+    return out
+
+
+IFCONFIG = """lo0: flags=8049<UP,LOOPBACK,RUNNING,MULTICAST> mtu 16384
+	options=1203<RXCSUM,TXCSUM,TXSTATUS,SW_TIMESTAMP>
+	inet 127.0.0.1 netmask 0xff000000
+	inet6 ::1 prefixlen 128 
+	inet6 fe80::1%lo0 prefixlen 64 scopeid 0x1 
+gif0: flags=8010<POINTOPOINT,MULTICAST> mtu 1280
+en0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500
+	ether aa:bb:cc:00:11:22
+	inet6 fe80::1c2d:3e4f:5a6b:7c8d%en0 prefixlen 64 secured scopeid 0xb 
+	inet 192.0.2.20 netmask 0xffffff00 broadcast 192.0.2.255
+	inet6 2001:db8::20 prefixlen 64 autoconf secured 
+	status: active
+en1: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500
+	ether aa:bb:cc:00:11:33
+	status: inactive
+bridge0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500
+	ether aa:bb:cc:00:11:44
+	status: inactive
+utun3: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1280
+	inet 198.51.100.5 --> 198.51.100.5 netmask 0xffffffff
+	inet6 2001:db8:100::5 prefixlen 128 
+"""
+
+# Each process's established TCP connections: curl over en0, ssh over en0 (IPv6) and to a local port, ssh over utun3.
+LSOF = """p100
+f12
+n192.0.2.20:52344->203.0.113.10:443
+p200
+f5
+n[2001:db8::20]:50111->[2001:db8:1::5]:22
+f6
+n127.0.0.1:60000->127.0.0.1:5432
+p300
+f7
+n198.51.100.5:51000->198.51.100.9:22
+"""
+
+NET_PROCS = ps((1, 0, "root", 131072, "61:01.00", "/sbin/launchd"),
+               (100, 1, "someone", 65536, "0:01.50", "/usr/bin/curl -sS https://example.com/"),
+               (200, 1, "someone", 65536, "0:10.00", "/usr/bin/ssh -N backup@nas"),
+               (300, 1, "someone", 65536, "0:00.50", "/usr/bin/ssh lab"))
+
+
+class Interfaces(unittest.TestCase):
+    """#174: a point-to-point interface (a VPN's utun) prints its IPv4 address as "inet A --> B netmask M";
+    it is read like any other, and connections from it count on that interface."""
+
+    def reading(self):
+        mac = Mac(dict({NETSTAT: netstat(0), "ifconfig": IFCONFIG, LSOF_TCP: LSOF}, **NET_PROCS))
+        snap = mac.collector(self).snapshot()
+        return {x["name"]: (x["addrs"], x.get("addrs6", [])) for x in snap["ifs"]}, {p[0]: p[15] for p in snap["procs"]}
+
+    def test_point_to_point_addresses_are_read(self):
+        addrs, _ = self.reading()
+        self.assertEqual(addrs, {"lo0": (["127.0.0.1/8"], ["::1", "fe80::1"]), "en0": (["192.0.2.20/24"], ["fe80::1c2d:3e4f:5a6b:7c8d", "2001:db8::20"]),
+                                 "en1": ([], []), "bridge0": ([], []), "utun3": (["198.51.100.5/32"], ["2001:db8:100::5"]), "gif0*": ([], [])})
+
+    def test_connections_from_a_point_to_point_address_count_on_it(self):
+        _, ifs = self.reading()
+        self.assertEqual(ifs, {1: [], 100: ["en0"], 200: ["en0", "lo0"], 300: ["utun3"]})
+
 if __name__ == "__main__":
     unittest.main()
