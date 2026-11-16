@@ -1138,7 +1138,7 @@ function detailsView(n, docked){
   const groupOf = p => p[12] >= 0 ? (gnames[p[12]] || 'CPU ' + p[12]) : 'not reported by this OS';
   const COLS = [
     {k:'name', label:'Name', l:true, get:p => (p[1] || '').toLowerCase(), show:p => esc(p[1])},
-    {k:'pid', label:'PID', get:p => pidNum(p[0]), show:p => typeof p[0] === 'string' ? `${esc(pidNum(p[0]))} <span class="vmtag" title="Runs in Docker Desktop’s Linux VM: this is its PID there">VM</span>` : esc(p[0])},
+    {k:'pid', label:'PID', get:p => pidNum(p[0]), show:p => isVmKey(p[0]) ? `${esc(pidNum(p[0]))} <span class="vmtag" title="Runs in Docker Desktop’s Linux VM: this is its PID there">VM</span>` : esc(p[0])},
     {k:'owner', label:'Runs in', l:true, get:p => ownerName(p[10]).toLowerCase(), show:p => `<button type="button" class="namebtn" data-select="${esc(p[10])}" style="font-weight:400">${esc(ownerName(p[10]))}</button>`},
     {k:'user', label:'User', l:true, get:p => p[2] || '', show:p => esc(p[2] || '—')},
     {k:'state', label:'Status', l:true, get:p => stateLabel(p[3]), show:p => esc(stateLabel(p[3]) || '—')},
@@ -1405,7 +1405,7 @@ document.addEventListener('click', e => {
   const lb = e.target.closest('[data-lookback]'); if (lb){ PREFS = Object.assign({}, PREFS, {cacheLookback:+lb.dataset.lookback}); lastMainHTML = ''; renderMain(); savePrefs('the cache lookback'); return; }
   const prow = e.target.closest('.ptbl tbody tr[data-pid]');
   if (prow && !e.target.closest('button, a, input, select, label')){
-    if (!/^\d+$/.test(prow.dataset.pid)){ toast('This process runs in Docker Desktop’s Linux VM, so Fleet can’t look inside it from macOS.'); return; }
+    if (isVmKey(prow.dataset.pid)){ toast('This process runs in Docker Desktop’s Linux VM, so Fleet can’t look inside it from macOS.'); return; }
     toggleInspect(prow.closest('.ptbl').dataset.mid, +prow.dataset.pid, prow); return;
   }
   const tp = e.target.closest('[data-tpin]'); if (tp){ e.stopPropagation(); toggleTilePin(tp.dataset.tpin); return; }
@@ -1486,8 +1486,10 @@ document.addEventListener('toggle', e => { if (e.target.classList && e.target.cl
 let lastSig = '', busy = false, fails = 0;
 // A process list the server hasn't read yet (Fleet just restarted, the machine is reconnecting) is not an empty
 // one: keep the list on screen until a fresh one comes, so Details never flashes empty.
-// a process in Docker Desktop's VM is keyed d:<container>:<pid> (its PID is the VM's, not this Mac's)
-function pidNum(k){ return typeof k === 'number' ? k : +String(k).split(':').pop(); }
+// a process in Docker Desktop's VM is keyed d:<container>:<pid> (its PID is the VM's, not this Mac's); any other
+// PID is what the host sent, shown as it is (#166)
+function isVmKey(k){ return typeof k === 'string' && /^d:[0-9a-f]+:\d+$/.test(k); }
+function pidNum(k){ return isVmKey(k) ? +k.split(':').pop() : k; }
 function takeProcs(mid, d){
   if (d && d.ready === false && PROCS.machine === mid) return;
   PROCS = {machine:mid, list:(d && d.procs) || [], gpuProcs:!!(d && d.gpu_procs)};
