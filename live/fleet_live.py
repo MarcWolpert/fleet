@@ -83,13 +83,16 @@ def save_pins(pins):
 
 # ---------------------------------------------------------------- history
 class Hist:
-    """Last H readings per node id and metric."""
+    """Last H readings per node id and metric. A node nothing has pushed, read or touched since the last sweep is gone
+    (a restarted container, its veth, a removed job) and is forgotten, in memory and so in state.json."""
     def __init__(self):
         self.d = {}
+        self.used = set()
         self.lock = threading.Lock()
 
     def push(self, key, vals):
         with self.lock:
+            self.used.add(key)
             q = self.d.get(key)
             if q is None:
                 q = self.d[key] = [collections.deque([0.0] * H, maxlen=H) for _ in vals]
@@ -99,7 +102,19 @@ class Hist:
     def get(self, key, n=5):
         with self.lock:
             q = self.d.get(key)
+            if q:
+                self.used.add(key)
             return [list(x) for x in q] if q else [[0.0] * H for _ in range(n)]
+
+    def touch(self, key):
+        with self.lock:
+            self.used.add(key)
+
+    def sweep(self):
+        with self.lock:
+            for k in [k for k in self.d if k not in self.used]:
+                del self.d[k]
+            self.used = set()
 
 
 HIST = Hist()
@@ -1184,19 +1199,23 @@ class Fleet:
         """Every interval: build the tree from each machine's latest view and push one history step per node."""
         while True:
             began = time.time()
-            specs = {}
-            for m in self.roots():
-                try:
-                    specs[m.id] = self.machine_spec(m, record=True)
-                except Exception:
-                    import traceback
-                    traceback.print_exc()
-            with self.lock:
-                self.specs = specs
-            self.tick += 1
-            if self.tick % 10 == 0:
-                save_state(self)
+            self.record_pass()
             time.sleep(max(0.2, self.interval - (time.time() - began)))
+
+    def record_pass(self):
+        specs = {}
+        for m in self.roots():
+            try:
+                specs[m.id] = self.machine_spec(m, record=True)
+            except Exception:
+                import traceback
+                traceback.print_exc()
+        with self.lock:
+            self.specs = specs
+        self.tick += 1
+        if self.tick % 10 == 0:
+            HIST.sweep()   # what no machine's tree has had for 10 passes is gone
+            save_state(self)
 
     def machine_spec(self, m, record, vm_hostside=None, vm_parent=None):
         with m.lock:
@@ -1318,14 +1337,15 @@ class Fleet:
         spec["base"] = {"id": mid + "/base", "h": self.leaf(mid + "/base", base_u, own), "g": ["gpu%d" % i for i, x in enumerate(base_g) if x > 0],
                         "gh": {"gpu%d" % i: self.leaf("%s/base/gpu%d" % (mid, i), [x], own)["cpu"] for i, x in enumerate(base_g)}}
         spec["procs_owner"] = {"cont": cont_ids, "vm": vm_ids}
-        if own:
-            HIST.push(mid + "/__host", host)
+        if record:   # not live: still shown from its last reading, so its history is kept, not extended
+            keep = HIST.push if own else lambda key, vals: HIST.touch(key)
+            keep(mid + "/__host", host)
             for c in view.get("lcpus", []):
-                HIST.push("%s/__cpu/%d" % (mid, c["n"]), [c["pct"]])
+                keep("%s/__cpu/%d" % (mid, c["n"]), [c["pct"]])
             for x in view.get("ifs", []):
-                HIST.push("%s/__if/%s" % (mid, x["name"]), [x["rx"], x["tx"]])
+                keep("%s/__if/%s" % (mid, x["name"]), [x["rx"], x["tx"]])
             for x in view.get("disks", []):
-                HIST.push("%s/__disk/%s" % (mid, x["name"]), [x["read"], x["write"]])
+                keep("%s/__disk/%s" % (mid, x["name"]), [x["read"], x["write"]])
         return spec
 
     def leaf(self, key, u, record):

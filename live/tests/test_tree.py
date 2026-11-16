@@ -6,8 +6,10 @@ return; nothing is read from any machine and no thread is started.
 Run: python3 -m unittest discover -s live/tests -p 'test_*.py'   (or live/tests/run.sh)
 """
 import collections
+import json
 import os
 import sys
+import tempfile
 import threading
 import unittest
 from unittest import mock
@@ -383,6 +385,67 @@ class OnlyLiveReadingsAreRecorded(TreeTest):
         spec = self.record(f, "nas")
         self.assertEqual(self.tree(spec), ("nas", "ok", [("win-vm", "hostonly", [])]))
         self.assertEqual(snapshot()["win-vm/base"][0][-1], 3.5)
+
+
+class GoneNodesAreForgotten(TreeTest):
+    """#171: history for a container, interface or job that's gone is dropped, in memory and in state.json."""
+
+    def setUp(self):
+        super().setUp()
+        self.tmp = tempfile.TemporaryDirectory()
+        self.state = mock.patch.object(fleet_live, "STATE_PATH", os.path.join(self.tmp.name, "state.json"))
+        self.state.start()
+
+    def tearDown(self):
+        self.state.stop()
+        self.tmp.cleanup()
+        super().tearDown()
+
+    def saved_keys(self):
+        with open(fleet_live.STATE_PATH) as f:
+            return sorted(json.load(f)["hist"])
+
+    def with_veth(self, cpu, veth):
+        return busy_view(cpu, ifs=[{"name": "eth0", "kind": "physical", "rx": 0.25, "tx": 0.25}, {"name": veth, "kind": "virtual", "rx": 0.1, "tx": 0.1}],
+                         containers=[container("c" + veth[-5:], "run-" + veth[-5:], [0.5, 1.0, 0, 0, 0])])
+
+    def keys(self, mid, veth):
+        return sorted(["%s/__cpu/%d" % (mid, n) for n in range(4)] + ["%s/__disk/sda" % mid, "%s/__host" % mid, "%s/__if/eth0" % mid,
+                       "%s/__if/%s" % (mid, veth), mid + "/base", jid(mid, "rotate.sh", "crontab", "*/5 * * * *", "/usr/local/bin/rotate.sh"),
+                       mid + "/base/gpu0", "%s/containers/run-%s" % (mid, veth[-5:]), mid + "/gpu0/util"])
+
+    def test_a_restarted_container_and_its_old_veth_are_dropped_after_a_sweep(self):
+        f = make_fleet(HOST_CFG)
+        m = give(f, "nas", self.with_veth(1.0, "veth1a2b3"))
+        for _ in range(10):
+            f.record_pass()
+        self.assertEqual((sorted(snapshot()), self.saved_keys()), (self.keys("nas", "veth1a2b3"), self.keys("nas", "veth1a2b3")))
+        m.view = self.with_veth(1.0, "veth9f8e7")   # the container restarted: a new name and a new veth
+        for _ in range(10):
+            f.record_pass()
+        self.assertEqual((sorted(snapshot()), self.saved_keys()), (self.keys("nas", "veth9f8e7"), self.keys("nas", "veth9f8e7")))
+
+    def test_an_offline_machine_keeps_its_history_while_its_last_reading_is_shown(self):
+        f = make_fleet(HOST_CFG)
+        m = give(f, "nas", self.with_veth(1.0, "veth1a2b3"))
+        f.record_pass()
+        before = snapshot()
+        m.status = "offline"
+        for _ in range(25):
+            f.record_pass()
+        self.assertEqual(snapshot(), before)
+        self.assertEqual(self.saved_keys(), self.keys("nas", "veth1a2b3"))
+
+    def test_dead_keys_restored_from_an_old_state_file_go_at_the_first_sweep(self):
+        f = make_fleet(HOST_CFG, {"id": "lx", "name": "lx", "ssh": "lx", "os": "linux"})
+        give(f, "nas", self.with_veth(1.0, "veth1a2b3"))
+        with fleet_live.HIST.lock:   # what an old state.json left: a veth long gone, and a machine no longer in the config
+            fleet_live.HIST.d["nas/__if/veth00000"] = [collections.deque([0.5] * H, maxlen=H)] * 2
+            fleet_live.HIST.d["old-host/base"] = [collections.deque([1.0] * H, maxlen=H)] * 5
+        for _ in range(10):
+            f.record_pass()
+        self.assertEqual(sorted(snapshot()), self.keys("nas", "veth1a2b3"))
+        self.assertEqual(sorted(f.specs), ["lx", "nas"])
 
 
 if __name__ == "__main__":
