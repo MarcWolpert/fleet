@@ -358,7 +358,8 @@ class InspectDockerVm(unittest.TestCase):
 
 class ProcRouteGate(unittest.TestCase):
     """/api/proc?key=d:<container>:<pid>&via=...: only for this computer when it is a Mac (Docker Desktop), only by a
-    way Fleet knows, only for a well-formed key; anything else is refused and nothing is run."""
+    way Fleet knows, only for a well-formed key; anything else is refused and nothing is run. Each request carries
+    X-Fleet: 1, as the page's own looks do: a look needs what a write needs (#287; test_server.Http checks that gate)."""
 
     def ask(self, query, platform_name="darwin"):
         import http.client, http.server
@@ -372,7 +373,7 @@ class ProcRouteGate(unittest.TestCase):
             with mock.patch.object(fl.Handler, "fleet", fleet, create=True), mock.patch.object(fl.sys, "platform", platform_name), \
                     mock.patch.object(fl, "inspect_docker_vm", lambda m, cid, pid, via: seen.append((m.id, cid, pid, via)) or {"pid": pid}):
                 c = http.client.HTTPConnection("127.0.0.1", srv.server_address[1], timeout=5)
-                c.request("GET", "/api/proc?" + query, headers={"Host": "127.0.0.1:%d" % srv.server_address[1]})
+                c.request("GET", "/api/proc?" + query, headers={"Host": "127.0.0.1:%d" % srv.server_address[1], "X-Fleet": "1"})
                 body = json.loads(c.getresponse().read())
                 c.close()
         finally:
