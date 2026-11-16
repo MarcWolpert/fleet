@@ -1252,6 +1252,7 @@ class Fleet:
                 listed.add(v["name"])
                 sub = self.machine_spec(mm, record, vm_hostside={"u": v["u"], "vcpus": 0, "mem": 0}, vm_parent=m)
                 sub["hostside"] = self.leaf(sub["id"] + "/__hostside", v["u"], record)  # what the hypervisor sees: the VM's share of its host
+                sub["hostside_gh"] = self.gpu_leaf(sub["id"] + "/__hostside", v.get("gu"), ng, record)  # ... of each of the host's GPUs
                 vm_ids[v["name"]] = sub["id"]
                 spec["vms"].append(sub)
             else:
@@ -1261,7 +1262,8 @@ class Fleet:
                 spec["vms"].append({"id": vid, "name": v["name"], "tile": "vm", "status": "ok" if v.get("running") else "off",
                                     "os": facts or "VM", "agent": "seen from the host", "cap": [max(1, view["ncpu"]), view["cap"][1], 0, 1, 1],
                                     "gpus": [], "cronLabel": "Cron jobs", "base": {"id": vid + "/base", "h": self.leaf(vid + "/base", v["u"], record)},
-                                    "baseCron": [], "compose": [], "containers": [], "vms": [], "procs": []})
+                                    "baseCron": [], "compose": [], "containers": [], "vms": [], "procs": [],
+                                    "hostside_gh": self.gpu_leaf(vid + "/__hostside", v.get("gu"), ng, record)})
         for name, mm in nested.items():
             if name not in listed:
                 spec["vms"].append(self.machine_spec(mm, record, vm_parent=m))

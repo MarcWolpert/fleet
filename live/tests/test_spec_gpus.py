@@ -93,6 +93,46 @@ class LinuxGpusPerWorkload(unittest.TestCase):
         self.assertEqual(s["base"]["h"]["gpu"][-1], 0.0)
 
 
+def host_view(gpus, containers=(), vms=()):
+    return {"os": "Linux", "arch": "x86_64", "cpu_model": "test", "uptime": 60, "ncpu": 16, "cap": [16, 64, 100 * len(gpus), 500, 125],
+            "host": [8, 40, sum(g["util"] for g in gpus), 0, 0], "gpus": list(gpus), "groups": [], "containers": list(containers),
+            "vms": list(vms), "jobs": [], "procs": [], "lcpus": [], "ifs": [], "disks": []}
+
+
+def gpu(util):
+    return {"name": "GPU", "mem": "16 GB VRAM", "util": util, "m": {"util": util}, "lim": {}}
+
+
+class VmGpusOnTheHost(unittest.TestCase):
+    """What the host sees each VM use of each of the host's GPUs (hostside_gh), keyed by the host's GPUs."""
+    def setUp(self):
+        fl.HIST.d.clear()
+
+    def test_every_vm_the_host_lists_says_what_it_uses_of_each_host_gpu(self):
+        # GPU 0 at 100%: a container. GPU 1 at 50%: vm1's qemu (a vGPU). "other" is not in the config and uses no GPU.
+        hv = host_view([gpu(100.0), gpu(50.0)],
+                       containers=[{"id": CID, "name": "trainer", "image": "train:1", "status": "Up", "project": "", "service": "", "file": "",
+                                    "u": [4, 12, 100, 0, 0], "gu": [100.0, 0.0]}],
+                       vms=[{"name": "vm1", "u": [2, 16, 50, 0, 0], "gu": [0.0, 50.0], "running": True, "ifs": [], "cpus": ""},
+                            {"name": "other", "u": [1, 4, 0, 0, 0], "gu": [0.0, 0.0], "running": True, "ifs": [], "cpus": ""}])
+        # inside, vm1 sees its one vGPU at 45%
+        iv = host_view([gpu(45.0)])
+        host, vm = fl.Machine({"id": "host", "name": "lab-host"}, 3), fl.Machine({"id": "vm1", "name": "vm1", "vm_on": "host"}, 3)
+        host.view, host.status, vm.view, vm.status = hv, "ok", iv, "ok"
+        f = fl.Fleet.__new__(fl.Fleet)
+        f.machines, f.lock, f.interval = {"host": host, "vm1": vm}, threading.Lock(), 3
+        s = f.machine_spec(host, record=True)
+        self.assertEqual([(v["id"], now(v["hostside_gh"])) for v in s["vms"]],
+                         [("vm1", {"gpu0": 0.0, "gpu1": 50.0}), ("host/vms/other", {"gpu0": 0.0, "gpu1": 0.0})])
+        self.assertEqual(now(s["vms"][0]["base"]["gh"]), {"gpu0": 45.0}, "the VM's own tree is measured inside it, on its own GPU")
+        self.assertEqual(now(s["base"]["gh"]), {"gpu0": 0.0, "gpu1": 0.0})
+
+    def test_a_host_with_no_gpu_says_nothing_per_gpu_of_its_vms(self):
+        hv = host_view([], vms=[{"name": "other", "u": [1, 4, 0, 0, 0], "gu": [], "running": True, "ifs": [], "cpus": ""}])
+        s = spec_of(hv, "host")
+        self.assertEqual([(v["id"], v["hostside_gh"]) for v in s["vms"]], [("host/vms/other", {})])
+
+
 class WindowsGpusPerWorkload(unittest.TestCase):
     def setUp(self):
         fl.HIST.d.clear()
