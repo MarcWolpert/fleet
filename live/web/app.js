@@ -2059,8 +2059,9 @@ document.addEventListener('keydown', e => {
     if ($('keys')){ e.preventDefault(); closeKeys(); return; }
     if (e.target.id === 'tfq'){ e.preventDefault(); closeTreeFind(); return; }
     if (e.target.id === 'mfq'){ e.preventDefault(); closeFind(); return; }
+    // the innermost thing first: a Details drop-down on screen closes before the tree lets go of its selection (#292)
+    if (INSP.pid && !typing && !overlayOpen() && (PANEL !== 'tree' || document.querySelector('tr.pinsp'))){ e.preventDefault(); closeInspect(); return; }
     if (PANEL === 'tree' && !typing && !overlayOpen() && !TF.q){ e.preventDefault(); selectNone(); return; }
-    if (INSP.pid && !typing && !overlayOpen()){ e.preventDefault(); closeInspect(); return; }
     if (e.target.id === 'pfilter'){ e.preventDefault(); if (e.target.value){ e.target.value = ''; S.filter = ''; save(); renderMain(); } else e.target.blur(); return; }
     return;
   }
