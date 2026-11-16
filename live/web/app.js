@@ -1170,6 +1170,18 @@ function netView(){
 
 /* ---------- main ---------- */
 let lastMainHTML = '';
+// A text selection in the pane (a command line to copy) survives its rebuild: each end is kept as its process
+// row (rows re-sort) or the pane, the child path down to the text, and the offset there.
+function selEnd(root, node, off){
+  const row = (node.nodeType === 1 ? node : node.parentNode).closest('tr[data-pid]'), top = row && root.contains(row) ? row : root, path = [];
+  for (let n = node; n !== top; n = n.parentNode) path.unshift([...n.parentNode.childNodes].indexOf(n));
+  return {pid:top === row ? row.dataset.pid : null, path, off};
+}
+function selAt(root, e){
+  let n = e.pid ? root.querySelector(`tr[data-pid="${CSS.escape(e.pid)}"]`) : root;
+  for (const i of e.path){ if (!n) break; n = n.childNodes[i]; }
+  return n ? [n, Math.min(e.off, n.nodeType === 3 ? n.length : n.childNodes.length)] : null;   // its process exited: gone
+}
 function renderMain(){
   renderFilterBar();
   const main = $('main');
@@ -1197,10 +1209,13 @@ function renderMain(){
   // the panels inside are rebuilt: keep where each was scrolled (the docked Details, the page beside it, wide tables)
   const SCROLLERS = '.split > .wrap, .dpanel, .pscroll, .scroll-x';
   const scrolled = [...main.querySelectorAll(SCROLLERS)].map(e => [e.scrollTop, e.scrollLeft]);
+  const sel = getSelection(), ends = sel.rangeCount && !sel.isCollapsed && main.contains(sel.anchorNode) && main.contains(sel.focusNode) && selStart == null
+    ? [selEnd(main, sel.anchorNode, sel.anchorOffset), selEnd(main, sel.focusNode, sel.focusOffset)] : null;
   main.innerHTML = full;
   const now = [...main.querySelectorAll(SCROLLERS)];
   if (now.length === scrolled.length) now.forEach((e, i) => { if (scrolled[i][0]) e.scrollTop = scrolled[i][0]; if (scrolled[i][1]) e.scrollLeft = scrolled[i][1]; });
   markPanel(); if (FIND.q) applyFind(false);
+  if (ends){ const x = selAt(main, ends[0]), y = selAt(main, ends[1]); if (x && y) try { sel.setBaseAndExtent(x[0], x[1], y[0], y[1]); } catch (e) {} }
   if (refocus){ const e = main.querySelector(refocus); if (e){ e.focus({preventScroll:true}); if (selStart != null && e.setSelectionRange) try { e.setSelectionRange(selStart, selStart); } catch (x) {} } }
 }
 function renderAll(){ renderSpaces(); renderToolbar(); renderTree(); renderMain(); refreshTip(); }
