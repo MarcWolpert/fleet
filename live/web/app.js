@@ -1911,7 +1911,7 @@ function gotoCommands(){
     {label:'Pin or unpin the selection as a space', hint:'P', ic:'pin', run:() => fleetCommand('pin')},
     {label:'Open a terminal on the selection', hint:MODK + 'T', ic:'terminal', run:() => fleetCommand('terminal')},
     {label:'Pin a grouping…', ic:'plus', run:() => openPicker()},
-    {label:'Import a theme…', ic:'upload', run:() => { openSettings().then(() => { const f = $('themefile'); if (f) f.click(); }); }},
+    {label:'Import a theme…', ic:'upload', run:() => { (SET.open ? Promise.resolve() : openSettings()).then(() => { const f = $('themefile'); if (f) f.click(); }); }},   // an open Settings keeps its unsaved edits
     {label:'Keyboard shortcuts', hint:'?', ic:'info', run:() => openKeys()}
   ], allThemes().map(t => ({label:'Theme: ' + t.name, ic:'palette', run:() => pickTheme(t.id)})));
 }

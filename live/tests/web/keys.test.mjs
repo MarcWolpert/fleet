@@ -199,3 +199,37 @@ test('Find a process with Details docked and nothing selected: the full Details 
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
 });
+
+test('Go to\'s Import a theme while Settings is open keeps the unsaved Settings and opens the file chooser (regression)', async () => {
+  const p = await open();
+  const choosers = [];
+  try {
+    await p.send('Page.setInterceptFileChooserDialog', {enabled: true});
+    p.on('Page.fileChooserOpened', e => choosers.push(e.mode));
+    await press(p, ',', {mod: true, code: 'Comma'});
+    await p.waitFor(`document.querySelector('#sheet [data-addmachine]')`);
+    await p.click('#sheet [data-addmachine]');
+    await p.waitFor(`document.activeElement && document.activeElement.dataset.field === '0:name'`);
+    await p.send('Input.insertText', {text: 'my new box'});
+    await press(p, 'k', {mod: true, code: 'KeyK'});
+    await p.waitFor(`document.activeElement && document.activeElement.id === 'gotoq'`);
+    await p.eval(`(() => { const i = document.getElementById('gotoq'); i.value = 'import'; i.dispatchEvent(new Event('input', {bubbles: true})); return true; })()`);
+    await p.key('Enter');
+    await p.waitFor(`!document.getElementById('goto')`);
+    const t0 = Date.now(); while (!choosers.length && Date.now() - t0 < 3000) await new Promise(r => setTimeout(r, 40));
+    await new Promise(r => setTimeout(r, 300));   // a refetch of the settings would land by now
+    assert.deepEqual(await p.eval(`({open: SET.open, machines: SET.draft.machines, shown: [...document.querySelectorAll('#sheet [data-field$=":name"]')].map(i => i.value)})`),
+      {open: true, machines: [{id: '', name: 'my new box', ssh: '', os: 'linux', tile: 'terminal'}], shown: ['my new box']});
+    assert.deepEqual(choosers, ['selectSingle']);
+    // with Settings closed it opens Settings first, as before
+    await p.eval(`(closeSettings(), true)`);
+    await press(p, 'k', {mod: true, code: 'KeyK'});
+    await p.waitFor(`document.activeElement && document.activeElement.id === 'gotoq'`);
+    await p.eval(`(() => { const i = document.getElementById('gotoq'); i.value = 'import'; i.dispatchEvent(new Event('input', {bubbles: true})); return true; })()`);
+    await p.key('Enter');
+    const t1 = Date.now(); while (choosers.length < 2 && Date.now() - t1 < 3000) await new Promise(r => setTimeout(r, 40));
+    assert.deepEqual(await p.eval(`({open: SET.open, machines: SET.draft.machines})`), {open: true, machines: []});
+    assert.deepEqual(choosers, ['selectSingle', 'selectSingle']);
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
