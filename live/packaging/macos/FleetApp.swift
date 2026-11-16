@@ -130,7 +130,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     }
 
     func findPython() -> String? {
-        for p in ["/opt/homebrew/bin/python3", "/usr/local/bin/python3", "/opt/local/bin/python3", "/usr/bin/python3"]
+        // its own Python first (#359): Fleet.app carries one, so nothing has to be installed; one on the Mac is a fallback
+        let own = Bundle.main.resourceURL!.appendingPathComponent("python/bin/python3").path
+        for p in [own, "/opt/homebrew/bin/python3", "/usr/local/bin/python3", "/opt/local/bin/python3", "/usr/bin/python3"]
         where FileManager.default.isExecutableFile(atPath: p) {
             let t = Process()
             t.executableURL = URL(fileURLWithPath: p)

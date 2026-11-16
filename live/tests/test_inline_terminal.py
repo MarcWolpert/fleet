@@ -124,6 +124,38 @@ def stub_fleet():
     return f
 
 
+class Bundled(unittest.TestCase):
+    """#359: in a package that carries its own ttyd and tmux (FLEET_BUNDLE beside live/), Fleet uses those, and gives
+    them the package's libraries (libwebsockets finds its event-loop plugin through LD_LIBRARY_PATH; macOS's dyld
+    ignores it) and terminfo."""
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.top = self.dir.name
+        for d in ("live", "bin", "lib", "terminfo"):
+            os.makedirs(os.path.join(self.top, d))
+        for t in ("ttyd", "tmux"):
+            with open(os.path.join(self.top, "bin", t), "w") as f:
+                f.write("#!/bin/sh\n")
+            os.chmod(os.path.join(self.top, "bin", t), 0o755)
+        self.here = fl.HERE
+        fl.HERE = os.path.join(self.top, "live")
+
+    def tearDown(self):
+        fl.HERE = self.here
+        self.dir.cleanup()
+
+    def test_only_a_package_marked_as_one_counts(self):
+        self.assertNotEqual(fl.ttyd_path(), os.path.join(self.top, "bin", "ttyd"))
+        self.assertNotIn(os.path.join(self.top, "lib"), fl.bundle_env().get("LD_LIBRARY_PATH", ""))
+        open(os.path.join(self.top, "FLEET_BUNDLE"), "w").close()
+        self.assertEqual(fl.ttyd_path(), os.path.join(self.top, "bin", "ttyd"))
+        self.assertEqual(fl.tmux_path(), os.path.join(self.top, "bin", "tmux"))
+        env = fl.bundle_env()
+        self.assertEqual(env["LD_LIBRARY_PATH"].split(":")[0], os.path.join(self.top, "lib"))
+        self.assertEqual(env["TERMINFO_DIRS"].split(":")[0], os.path.join(self.top, "terminfo"))
+        self.assertIn("/usr/share/terminfo", env["TERMINFO_DIRS"].split(":"), "and the system's after it")
+
+
 class Reconnect(unittest.TestCase):
     """#337: a dropped SSH connection (ssh exits 255) reconnects; any other exit ends the terminal."""
     def test_only_ssh_is_wrapped(self):

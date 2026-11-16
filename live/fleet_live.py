@@ -2769,7 +2769,7 @@ def run_dir():
 
 
 def tmux_path():
-    return shutil.which("tmux") or next((p for p in ("/opt/homebrew/bin/tmux", "/usr/local/bin/tmux", "/usr/bin/tmux") if os.path.exists(p)), None)
+    return bundled("tmux") or shutil.which("tmux") or next((p for p in ("/opt/homebrew/bin/tmux", "/usr/local/bin/tmux", "/usr/bin/tmux") if os.path.exists(p)), None)
 
 
 def tmux_conf():
@@ -2785,7 +2785,7 @@ def tmux(*args):
     t = tmux_path()
     if not t:
         return None
-    return subprocess.run([t, "-L", TMUX_SOCKET] + list(args), capture_output=True, text=True, timeout=10)
+    return subprocess.run([t, "-L", TMUX_SOCKET] + list(args), capture_output=True, text=True, timeout=10, env=bundle_env())
 
 
 def tmux_sessions():
@@ -2844,8 +2844,32 @@ def list_inline():
                 for k, v in sorted(INLINE.items(), key=lambda kv: kv[1]["t"])]
 
 
+def bundled(name):
+    """A program the package carries (#359): Fleet.app and the self-contained Linux package keep ttyd and tmux in bin/
+    beside live/, marked by FLEET_BUNDLE there. None otherwise."""
+    top = os.path.dirname(HERE)
+    p = os.path.join(top, "bin", name)
+    return p if os.path.exists(os.path.join(top, "FLEET_BUNDLE")) and os.access(p, os.X_OK) else None
+
+
+def bundle_env():
+    """The environment for the programs the package carries: libwebsockets (in ttyd) finds its event-loop plugin
+    through LD_LIBRARY_PATH (macOS's dyld ignores that variable), and tmux finds terminfo in the package first."""
+    env = dict(os.environ)
+    top = os.path.dirname(HERE)
+    if not os.path.exists(os.path.join(top, "FLEET_BUNDLE")):
+        return env
+    lib, ti = os.path.join(top, "lib"), os.path.join(top, "terminfo")
+    if os.path.isdir(lib):
+        env["LD_LIBRARY_PATH"] = lib + (":" + env["LD_LIBRARY_PATH"] if env.get("LD_LIBRARY_PATH") else "")
+    if os.path.isdir(ti):
+        env["TERMINFO_DIRS"] = ":".join([ti] + [d for d in (env.get("TERMINFO_DIRS") or "").split(":") if d]
+                                        + [d for d in ("/usr/share/terminfo", "/lib/terminfo", "/etc/terminfo") if d not in (env.get("TERMINFO_DIRS") or "")])
+    return env
+
+
 def ttyd_path():
-    return shutil.which("ttyd") or next((p for p in ("/opt/homebrew/bin/ttyd", "/usr/local/bin/ttyd", "/usr/bin/ttyd") if os.path.exists(p)), None)
+    return bundled("ttyd") or shutil.which("ttyd") or next((p for p in ("/opt/homebrew/bin/ttyd", "/usr/local/bin/ttyd", "/usr/bin/ttyd") if os.path.exists(p)), None)
 
 
 def ttyd_argv(ttyd, token, argv, opts, index=None):
@@ -2923,7 +2947,7 @@ def ttyd_index(ttyd):
     path, p = None, None
     try:
         token = secrets.token_urlsafe(24)
-        p = subprocess.Popen(ttyd_argv(ttyd, token, ["true"], {}), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        p = subprocess.Popen(ttyd_argv(ttyd, token, ["true"], {}), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=bundle_env())
         port, end = None, time.time() + 5
         while time.time() < end:
             line = p.stdout.readline()
@@ -2974,7 +2998,7 @@ def start_ttyd(argv, opts):
     if not ttyd:
         raise RuntimeError("Inline terminals use ttyd, which isn't installed here: brew install ttyd (macOS), sudo apt install ttyd (Debian, Ubuntu).")
     token = secrets.token_urlsafe(24)
-    p = subprocess.Popen(ttyd_argv(ttyd, token, argv, opts, index=ttyd_index(ttyd)), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    p = subprocess.Popen(ttyd_argv(ttyd, token, argv, opts, index=ttyd_index(ttyd)), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=bundle_env())
     port, seen, end = None, [], time.time() + 6
     while time.time() < end:
         line = p.stdout.readline()

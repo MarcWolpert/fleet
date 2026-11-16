@@ -63,6 +63,13 @@ class Icon(unittest.TestCase):
             self.assertEqual(f.read().strip(), hashlib.sha256(re.sub(r"<!--.*?-->", "", svg, flags=re.S).encode()).hexdigest(),
                              "the drawing changed: run live/packaging/make_icons.sh")
 
+    def test_fleet_app_uses_its_own_python_first(self):
+        # #359: the app carries a Python; one installed on the Mac is only a fallback
+        src = open(os.path.join(LIVE, "packaging", "macos", "FleetApp.swift"), encoding="utf-8").read()
+        body = src[src.index("func findPython()"):src.index("func startServer()")]
+        self.assertIn('appendingPathComponent("python/bin/python3")', body)
+        self.assertLess(body.index("python/bin/python3"), body.index("/opt/homebrew/bin/python3"))
+
     def test_the_boat_sits_centred_top_to_bottom(self):
         # #355: as much tile above the boat as below it. Its bounds come from its shapes: every rect, and every point of
         # every path (the curves here bend toward their control points, never past them)

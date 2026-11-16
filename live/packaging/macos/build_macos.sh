@@ -45,7 +45,15 @@ cp "$LIVE/../COPYING" "$APP/Contents/Resources/COPYING"
 sed "s/@VERSION@/$VERSION/g" "$HERE/Info.plist" > "$APP/Contents/Info.plist"
 plutil -lint "$APP/Contents/Info.plist" >/dev/null
 
+# what it runs, inside it (#359): its own Python, ttyd and tmux (Apple silicon: the Python and Homebrew's are arm64)
+if [ "$ARCHS" = arm64 ]; then "$HERE/bundle_deps.sh" "$APP"; else echo "build_macos: a $ARCHS build carries no Python, ttyd or tmux (only arm64 builds do)" >&2; fi
 codesign --force --deep --sign - "$APP"   # ad-hoc: runs on this Mac; share a notarized build for other Macs
+if [ -f "$APP/Contents/Resources/FLEET_BUNDLE" ]; then   # the build checks itself: nothing outside the app, each program runs
+  R="$APP/Contents/Resources"
+  if find "$R/bin" "$R/lib" -type f -exec otool -L {} + | grep -E '^[[:space:]]+/(opt|usr/local)/'; then echo "build_macos: a bundled program still uses a library outside the app" >&2; exit 1; fi
+  "$R/python/bin/python3" -c 'import ssl, sqlite3, json, tomllib' && "$R/bin/ttyd" --version >/dev/null && TERMINFO_DIRS="$R/terminfo" "$R/bin/tmux" -V >/dev/null || { echo "build_macos: a bundled program doesn't run" >&2; exit 1; }
+  codesign --verify --deep --strict "$APP" || { echo "build_macos: the signature doesn't verify" >&2; exit 1; }
+fi
 ZIP="Fleet-$VERSION-macos$ZIPSUFFIX.zip"
 ( cd "$DIST" && rm -f "$ZIP" && ditto -c -k --keepParent Fleet.app "$ZIP" )
 echo "built $APP ($(lipo -archs "$APP/Contents/MacOS/Fleet")) and $DIST/$ZIP"
