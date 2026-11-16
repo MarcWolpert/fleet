@@ -754,9 +754,12 @@ class Machine:
                 s = json.loads(line)
             except Exception:
                 continue
+            cpu = s.get("CPUPerc", "0%").rstrip("%")
+            if not re.match(r"^\d+(\.\d+)?$", cpu):
+                continue   # "--": docker stats couldn't read it in time; idle this reading, its I/O counters wait for the next
             nio = s.get("NetIO", "0B / 0B").split("/")
             bio = s.get("BlockIO", "0B / 0B").split("/")
-            stats[s.get("ID", "")[:12]] = (float(s.get("CPUPerc", "0%").rstrip("%") or 0) / 100.0,
+            stats[s.get("ID", "")[:12]] = (float(cpu) / 100.0,
                                            size_bytes(s.get("MemUsage", "0B").split("/")[0]) / GB,
                                            sum(size_bytes(x) for x in bio), sum(size_bytes(x) for x in nio))
         for line in r.get("containers", []):
@@ -766,8 +769,8 @@ class Machine:
                 continue
             labels = dict(kv.split("=", 1) for kv in c.get("Labels", "").split(",") if "=" in kv)
             cid = c.get("ID", "")[:12]
-            st = stats.get(cid, (0, 0, 0, 0))
-            u = [st[0], st[1], 0.0, self.rate("cb." + cid, st[2], t) / MB, self.rate("cn." + cid, st[3], t) / MB]
+            st = stats.get(cid)
+            u = [st[0], st[1], 0.0, self.rate("cb." + cid, st[2], t) / MB, self.rate("cn." + cid, st[3], t) / MB] if st else [0.0] * 5
             containers.append({"id": cid, "name": c.get("Names", ""), "image": c.get("Image", ""), "status": c.get("Status", ""),
                                "project": labels.get("com.docker.compose.project", ""), "service": labels.get("com.docker.compose.service", ""),
                                "file": labels.get("com.docker.compose.project.config_files", ""), "networks": c.get("Networks", ""), "u": u})
