@@ -69,5 +69,33 @@ class DockerStatsUnreadable(unittest.TestCase):
         self.assertEqual(us(self.first), {"shop-web-1": [0.5, 0.5, 0.0, 0.0, 0.0], "shop-db-1": [0.1, 1.0, 0.0, 0.0, 0.0]})
 
 
+def api_procs(view, mid="w"):
+    """/api/procs for one machine holding `view`."""
+    import threading
+    m = fleet_live.Machine({"id": mid, "name": mid}, 3)
+    m.view = view
+    f = fleet_live.Fleet.__new__(fleet_live.Fleet)
+    f.machines, f.lock = {mid: m}, threading.Lock()
+    f.specs = {mid: {"id": mid, "procs_owner": {"cont": {}, "vm": {}}, "vms": []}}
+    return f.api_procs(mid)
+
+
+class UntrustedProcessRows(unittest.TestCase):
+    """#166: what a monitored host prints is data; Details gets Parent PID and Threads only as numbers."""
+    HOSTILE = ["<svg onload=alert(1)>", "<img src=x onerror=alert(1)>"]
+
+    def test_a_windows_reading(self):
+        r = reading(1000.0, UNREADABLE, UNREADABLE, 100.0)
+        r["procs"].append([12, self.HOSTILE[0], "x.exe", 0.1, 1048576, self.HOSTILE[1], 0, "C:\\x"])
+        out = api_procs(fleet_live.Machine({"id": "w", "name": "w", "os": "windows"}, 3).derive_windows(r))
+        self.assertEqual({p[0]: (p[1], p[11], p[8]) for p in out["procs"]}, {10: ("vmmemWSL", 4, 12), 11: ("explorer.exe", 4, 30), 12: ("x.exe", 0, 0)})
+
+    def test_any_host(self):
+        # a derived row: [pid, ppid, comm, user, state, cpu, mem, disk, gpu, threads, cmd, owner, last cpu, gpus, disks, ifs, net]
+        row = lambda pid, ppid, threads: [pid, ppid, "sh", "root", "S", 0.0, 0.0, 0.0, 0.0, threads, "/bin/sh", "base", 0, [], [], [], 0.0]
+        out = api_procs({"t": 1000.0, "procs": [row(1, 0, 1), row(2, 1, 4.0), row(3, self.HOSTILE[0], self.HOSTILE[1]), row(4, None, [5])]})
+        self.assertEqual({p[0]: (p[11], p[8]) for p in out["procs"]}, {1: (0, 1), 2: (1, 4.0), 3: (0, 0), 4: (0, 0)})
+
+
 if __name__ == "__main__":
     unittest.main()

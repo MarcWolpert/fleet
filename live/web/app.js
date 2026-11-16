@@ -1059,7 +1059,7 @@ function detailsView(n, docked){
   const groupOf = p => p[12] >= 0 ? (gnames[p[12]] || 'CPU ' + p[12]) : 'not reported by this OS';
   const COLS = [
     {k:'name', label:'Name', l:true, get:p => (p[1] || '').toLowerCase(), show:p => esc(p[1])},
-    {k:'pid', label:'PID', get:p => p[0], show:p => p[0]},
+    {k:'pid', label:'PID', get:p => p[0], show:p => esc(p[0])},
     {k:'owner', label:'Runs in', l:true, get:p => ownerName(p[10]).toLowerCase(), show:p => `<button type="button" class="namebtn" data-select="${esc(p[10])}" style="font-weight:400">${esc(ownerName(p[10]))}</button>`},
     {k:'user', label:'User', l:true, get:p => p[2] || '', show:p => esc(p[2] || '—')},
     {k:'state', label:'Status', l:true, get:p => stateLabel(p[3]), show:p => esc(stateLabel(p[3]) || '—')},
@@ -1068,11 +1068,11 @@ function detailsView(n, docked){
     {k:'disk', label:'Disk', get:p => p[6], show:p => rateText(p[6])},
     {k:'gpu', label:'GPU', get:p => p[7], show:p => p[7] ? pct(p[7]) : '—'},
     {k:'net', label:'Network', get:p => p[16] || 0, show:p => p[16] > 0 ? rateText(p[16]) : p[16] === 0 ? '0' : '—'},
-    {k:'threads', label:'Threads', get:p => p[8], show:p => p[8] || '—'},
+    {k:'threads', label:'Threads', get:p => p[8], show:p => esc(p[8] || '—')},
     {k:'cpugroup', label:'CPU group', l:true, get:p => groupOf(p), show:p => esc(p[12] >= 0 ? groupOf(p) + ' · cpu' + p[12] : '—')},
     {k:'cmd', label:'Command line', l:true, cls:'cmd', get:p => p[9] || '', show:p => `<span title="${esc(p[9])}">${esc(p[9])}</span>`},
-    {k:'ppid', label:'Parent PID', get:p => p[11] || 0, show:p => p[11] || '—'},
-    {k:'lastcpu', label:'Last CPU', get:p => p[12], show:p => p[12] >= 0 ? 'cpu' + p[12] : '—'},
+    {k:'ppid', label:'Parent PID', get:p => p[11] || 0, show:p => esc(p[11] || '—')},
+    {k:'lastcpu', label:'Last CPU', get:p => p[12], show:p => p[12] >= 0 ? esc('cpu' + p[12]) : '—'},
     {k:'gpus', label:'Which GPU', l:true, get:p => (p[13] || []).join(','), show:p => (p[13] || []).length ? 'GPU' + p[13].join('+') : '—'},
     {k:'disks', label:'Disks used', l:true, get:p => (p[14] || []).join(','), show:p => esc((p[14] || []).join(', ') || '—')},
     {k:'ifaces', label:'Interfaces', l:true, get:p => (p[15] || []).join(','), show:p => esc((p[15] || []).join(', ') || '—')}
@@ -1091,7 +1091,7 @@ function detailsView(n, docked){
   let body = '', shown = 0, more = '';
   const isInsp = p => INSP.pid === p[0] && INSP.mid === mid;
   let inspShown = false;
-  const rowHTML = p => `<tr data-pid="${p[0]}" aria-expanded="${isInsp(p)}" class="drow${isInsp(p) ? ' open' : ''}">${COLS.map(c => `<td class="${c.l ? 'l' : ''} ${c.cls || ''}">${c.show(p)}</td>`).join('')}</tr>`  // data-pid: columns can move or hide
+  const rowHTML = p => `<tr data-pid="${esc(p[0])}" aria-expanded="${isInsp(p)}" class="drow${isInsp(p) ? ' open' : ''}">${COLS.map(c => `<td class="${c.l ? 'l' : ''} ${c.cls || ''}">${c.show(p)}</td>`).join('')}</tr>`  // data-pid: columns can move or hide
     + (isInsp(p) ? (inspShown = true, `<tr class="pinsp"><td colspan="${COLS.length}">${inspectPanel(p)}</td></tr>`) : '');
   if (groupBy){
     // Groups start collapsed, each header a summary; open ones are remembered per Group-by mode (S.groupOpen)
