@@ -455,11 +455,16 @@ function treeHeader(){
 // the nearest group of its own tree (All machines or Pins only) that holds one of its members' ancestors. Pins
 // only adds the groups you pinned, with their subgroups. Folding (S.gfold) is the same fold as in the normal tree.
 function groupsHierarchy(){
+  // only the groups of the tree this replaces (a machine's space, Pins only): a group at the top holds one of its
+  // roots, a deeper one sits under a node in it (#297)
+  const tops0 = treeRoots(), rootIds = new Set(tops0.map(n => n.id)), reach = new Set();
+  (function walk(list){ list.forEach(n => { if (reach.has(n.id)) return; reach.add(n.id); walk(n.children); }); })(tops0);
+  const inTree = (g, pk) => pk === 'root' ? rootIds.has('div:' + g.id) || g.ids.some(id => rootIds.has(id)) : reach.has(pk) && g.ids.some(id => reach.has(id));
   const all = [];
   for (const [key, list] of Object.entries(PREFS.tgroups || {})){
-    const at = key.indexOf('|'), sc = key.slice(0, at);
+    const at = key.indexOf('|'), sc = key.slice(0, at), pk = key.slice(at + 1);
     if (sc === 'network') continue;
-    list.forEach(g => { const n = nodes['div:' + g.id]; if (n) all.push({g, sc, pk:key.slice(at + 1), n}); });
+    list.forEach(g => { const n = nodes['div:' + g.id]; if (n && inTree(g, pk)) all.push({g, sc, pk, n}); });
   }
   all.forEach(x => {
     x.up = null;
