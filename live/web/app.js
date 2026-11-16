@@ -2527,7 +2527,9 @@ function gotoCommands(){
     {label:'Pin a grouping…', ic:'plus', run:() => openPicker()},
     {label:'Import a theme…', ic:'upload', run:() => { (SET.open ? Promise.resolve() : openSettings()).then(() => { const f = $('themefile'); if (f) f.click(); }); }},   // an open Settings keeps its unsaved edits
     {label:'Keyboard shortcuts', hint:'?', ic:'info', run:() => openKeys()}
-  ], allThemes().map(t => ({label:'Theme: ' + t.name, ic:'palette', run:() => pickTheme(t.id)})));
+  ], allThemes().map(t => ({label:'Theme: ' + t.name, ic:'palette', run:() => pickTheme(t.id)})),
+  termTemplates().map(t => ({label:'Launch terminals: ' + t.name, ic:'terminal', run:() => launchTemplate(t)})),
+  [{label:'Terminal templates…', ic:'terminal', run:() => openTermTemplates()}, {label:'Reset the terminals…', ic:'terminal', run:() => askResetTerms()}]);
 }
 function gotoNodes(){
   buildDivisions();
@@ -3610,13 +3612,14 @@ function startInline(s){
   if (s.pending || s.live) return;
   s.pending = true; renderDrawer();
   const id = s.node;
-  s.then = PREFS.inlineCmd || '';
-  api('/api/inline-terminal', Object.assign({node:id, then:s.then, theme:termTheme(), fontSize:termFontPx()}, s.group ? {group:s.group} : {})).then(r => {
+  if (s.then == null) s.then = PREFS.inlineCmd || '';   // a template's terminal keeps its own command
+  return api('/api/inline-terminal', Object.assign({node:id, then:s.then, theme:termTheme(), fontSize:termFontPx()}, s.group ? {group:s.group} : {})).then(r => {
     if (!TD.list.includes(s)){ if (r.ok) api('/api/inline-terminal/close', {id:r.id}).catch(() => {}); return; }  // closed while it opened
     if (r.ok){ Object.assign(s, {id:r.id, url:r.url, title:r.title || s.title, group:r.group || s.group || r.id, pending:false, live:true}); if (TD.active === s.key) keepActive(s); }
     else Object.assign(s, {pending:false, error:r.error || 'Couldn’t open an inline terminal'});
     renderDrawer();
-  }).catch(() => { Object.assign(s, {pending:false, error:'Couldn’t reach Fleet'}); renderDrawer(); });
+    return r;
+  }).catch(() => { Object.assign(s, {pending:false, error:'Couldn’t reach Fleet'}); renderDrawer(); return null; });
 }
 // Kept terminals (#337): the server keeps them, their shells in tmux. The page shows the kept ones when it loads, attaches
 // the one you're on (the rest when you go to them), and attaches them again when Fleet restarts (a new boot).
@@ -3826,8 +3829,106 @@ function termBarMenu(){
     '—',
     {label:'Larger text', run:() => setTermFont(termFont() + 1)},
     {label:'Smaller text', run:() => setTermFont(termFont() - 1)},
-    {label:'Actual size', run:() => setTermFont(TERM_FONT.def)}]};
+    {label:'Actual size', run:() => setTermFont(TERM_FONT.def)},
+    '—',
+    TD.list.length && {label:'Save as a template…', run:() => askSaveTemplate()},
+    {label:'Templates…', run:() => openTermTemplates()},
+    '—',
+    {label:'Reset the terminals…', run:() => askResetTerms()}]};
 }
+// Reset, and templates (#352). Reset (after asking) ends the terminals and goes back to the default setup: a terminal
+// for each connected computer, at the default height and text size. A template keeps which terminals there are, on
+// what, named what, with their commands and tabs (splits); kept in ui.json (termTemplates), launched from the
+// Templates dialog, the bar's menu or ⌘K.
+function termTemplates(){ return Array.isArray(PREFS.termTemplates) ? PREFS.termTemplates : []; }
+function closeTermDialog(){ const el = $('termdlg'); if (el) el.remove(); }
+function termDialog(html, label){
+  closeTermDialog();
+  const el = document.createElement('div'); el.id = 'termdlg'; el.className = 'sheet-bg';
+  el.innerHTML = `<div class="sheet tdlg" role="dialog" aria-modal="true" aria-label="${esc(label)}">${html}</div>`;
+  el.addEventListener('click', e => { if (e.target === el) closeTermDialog(); });
+  el.addEventListener('keydown', e => { if (e.key === 'Escape'){ e.preventDefault(); e.stopPropagation(); closeTermDialog(); } else if (e.key === 'Enter' && e.target.matches('input[data-tdtname]')){ e.preventDefault(); el.querySelector('[data-tdsave]').click(); } });
+  document.body.appendChild(el);
+  const f = el.querySelector('input, [data-tdreset], .btn.primary'); if (f){ f.focus(); if (f.select) f.select(); }
+  return el;
+}
+const plural = (n, w) => n + ' ' + w + (n === 1 ? '' : 's');
+function templateSummary(terms){
+  const tabs = new Set(terms.map(x => x.tab)).size, names = [...new Set(terms.map(x => (nodes[x.node] || {}).name || x.node))];
+  return `${plural(terms.length, 'terminal')} in ${plural(tabs, 'tab')}: ${names.join(', ')}`;
+}
+function askResetTerms(){
+  const n = TD.list.filter(s => s.live || s.pending).length;
+  termDialog(`<div class="sheet-h"><h2>Reset the terminals?</h2></div><div class="sheet-b"><p>This ends the ${plural(n, 'terminal')} open now and goes back to the default: a terminal for each connected computer, at the default height and text size.</p></div>`
+    + `<div class="sheet-f"><button type="button" class="btn" data-tdcancel>Cancel</button><button type="button" class="btn primary" data-tdreset>Reset</button></div>`, 'Reset the terminals');
+}
+function resetTerms(){
+  closeTermDialog();
+  TD.list.slice().forEach(s => { if (s.live) api('/api/inline-terminal/close', {id:s.id}).catch(() => {}); });
+  TD.list = []; TD.undo = []; TD.frac = {}; TD.gActive = {}; TD.active = '';
+  const P = Object.assign({}, PREFS); delete P.termClosed; delete P.termFont; delete P.termActive; P.termMin = false; PREFS = P;
+  savePrefs('the terminals');
+  delete S.termH; save();
+  syncAutoTerms(); renderDrawer();
+}
+function snapshotTerms(){
+  return termGroups().flatMap(({list}, i) => list.map(s => {
+    const n = nodes[s.node], named = n && s.title && s.title !== n.name;
+    return Object.assign({node:s.node, tab:i}, s.then ? {then:s.then} : {}, named ? {title:s.title} : {});
+  }));
+}
+function askSaveTemplate(){
+  const terms = snapshotTerms(); if (!terms.length) return;
+  termDialog(`<div class="sheet-h"><h2>Save these terminals as a template</h2></div><div class="sheet-b"><label class="tdl-name">Name <input type="text" data-tdtname maxlength="60" value="${esc('Terminals ' + (termTemplates().length + 1))}" autocomplete="off" spellcheck="false"></label>`
+    + `<p class="sub">${esc(templateSummary(terms))}. A template with the same name is replaced.</p></div><div class="sheet-f"><button type="button" class="btn" data-tdcancel>Cancel</button><button type="button" class="btn primary" data-tdsave>Save</button></div>`, 'Save as a template');
+}
+function saveTemplate(name){
+  name = String(name || '').replace(/\s+/g, ' ').trim().slice(0, 60); if (!name) return false;
+  PREFS = Object.assign({}, PREFS, {termTemplates:termTemplates().filter(t => t.name !== name).concat([{name, terms:snapshotTerms()}])});
+  savePrefs('the template'); return true;
+}
+function openTermTemplates(){
+  const ts = termTemplates();
+  termDialog(`<div class="sheet-h"><h2>Terminal templates</h2></div><div class="sheet-b">`
+    + (ts.length ? `<ul class="tdtl">${ts.map((t, i) => `<li><div class="tdt-n"><b data-tdtn="${i}">${esc(t.name)}</b><span class="sub">${esc(templateSummary(t.terms || []))}</span></div><button type="button" class="btn primary" data-tdlaunch="${i}">Launch</button><button type="button" class="btn" data-tdrename="${i}">Rename</button><button type="button" class="btn" data-tddelete="${i}" aria-label="Delete ${esc(t.name)}">Delete</button></li>`).join('')}</ul>`
+      : `<p class="sub">No templates yet. Open the terminals you want, then Save as a template from the terminals' menu (right-click their bar).</p>`)
+    + `</div><div class="sheet-f">${TD.list.length ? '<button type="button" class="btn" data-tdsaveas>Save the terminals now as a template…</button>' : ''}<button type="button" class="btn" data-tdcancel>Done</button></div>`, 'Terminal templates');
+}
+async function launchTemplate(t){
+  closeTermDialog();
+  if (PREFS.termMin) setTermMin(false);
+  const tabs = {};
+  for (const x of (t.terms || [])){
+    const n = nodes[x.node]; if (!n) continue;   // a machine Fleet doesn't have now
+    const s = {key:'k' + (++TD.seq), id:'', node:x.node, title:n.name};
+    if (x.then != null) s.then = x.then;
+    if (tabs[x.tab]) s.group = tabs[x.tab];
+    TD.list.push(s); TD.active = s.key;
+    const r = await startInline(s);   // in turn: the next terminal in its tab joins this one's
+    if (r && r.ok){
+      if (!tabs[x.tab]) tabs[x.tab] = s.group;
+      if (x.title){ s.title = x.title; api('/api/inline-terminal/update', {id:s.id, title:x.title}).catch(() => {}); renderDrawer(); }
+    }
+  }
+}
+document.addEventListener('click', e => {
+  const d = e.target.closest('#termdlg'); if (!d) return;
+  const b = e.target.closest('button'); if (!b) return;
+  const ts = termTemplates();
+  if (b.matches('[data-tdcancel]')) closeTermDialog();
+  else if (b.matches('[data-tdreset]')) resetTerms();
+  else if (b.matches('[data-tdsave]')){ if (saveTemplate(d.querySelector('input[data-tdtname]').value)) closeTermDialog(); }
+  else if (b.matches('[data-tdsaveas]')) askSaveTemplate();
+  else if (b.dataset.tdlaunch != null){ const t = ts[+b.dataset.tdlaunch]; if (t) launchTemplate(t); }
+  else if (b.dataset.tddelete != null){ PREFS = Object.assign({}, PREFS, {termTemplates:ts.filter((x, i) => i !== +b.dataset.tddelete)}); savePrefs('the templates'); openTermTemplates(); }
+  else if (b.dataset.tdrename != null){
+    const i = +b.dataset.tdrename, nm = d.querySelector(`[data-tdtn="${i}"]`); if (!nm || !ts[i]) return;
+    const inp = document.createElement('input'); inp.type = 'text'; inp.value = ts[i].name; inp.maxLength = 60; inp.setAttribute('aria-label', 'Template name');
+    nm.replaceWith(inp); inp.focus(); inp.select();
+    const done = keep => { const v = inp.value.replace(/\s+/g, ' ').trim(); if (keep && v && v !== ts[i].name){ PREFS = Object.assign({}, PREFS, {termTemplates:ts.filter(x => x.name !== v).map(x => x === ts[i] ? Object.assign({}, x, {name:v}) : x)}); savePrefs('the templates'); } openTermTemplates(); };
+    inp.addEventListener('keydown', ev => { ev.stopPropagation(); if (ev.key === 'Enter'){ ev.preventDefault(); done(true); } else if (ev.key === 'Escape'){ ev.preventDefault(); done(false); } });
+  }
+});
 // the keys, in the terminals (their bar, a tab, or a terminal: Fleet's script in ttyd's page passes them on)
 document.addEventListener('keydown', e => {
   if (PANEL !== 'term' || PREFS.termMin || !TD.list.length) return;

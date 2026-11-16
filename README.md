@@ -88,7 +88,8 @@ or `sudo apt install ttyd`; Settings › Terminal picks a login shell, tmux or y
 The terminals are there from the start: a tab for each connected computer, each starting when you first go to it. **+**
 opens one on any machine or container; the button left of the tabs minimizes them (they keep running), and the one at
 the bottom left of the pane, or ⌘J, brings them back. Like VS Code's: split one (⌘\\), kill one (⌘⌫ on its tab),
-rename it, drag a tab onto a terminal to split them there (⌘Z undoes it), and right-click a tab or the bar for the rest.
+rename it, drag a tab onto a terminal to split them there (⌘Z undoes it), and right-click a tab or the bar for the rest:
+save the terminals as a **template** and launch it again later (or from ⌘K), or **reset** them to the default.
 
 **Folding the tree.** The row above Auto and Add a machine folds the whole tree: **~** collapses everything and keeps
 what was open, and pressed again brings exactly that back; **F~** opens every node at every depth, or closes them all.
