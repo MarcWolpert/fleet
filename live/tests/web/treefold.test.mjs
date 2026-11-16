@@ -22,7 +22,7 @@ test('~ collapses everything and comes back to just what was open; F~ opens ever
     await p.waitFor(`document.querySelector('#treefold [data-fold="~"]')`);
     const pos = await p.eval(`(() => { const r = document.getElementById('treefold').getBoundingClientRect(), f = document.querySelector('.side-foot').getBoundingClientRect(), t = document.getElementById('tree').getBoundingClientRect(); return {above: Math.abs(r.bottom - f.top) < 1.5, below: r.top >= t.bottom - 1.5}; })()`);
     assert.deepEqual(pos, {above: true, below: true}, 'its own row, right above Auto and Add a machine');
-    assert.deepEqual(await p.eval(`[...document.querySelectorAll('#treefold button')].map(b => b.textContent.trim())`), ['~', 'F~']);
+    assert.deepEqual(await p.eval(`[...document.querySelectorAll('#treefold [data-fold]')].map(b => b.textContent.trim())`), ['~', 'F~']);
     const before = await p.eval(OPEN);
     assert.ok(before.includes('lx/containers'));
     await press(p, '~');
@@ -86,6 +86,28 @@ test('the network tree folds with its own stack, and groups fold with the rest',
     await p.waitFor(`(${OPEN}).length === 0`);
     assert.equal(await p.eval(`S.foldStack.network.length`), 1);
     assert.equal(await p.eval(`S.foldStack.machines.length`), 1);
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
+// #394: a toggle for the tree's graphs, at the right of the ~ / F~ row; kept.
+test('the graphs toggle hides and shows the tree’s graphs, and is kept', async () => {
+  const p = await browser.page(fixture(), {ui: ui({sel: 'fleet', open: {lx: true}})});
+  const SHOWN = `[...document.querySelectorAll('#tree .spark')].filter(e => getComputedStyle(e).display !== 'none').length`;
+  try {
+    await p.waitFor(`document.querySelector('#treefold [data-sparks]')`);
+    const r = await p.eval(`(() => { const t = document.getElementById('treefold').getBoundingClientRect(), b = document.querySelector('#treefold [data-sparks]').getBoundingClientRect(), f = document.querySelector('#treefold [data-fold="F~"]').getBoundingClientRect(); return {right: t.right - b.right, after: b.left > f.right}; })()`);
+    assert.ok(r.after && r.right < 20, 'at the right of the row: ' + JSON.stringify(r));
+    assert.equal(await p.eval(`document.querySelector('#treefold [data-sparks]').getAttribute('aria-pressed')`), 'true');
+    assert.ok(await p.eval(SHOWN) > 3);
+    await p.eval(`(document.querySelector('#treefold [data-sparks]').click(), true)`);
+    await p.waitFor(`${SHOWN} === 0`);
+    assert.equal(await p.eval(`document.querySelector('#treefold [data-sparks]').getAttribute('aria-pressed')`), 'false');
+    await p.eval(`(location.reload(), true)`);
+    await p.waitFor(`document.querySelector('#tree .spark') && document.querySelector('#treefold [data-sparks]')`);
+    assert.equal(await p.eval(SHOWN), 0, 'kept');
+    await p.eval(`(document.querySelector('#treefold [data-sparks]').click(), true)`);
+    await p.waitFor(`${SHOWN} > 3`);
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
 });

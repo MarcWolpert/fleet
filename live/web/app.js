@@ -3524,6 +3524,14 @@ function renderFold(){
   f.setAttribute('aria-label', allOpen ? 'Force collapse all: every node, at every depth' : 'Force expand all: every node, at every depth'); f.title = f.getAttribute('aria-label');
 }
 document.addEventListener('click', e => { const b = e.target.closest('#treefold [data-fold]'); if (b) foldPress(b.dataset.fold); });
+// the tree's graphs, on and off (#394), kept in the UI's state
+function renderSparksToggle(){
+  const b = document.querySelector('#treefold [data-sparks]'), side = document.querySelector('aside.side'); if (!b || !side) return;
+  side.classList.toggle('nosparks', !!S.sparksOff);
+  b.setAttribute('aria-pressed', String(!S.sparksOff)); b.title = 'Graphs in the tree: ' + (S.sparksOff ? 'off' : 'on');
+}
+document.addEventListener('click', e => { if (!e.target.closest('#treefold [data-sparks]')) return; S.sparksOff = !S.sparksOff; save(); renderSparksToggle(); });
+renderSparksToggle();
 
 // The tree panel resizes from its right edge (#393): drag (kept in S.sideW), double-click for the default, ←/→ (⇧ more)
 const SIDE_W = {def:390, min:240};
