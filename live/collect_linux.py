@@ -358,6 +358,22 @@ def net_users(ifaddr):
     return users
 
 
+def libvirt_vms():
+    """Libvirt VMs and the tap interfaces they use. virsh list --name prints one VM per line, and a name may hold
+    spaces ("Windows 10") or start with a dash, so it goes to virsh whole, as --domain's value."""
+    vms = []
+    for name in run(["virsh", "list", "--name"]).splitlines():
+        if not name.strip():
+            continue
+        ifaces = []
+        for line in run(["virsh", "domiflist", "--domain", name]).splitlines()[2:]:
+            f = line.split()
+            if len(f) >= 5:
+                ifaces.append({"if": f[0], "source": f[2], "mac": f[4]})
+        vms.append({"name": name, "ifs": ifaces})
+    return vms
+
+
 def snapshot():
     global out
     out = {"t": time.time(), "hz": HZ, "ncpu": os.cpu_count(), "host": os.uname()[1], "kernel": os.uname()[2]}
@@ -514,16 +530,7 @@ def snapshot():
             pass
     out["dockernets"] = nets
 
-    # Libvirt VMs and the tap interfaces they use.
-    vms = []
-    for name in run(["virsh", "list", "--name"]).split():
-        ifaces = []
-        for line in run(["virsh", "domiflist", name]).splitlines()[2:]:
-            f = line.split()
-            if len(f) >= 5:
-                ifaces.append({"if": f[0], "source": f[2], "mac": f[4]})
-        vms.append({"name": name, "ifs": ifaces})
-    out["vms"] = vms
+    out["vms"] = libvirt_vms()
 
     # Scheduled jobs: crontabs and systemd timers.
     cron = []
