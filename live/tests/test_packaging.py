@@ -49,6 +49,11 @@ class Icon(unittest.TestCase):
     def test_one_icon_everywhere(self):
         svg = open(os.path.join(LIVE, "packaging", "icon", "fleet.svg"), encoding="utf-8").read()
         self.assertIn("East Indiaman", svg)
+        # navy and gold (#158): a gold ship on a navy gradient
+        self.assertIn('stop-color="#0b1f3a"', svg)
+        self.assertIn('stop-color="#1b3f6e"', svg)
+        self.assertIn('fill="#f2c14e"', svg)
+        self.assertNotIn('fill="#fff"', svg)
         self.assertEqual(open(os.path.join(LIVE, "web", "icon.svg"), encoding="utf-8").read(), svg)
         for s in (16, 32, 48, 64, 128, 256, 512, 1024):
             png = os.path.join(LIVE, "packaging", "icon", "png", "fleet-%d.png" % s)
