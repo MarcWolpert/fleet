@@ -2068,12 +2068,26 @@ def open_terminal(choice, argv, title):
             osa('tell application "iTerm"', "activate",
                 ('create window with default profile command "%s"' % q(line)) if line else "create window with default profile", "end tell")
         elif term == "herdr":
-            out = subprocess.run(["herdr", "tab", "create", "--label", title[:40], "--focus"], capture_output=True, text=True, timeout=10).stdout
-            pane = re.search(r'"(?:pane_id|paneId)"\s*:\s*"([^"]+)"', out) or re.search(r'"id"\s*:\s*"([^"]*pane[^"]*)"', out)
+            # herdr runs inside a terminal: with no herdr running, start it in the default one, then add the tab (#227)
+            def tab():
+                r = subprocess.run(["herdr", "tab", "create", "--label", title[:40], "--focus"], capture_output=True, text=True, timeout=10)
+                out = (r.stdout or "") + "\n" + (r.stderr or "")   # errors come as JSON on stderr
+                m = re.search(r'"(?:pane_id|paneId)"\s*:\s*"([^"]+)"', out) or re.search(r'"id"\s*:\s*"([^"]*pane[^"]*)"', out)
+                return (m.group(1) if m else None), out
+            pane, out = tab()
+            if not pane and "server_not_running" in out:
+                start = auto if auto != "herdr" else next((k for k in keys if k != "herdr"), "terminal")
+                open_terminal(start, ["herdr"], "Herdr")
+                for _ in range(40):
+                    time.sleep(0.25)
+                    pane, out = tab()
+                    if pane or "server_not_running" not in out:
+                        break
             if not pane:
-                return open_terminal("auto" if auto != "herdr" else "terminal", argv, title)
+                msg = re.search(r'"message"\s*:\s*"([^"]+)"', out)
+                raise RuntimeError("Herdr didn't open a tab" + (": " + msg.group(1) if msg else "") + ". Start herdr, or pick another terminal.")
             if line:
-                subprocess.run(["herdr", "pane", "run", pane.group(1), line], check=True, capture_output=True, timeout=10)
+                subprocess.run(["herdr", "pane", "run", pane, line], check=True, capture_output=True, timeout=10)
         else:
             app = {"ghostty": "Ghostty", "wezterm": "WezTerm", "kitty": "kitty", "alacritty": "Alacritty"}[term]
             extra = {"ghostty": ["-e"], "wezterm": ["start", "--"], "kitty": [], "alacritty": ["-e"]}[term] if argv else []
