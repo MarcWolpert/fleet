@@ -6,8 +6,14 @@ The section for a version becomes its GitHub release notes; see docs/fleet/RELEA
 ## Fleet 0.0.1
 
 The first release of Fleet Live: every machine you manage, live, in one tree. For macOS (Fleet.app, Apple
-silicon) and Linux (a package with a menu entry and a `fleet` command). It reads Linux, Windows and Mac
-machines over SSH, read-only, and installs nothing on them.
+silicon) and Linux (x64 and arm64 packages, and a Flatpak). Each package carries what it runs, its own Python,
+ttyd and tmux, so there's nothing else to install; it reads Linux, Windows and Mac machines over SSH,
+read-only, and installs nothing on them.
+
+**Installing:** each download has a README and an install script. Fleet.app isn't notarized by Apple yet: the
+first time, its install script (or right-click > Open) gets it past macOS's check. The Linux packages run on
+any current distribution (checked on Arch, Ubuntu 22.04 and 24.04, and Fedora); the Flatpak suits Bazzite,
+Pop!_OS and Fedora.
 
 - **The machine tree:** machines, their base system, Docker Compose projects and services, containers, VMs
   (machines again, all the way down) and scheduled jobs, with where each machine's CPU, memory, GPU, disk and
@@ -32,3 +38,11 @@ machines over SSH, read-only, and installs nothing on them.
 - **Keyboard:** ⌘K go to anything, ⌘F find in the panel you're in, ⌘[ ⌘] back and forward, and more (press `?`).
 - **Right-click menus** that fit what you clicked; **Open terminal** on a machine or container; offline machines
   say why, with the steps to fix it.
+- **Terminals below the page:** a terminal for each connected computer (and any machine or container),
+  split below the page, each with its own text size; split, kill, rename and drag them like VS Code's, save
+  the set as a template, and they keep running through a reload, Fleet restarting or quitting, and a dropped
+  connection (tmux holds them). Powerline and Nerd Font symbols draw even without a Nerd Font installed.
+- **Tidying up:** fold the whole tree (~, F~), the overview's cards and CPU groups; an Each CCD view; Details
+  columns resize and reorder by dragging, and its groups hold still when you want them to.
+- **Accessible:** a colour-blind mode (protanopia, deuteranopia, tritanopia, monochromacy), higher contrast,
+  and the Tutorial pill for terms and keys; the Fleet logo at the top right opens ⌘K.
