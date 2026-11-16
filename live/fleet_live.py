@@ -118,13 +118,16 @@ def save_pins(pins):
 
 # ---------------------------------------------------------------- history
 class Hist:
-    """Last H readings per node id and metric."""
+    """Last H readings per node id and metric. A node nothing has pushed, read or touched since the last sweep is gone
+    (a restarted container, its veth, a removed job) and is forgotten, in memory and so in state.json."""
     def __init__(self):
         self.d = {}
+        self.used = set()
         self.lock = threading.Lock()
 
     def push(self, key, vals):
         with self.lock:
+            self.used.add(key)
             q = self.d.get(key)
             if q is None:
                 q = self.d[key] = [collections.deque([0.0] * H, maxlen=H) for _ in vals]
@@ -134,7 +137,19 @@ class Hist:
     def get(self, key, n=5):
         with self.lock:
             q = self.d.get(key)
+            if q:
+                self.used.add(key)
             return [list(x) for x in q] if q else [[0.0] * H for _ in range(n)]
+
+    def touch(self, key):
+        with self.lock:
+            self.used.add(key)
+
+    def sweep(self):
+        with self.lock:
+            for k in [k for k in self.d if k not in self.used]:
+                del self.d[k]
+            self.used = set()
 
 
 HIST = Hist()
@@ -963,6 +978,25 @@ def job_name(cmd):
     return (cmd.split() or [cmd])[0][:48]
 
 
+def vm_cap(view, v):
+    """What a VM seen from its host can use there: the host CPUs its process may run on (all of them when the host
+    doesn't say), the host's memory, and the host's disk and network."""
+    return [len(cpulist(v.get("cpus", ""))) or max(1, view["ncpu"]), view["cap"][1], 0, view["cap"][3], view["cap"][4]]
+
+
+def job_ids(mid, jobs):
+    """Each scheduled job's node id, from what the job is (where it's defined, its schedule, its command, its name), not
+    its place in the list: systemd lists timers by when they fire next, so places change all the time, and a job's
+    history would carry on under another job's id. Exact duplicates (an unduplicated crontab) are numbered."""
+    ids, seen = [], collections.Counter()
+    for j in jobs:
+        key = "\0".join((j.get("src", ""), j.get("sched", ""), j.get("cmd", ""), j.get("name", "")))
+        seen[key] += 1
+        jid = "%s/base/cron/%s-%08x" % (mid, slug(j.get("name", "")), zlib.crc32(key.encode()))
+        ids.append(jid if seen[key] == 1 else "%s-%d" % (jid, seen[key]))
+    return ids
+
+
 TIMER_LINE = re.compile(r"(?:\w{3} \S+ \S+ \S+|-|n/a) (?:-|n/a|.+? (?:left|ago)) (?:\w{3} (\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}):\d{2} \S+|-|n/a)(?: |$)")
 
 
@@ -1448,19 +1482,23 @@ class Fleet:
         """Every interval: build the tree from each machine's latest view and push one history step per node."""
         while True:
             began = time.time()
-            specs = {}
-            for m in self.roots():
-                try:
-                    specs[m.id] = self.machine_spec(m, record=True)
-                except Exception:
-                    import traceback
-                    traceback.print_exc()
-            with self.lock:
-                self.specs = specs
-            self.tick += 1
-            if self.tick % 10 == 0:
-                save_state(self)
+            self.record_pass()
             time.sleep(max(0.2, self.interval - (time.time() - began)))
+
+    def record_pass(self):
+        specs = {}
+        for m in self.roots():
+            try:
+                specs[m.id] = self.machine_spec(m, record=True)
+            except Exception:
+                import traceback
+                traceback.print_exc()
+        with self.lock:
+            self.specs = specs
+        self.tick += 1
+        if self.tick % 10 == 0:
+            HIST.sweep()   # what no machine's tree has had for 10 passes is gone
+            save_state(self)
 
     def machine_spec(self, m, record, vm_hostside=None, vm_parent=None):
         with m.lock:
@@ -1477,18 +1515,23 @@ class Fleet:
         if view is None:
             if vm_hostside is not None:
                 spec["base"] = {"id": mid + "/base", "h": self.leaf(mid + "/base", vm_hostside["u"], record)}
-                spec["cap"] = [max(1, vm_hostside.get("vcpus", 1)), max(1, vm_hostside.get("mem", 1)), 0, 1, 1]
+                spec["cap"] = vm_hostside["cap"]
                 spec["status"] = "hostonly" if status != "ok" else status
                 spec["error"] = (error or ("not connected" if status == "disabled" else "not reachable")) + " · showing what its host sees"
             else:
-                spec["base"] = {"id": mid + "/base", "h": self.leaf(mid + "/base", [0] * 5, record)}
+                spec["base"] = {"id": mid + "/base", "h": self.leaf(mid + "/base", [0] * 5, False)}   # nothing was read
             if vm_parent is not None and vm_hostside is None:
                 spec["status"] = "off" if status != "ok" else status
+            # Without a reading of its own it still has its VMs: each shows what it knows of itself, not "off".
+            spec["vms"] = [self.machine_spec(mm, record) for mm in self.machines.values() if mm.cfg.get("vm_on") == mid]
             return spec
+        # Only a live reading is recorded: a machine that isn't live shows its last one, and its history waits.
+        live = status == "ok"
+        own = record and live
         spec.update({"os": view["os"] + (" · " + view["arch"] if view.get("arch") else ""), "cpu_model": view.get("cpu_model", ""),
                      "uptime": fmt_uptime(view.get("uptime", 0)), "cap": view["cap"], "cronLabel": view.get("cronLabel", "Cron jobs"),
                      "gpus": [{"name": g["name"], "mem": g.get("mem", ""),
-                               "m": [[k, lim, self.leaf("%s/gpu%d/%s" % (mid, gi, k), [(g.get("m") or {}).get(k, 0.0)], record)["cpu"]] for k, lim in gpu_metric_order(g)]}
+                               "m": [[k, lim, self.leaf("%s/gpu%d/%s" % (mid, gi, k), [(g.get("m") or {}).get(k, 0.0)], own)["cpu"]] for k, lim in gpu_metric_order(g)]}
                               for gi, g in enumerate(view["gpus"])], "ncpu": view["ncpu"],
                      "groups": view.get("groups", [])})
         if view.get("note"):
@@ -1513,12 +1556,12 @@ class Fleet:
                 cont_ids[c["id"]] = nid
                 proj.setdefault(c["project"], {"id": pid, "name": c["project"], "file": c["file"].split(",")[0], "services": []})["services"].append(
                     {"id": nid, "name": c["service"] or c["name"], "cname": c["name"], "image": c["image"], "status": c["status"], "g": c.get("gkeys") or (dflt_g if c["u"][2] else []),
-                     "h": self.leaf(nid, c["u"], record)})
+                     "h": self.leaf(nid, c["u"], own)})
             else:
                 nid = "%s/containers/%s" % (mid, slug(c["name"]))
                 cont_ids[c["id"]] = nid
                 loose.append({"id": nid, "name": c["name"], "cname": c["name"], "image": c["image"], "status": c["status"], "g": c.get("gkeys") or (dflt_g if c["u"][2] else []),
-                              "h": self.leaf(nid, c["u"], record)})
+                              "h": self.leaf(nid, c["u"], own)})
         spec["compose"] = list(proj.values())
         spec["containers"] = loose
         # VMs: nested machines from config when they match by name; host-side usage otherwise.
@@ -1532,45 +1575,61 @@ class Fleet:
             mm = nested.get(v["name"])
             if mm:
                 listed.add(v["name"])
-                sub = self.machine_spec(mm, record, vm_hostside={"u": v["u"], "vcpus": 0, "mem": 0}, vm_parent=m)
-                sub["hostside"] = self.leaf(sub["id"] + "/hostside", v["u"], record)  # what the host gives it (its QEMU process), as a history
+                sub = self.machine_spec(mm, record, vm_hostside={"u": v["u"], "cap": vm_cap(view, v)} if live else None, vm_parent=m if live else None)
+                if live:   # what the host gives it (its QEMU process), as a history
+                    sub["hostside"] = self.leaf(sub["id"] + "/hostside", v["u"], own)
                 vm_ids[v["name"]] = sub["id"]
                 spec["vms"].append(sub)
             else:
                 vid = "%s/vms/%s" % (mid, slug(v["name"]))
                 vm_ids[v["name"]] = vid
                 facts = ", ".join("%s (%s)" % (d["name"], d["state"]) for d in v.get("distros", []))
-                spec["vms"].append({"id": vid, "name": v["name"], "tile": "vm", "status": "ok" if v.get("running") else "off",
-                                    "os": facts or "VM", "agent": "seen from the host", "cap": [max(1, view["ncpu"]), view["cap"][1], 0, 1, 1],
-                                    "gpus": [], "cronLabel": "Cron jobs", "base": {"id": vid + "/base", "h": self.leaf(vid + "/base", v["u"], record)},
+                spec["vms"].append({"id": vid, "name": v["name"], "tile": "vm", "status": ("ok" if v.get("running") else "off") if live else status,
+                                    "os": facts or "VM", "agent": "seen from the host", "cap": vm_cap(view, v),
+                                    "gpus": [], "cronLabel": "Cron jobs", "base": {"id": vid + "/base", "h": self.leaf(vid + "/base", v["u"], own)},
                                     "baseCron": [], "compose": [], "containers": [], "vms": [], "procs": []})
         for name, mm in nested.items():
             if name not in listed:
-                spec["vms"].append(self.machine_spec(mm, record, vm_parent=m))
+                spec["vms"].append(self.machine_spec(mm, record, vm_parent=m if live else None))
+        # Which GPUs each owner's processes run on (p[13]), and how much of each GPU goes to anything but Base itself
+        # (a process on several GPUs counts evenly on each, as the web model splits it).
+        on_gpu = collections.defaultdict(set)
+        not_base = [0.0] * len(view["gpus"])
+        for p in view["procs"]:
+            gl = [i for i in (p[13] if len(p) > 13 else []) if i < len(not_base)]
+            on_gpu[p[11]].update(gl)
+            if gl and p[11] not in ("base", "dockervm"):
+                for i in gl:
+                    not_base[i] += p[8] / len(gl)
         # Scheduled jobs under Base system; their usage is a breakdown of Base.
         jsum = [0.0] * 5
         jobs = []
-        for i, j in enumerate(view["jobs"]):
-            jid = "%s/base/cron/%d" % (mid, i)
+        for n, (jid, j) in enumerate(zip(job_ids(mid, view["jobs"]), view["jobs"])):
             for k in range(5):
                 jsum[k] += j["u"][k]
+            on = ["gpu%d" % i for i in sorted(on_gpu["job:%d" % n] | on_gpu["unit:" + j.get("cmd", "")])] or dflt_g  # dflt_g: the host doesn't name them
             jobs.append({"id": jid, "name": j["name"], "sched": j["sched"], "human": j.get("human", ""), "cmd": j.get("cmd", ""),
                          "last": j.get("last", "") or ("next " + j["next"] if j.get("next") else ""), "running": j["running"],
-                         "state": j.get("state", ""), "src": j.get("src", ""), "g": dflt_g if j["u"][2] else [], "h": self.leaf(jid, j["u"], record)})
+                         "state": j.get("state", ""), "src": j.get("src", ""), "g": on if j["u"][2] else [], "h": self.leaf(jid, j["u"], own)})
         spec["baseCron"] = jobs
         base_u = [max(0.0, host[i] - csum[i] - vsum[i] - jsum[i]) for i in range(5)]
         if view["gpus"]:
             base_u[2] = max(0.0, host[2] - csum[2] - vsum[2] - jsum[2])
-        spec["base"] = {"id": mid + "/base", "h": self.leaf(mid + "/base", base_u, record), "g": dflt_g}
+        # Base on each GPU: what's left there, scaled to Base's own GPU total.
+        left = [max(0.0, g.get("util", 0.0) - not_base[i]) for i, g in enumerate(view["gpus"])]
+        base_g = [base_u[2] * x / sum(left) if sum(left) else 0.0 for x in left]
+        spec["base"] = {"id": mid + "/base", "h": self.leaf(mid + "/base", base_u, own), "g": ["gpu%d" % i for i, x in enumerate(base_g) if x > 0],
+                        "gh": {"gpu%d" % i: self.leaf("%s/base/gpu%d" % (mid, i), [x], own)["cpu"] for i, x in enumerate(base_g)}}
         spec["procs_owner"] = {"cont": cont_ids, "vm": vm_ids}
-        if record:
-            HIST.push(mid + "/__host", host)
+        if record:   # not live: still shown from its last reading, so its history is kept, not extended
+            keep = HIST.push if own else lambda key, vals: HIST.touch(key)
+            keep(mid + "/__host", host)
             for c in view.get("lcpus", []):
-                HIST.push("%s/__cpu/%d" % (mid, c["n"]), [c["pct"]])
+                keep("%s/__cpu/%d" % (mid, c["n"]), [c["pct"]])
             for x in view.get("ifs", []):
-                HIST.push("%s/__if/%s" % (mid, x["name"]), [x["rx"], x["tx"]])
+                keep("%s/__if/%s" % (mid, x["name"]), [x["rx"], x["tx"]])
             for x in view.get("disks", []):
-                HIST.push("%s/__disk/%s" % (mid, x["name"]), [x["read"], x["write"]])
+                keep("%s/__disk/%s" % (mid, x["name"]), [x["read"], x["write"]])
         return spec
 
     def leaf(self, key, u, record):
@@ -1636,6 +1695,7 @@ class Fleet:
             return {"procs": [], "ready": m.status == "disabled"}
         own = spec.get("procs_owner", {"cont": {}, "vm": {}})
         num = lambda x: x if isinstance(x, (int, float)) and not isinstance(x, bool) else 0   # what a host sends is data: numbers only
+        jids = job_ids(mid, view.get("jobs", []))   # job:<n> is a place in this view's own job list
         out = []
         for p in view["procs"]:
             o = p[11]
@@ -1644,7 +1704,8 @@ class Fleet:
             elif o.startswith("vm:"):
                 node = own["vm"].get(o[3:], mid + "/base")
             elif o.startswith("job:"):
-                node = "%s/base/cron/%s" % (mid, o[4:])
+                n = int(o[4:])
+                node = jids[n] if n < len(jids) else mid + "/base"
             elif o == "dockervm":
                 node = mid + "/base"
             else:
