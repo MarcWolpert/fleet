@@ -21,6 +21,7 @@ H = 60
 METRICS = ("cpu", "mem", "gpu", "disk", "net")
 CONFIG_PATH = os.path.expanduser("~/.config/fleet/machines.toml")
 LAST_CLIENT = [0.0]   # when a Fleet window last asked for data
+HIDDEN_POLL_S = 75.0  # longest gap between a hidden window's polls: Chrome's once-a-minute timers, plus slack
 PINS_PATH = os.path.expanduser("~/.config/fleet/pins.json")
 TILEPINS_PATH = os.path.expanduser("~/.config/fleet/tilepins.json")  # pinned tiles and CPU groups, per machine
 PREFS_PATH = os.path.expanduser("~/.config/fleet/ui.json")  # UI layout (Details columns per detail type)
@@ -1820,7 +1821,7 @@ def save_state(fleet):
         os.makedirs(os.path.dirname(STATE_PATH), exist_ok=True)
         tmp = STATE_PATH + ".tmp"
         with open(tmp, "w") as f:
-            json.dump({"t": time.time(), "views": views, "hist": hist}, f, separators=(",", ":"))
+            json.dump({"t": time.time(), "views": views, "hist": hist, "client": LAST_CLIENT[0]}, f, separators=(",", ":"))
         os.replace(tmp, STATE_PATH)
     except Exception as e:
         print("could not save state: %s" % e, flush=True)
@@ -1834,6 +1835,7 @@ def load_state(fleet):
         return
     if time.time() - st.get("t", 0) > 6 * 3600:
         return  # too old to be useful
+    LAST_CLIENT[0] = max(LAST_CLIENT[0], st.get("client", 0.0))  # a window the last process saw is waited for
     for mid, v in st.get("views", {}).items():
         m = fleet.machines.get(mid)
         if m:
@@ -1848,8 +1850,12 @@ def restart_self(fleet, reason):
     os.environ["FLEET_OFF"] = ",".join(m.id for m in fleet.machines.values() if not m.on.is_set())   # stays off after the restart
     save_state(fleet)
     stop_collectors(fleet)
-    args = [x for x in sys.argv[1:] if x not in ("--open", "--open-if-unseen")] + ["--open-if-unseen"]
-    os.execv(sys.executable, [sys.executable, os.path.abspath(__file__)] + args)
+    args = [sys.executable, os.path.abspath(__file__)] + [x for x in sys.argv[1:] if x not in ("--open", "--open-if-unseen")] + ["--open-if-unseen"]
+    if platform.system() == "Windows":
+        # os.execv there is the C runtime's _wexecv: it joins argv with spaces and quotes nothing, so quote
+        # each argument the way the new process splits it again (C:\Program Files\... stays one argument).
+        args = [subprocess.list2cmdline([x]) for x in args]
+    os.execv(sys.executable, args)
 
 
 # ---------------------------------------------------------------- settings
@@ -2286,6 +2292,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def end_headers(self):
         self.send_header("Cache-Control", "no-store")
+        # No page may frame Fleet: inside a frame the UI's own requests would pass allowed() (clickjacking).
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Content-Security-Policy", "frame-ancestors 'none'")
         super().end_headers()
 
     def send_json(self, obj):
@@ -2455,8 +2464,12 @@ def main():
 
 
 def reopen_if_unseen(url, since, wait=8.0):
-    """Open the app window unless a Fleet window has polled since `since` (the page polls every 2 s)."""
-    time.sleep(wait)
+    """Open the app window unless a Fleet window polls after `since`. A visible page polls every 2 s, but
+    Chrome runs the timers of a page hidden for 5 minutes (minimized or covered) only about once a minute,
+    so a window seen in the last minute is waited for until a minute after its last poll."""
+    deadline = max(since + wait, LAST_CLIENT[0] + HIDDEN_POLL_S)
+    while LAST_CLIENT[0] < since and time.time() < deadline:
+        time.sleep(max(0.0, min(1.0, deadline - time.time())))
     if LAST_CLIENT[0] < since:
         open_app_window(url)
 
