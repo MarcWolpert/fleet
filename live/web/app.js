@@ -1336,6 +1336,7 @@ function renderSettings(){
         <button type="button" class="btn" data-addmachine="1">${icon('plus', 2)}Add a machine</button></section>
       ${appearanceSection()}
       <section><h3>Terminal</h3><p class="sub">Used by <b>Open terminal</b> on a machine or container.</p><label class="inline">Open in <select data-field="-1:terminal" aria-label="Terminal app"><option value="auto"${d.terminal === 'auto' ? ' selected' : ''}>Automatic${SET.termAuto ? ' (' + esc(SET.termAuto) + ')' : ''}</option>${SET.terminals.map(([k, l]) => `<option value="${esc(k)}"${d.terminal === k ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select></label></section>
+      <section><h3>Keyboard</h3><p class="sub">Press <kbd>?</kbd> anywhere for the list: find, spaces, metrics, the tree, text size and more.</p><button type="button" class="btn" data-showkeys="1">Show keyboard shortcuts</button></section>
       <section><h3>Refresh</h3><label class="inline">Read every machine every <input type="number" min="1" max="60" step="1" data-field="-1:interval" value="${esc(d.interval)}" aria-label="Seconds between readings"> seconds</label></section>
       <p class="sub">Saved to <code>${esc(SET.path)}</code>; the previous version is kept beside it as <code>machines.toml.bak</code>.</p>
     </div>
@@ -1367,6 +1368,7 @@ $('sheet').addEventListener('click', async e => {
   if (e.target.closest('[data-addmachine]')){ SET.draft.machines.push({id:'', name:'', ssh:'', os:'linux', tile:'terminal'}); SET.expanded.add(SET.draft.machines.length - 1); renderSettings(); const c = $('sheet').querySelector(`[data-field="${SET.draft.machines.length - 1}:name"]`); if (c) c.focus(); return; }
   const th = e.target.closest('[data-themeid]'); if (th){ pickTheme(th.dataset.themeid); return; }
   const rt = e.target.closest('[data-rmtheme]'); if (rt){ removeTheme(rt.dataset.rmtheme); return; }
+  if (e.target.closest('[data-showkeys]')){ openKeys(); return; }
   if (e.target.closest('[data-importtheme]')){ const f = $('themefile'); if (f) f.click(); return; }
   const rm = e.target.closest('[data-rmmachine]'); if (rm){ const i = +rm.dataset.rmmachine; SET.draft.machines.splice(i, 1); SET.tests = {}; SET.expanded = new Set([...SET.expanded].filter(j => j !== i).map(j => j > i ? j - 1 : j)); renderSettings(); return; }
   const tb = e.target.closest('[data-testmachine]');
@@ -1601,3 +1603,197 @@ async function importTheme(file){
     rerenderAppearance('[data-importtheme]');
   }
 }
+
+/* ---------- Keyboard shortcuts ---------- */
+// One keymap for every window: ⌘ on a Mac, Ctrl elsewhere. Fleet.app's menus call fleetCommand() for the
+// same commands, and zoom there is native (the page asks for it when the menu didn't take the key).
+const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+const MODK = IS_MAC ? '⌘' : 'Ctrl+', ALTK = IS_MAC ? '⌥' : 'Alt+', SHIFTK = IS_MAC ? '⇧' : 'Shift+';
+const METRIC_KEYS = ['cpu', 'mem', 'gpu', 'disk', 'net'];
+const SHORTCUTS = [
+  ['Go to anything: machines, containers, jobs, commands', [MODK + 'K']],
+  ['Find: filter the process list', [MODK + 'F', '/']],
+  ['Details on and off', [MODK + 'D']],
+  ['Dock Details beside the overview', [MODK + SHIFTK + 'D']],
+  ['CPU, Memory, GPU, Disk I/O, Network', [ALTK + '1 … ' + ALTK + '5']],
+  ['Go to a space (1 is All machines)', [MODK + '1 … ' + MODK + '9']],
+  ['Previous or next space', [MODK + '[', MODK + ']']],
+  ['Move through the tree', ['↑', '↓']],
+  ['Collapse or expand; go to the parent', ['←', '→']],
+  ['Pin or unpin the selection as a space', ['P']],
+  ['Open a terminal on the selection', [MODK + 'T']],
+  ['Bigger, smaller, actual size', [MODK + '+', MODK + '−', MODK + '0']],
+  ['Settings', [MODK + ',']],
+  ['Refresh now', [MODK + 'R']],
+  ['Close a menu, sheet or panel; clear the filter', ['Esc']],
+  ['These shortcuts', ['?', MODK + '/']]
+];
+function spaceKeys(){ return ['fleet'].concat(PINS.filter(k => nodes[k])); }
+function typingIn(t){ return !!(t && t.closest && t.closest('input, textarea, select, [contenteditable="true"]')); }
+function overlayOpen(){ return SET.open || PICK.open || COLMENU.open || !!$('keys') || !!$('goto'); }
+function fleetCommand(name, arg){
+  switch (name){
+    case 'find': {
+      if (S.tree === 'network'){ S.tree = 'machines'; }
+      if (!S.detailsDocked && S.view !== 'details'){ S.view = 'details'; save(); lastMainHTML = ''; renderAll(); refreshNow(); }
+      const f = $('pfilter'); if (f){ f.focus(); f.select(); }
+      return true;
+    }
+    case 'details': if (S.tree === 'network') S.tree = 'machines'; S.view = S.view === 'details' ? 'overview' : 'details'; if (S.view === 'details') S.detailsDocked = false; save(); lastMainHTML = ''; renderAll(); refreshNow(); return true;
+    case 'dock': S.detailsDocked ? (S.detailsDocked = false, save(), renderAll()) : dockDetails(); return true;
+    case 'metric': if (!METRIC_KEYS.includes(arg)) return false; S.metric = arg; if (S.view !== 'details') S.view = 'overview'; save(); lastMainHTML = ''; renderAll(); refreshNow(); return true;
+    case 'space': { const ks = spaceKeys(); if (arg >= 0 && arg < ks.length){ goSpace(ks[arg]); return true; } return false; }
+    case 'space-step': { const ks = spaceKeys(), i = Math.max(0, ks.indexOf(S.space)); goSpace(ks[(i + arg + ks.length) % ks.length]); return true; }
+    case 'pin': { const n = nodes[S.sel]; if (!n || S.sel === 'fleet') return false; const was = PINS.includes(S.sel); togglePin(S.sel); toast(was ? `Unpinned ${n.name}` : `Pinned ${n.name} as a space`); return true; }
+    case 'terminal': { const b = document.querySelector('[data-terminal]'); if (!b){ toast('Select a machine or container to open a terminal on it'); return true; } b.click(); return true; }
+    case 'settings': if (!SET.open) openSettings(); return true;
+    case 'refresh': refreshNow(); return true;
+    case 'keys': $('keys') ? closeKeys() : openKeys(); return true;
+    case 'goto': $('goto') ? closeGoto() : openGoto(); return true;
+  }
+  return false;
+}
+window.fleetCommand = fleetCommand;
+function openKeys(){
+  const el = document.createElement('div'); el.id = 'keys'; el.className = 'sheet-bg';
+  el.innerHTML = `<div class="sheet keys" role="dialog" aria-modal="true" aria-labelledby="keys-title"><div class="sheet-h"><h2 id="keys-title">Keyboard shortcuts</h2><button type="button" class="iconbtn" data-closekeys="1" aria-label="Close">${icon('x', 2.2)}</button></div>`
+    + `<div class="sheet-b"><table class="keytbl">${SHORTCUTS.map(([what, ks]) => `<tr><td>${esc(what)}</td><td>${ks.map(k => `<kbd>${esc(k)}</kbd>`).join(' ')}</td></tr>`).join('')}</table></div></div>`;
+  el.addEventListener('click', e => { if (e.target === el || e.target.closest('[data-closekeys]')) closeKeys(); });
+  document.body.appendChild(el);
+  el.querySelector('[data-closekeys]').focus();
+}
+function closeKeys(){ const el = $('keys'); if (el) el.remove(); }
+// ↑/↓ moves the selection through whichever tree is showing; ←/→ collapses, expands or goes to the parent.
+function treeStep(key){
+  const rows = [...document.querySelectorAll('#tree .row')];
+  if (!rows.length) return false;
+  const net = S.tree === 'network', idOf = r => net ? r.dataset.netsel : r.dataset.select;
+  let i = rows.findIndex(r => r.classList.contains('sel'));
+  const pick = r => { if (!r) return; const id = idOf(r); if (!id) return; if (net){ S.netSel = id; save(); renderTree(); renderToolbar(); renderMain(); } else select(id); const now = document.querySelector('#tree .row.sel'); if (now) now.scrollIntoView({block: 'nearest'}); };
+  if (key === 'ArrowDown'){ pick(rows[i < 0 ? 0 : Math.min(rows.length - 1, i + 1)]); return true; }
+  if (key === 'ArrowUp'){ pick(rows[i < 0 ? 0 : Math.max(0, i - 1)]); return true; }
+  if (i < 0) return false;
+  const r = rows[i], exp = r.getAttribute('aria-expanded'), lvl = +r.getAttribute('aria-level');
+  if (key === 'ArrowRight'){ if (exp === 'false'){ const t = r.querySelector('[data-toggle]'); if (t) t.click(); } else if (exp === 'true') pick(rows[i + 1]); return true; }
+  if (key === 'ArrowLeft'){
+    if (exp === 'true'){ const t = r.querySelector('[data-toggle]'); if (t) t.click(); return true; }
+    for (let j = i - 1; j >= 0; j--) if (+rows[j].getAttribute('aria-level') < lvl){ pick(rows[j]); break; }
+    return true;
+  }
+  return false;
+}
+document.addEventListener('keydown', e => {
+  if (e.defaultPrevented || e.isComposing) return;
+  const mod = IS_MAC ? e.metaKey : e.ctrlKey, typing = typingIn(e.target);
+  // while Settings or this list is open, only these get through
+  const run = (name, arg) => { if ((SET.open || $('keys') || $('goto')) && !['keys', 'refresh', 'goto'].includes(name)) return; if (fleetCommand(name, arg)) e.preventDefault(); };
+  if (e.key === 'Escape'){
+    if ($('keys')){ e.preventDefault(); closeKeys(); return; }
+    if (e.target.id === 'pfilter'){ e.preventDefault(); if (e.target.value){ e.target.value = ''; S.filter = ''; save(); renderMain(); } else e.target.blur(); return; }
+    return;
+  }
+  if (mod && !e.altKey){
+    const k = e.key.toLowerCase();
+    // text size: Fleet.app zooms natively; a browser does it itself
+    if (['=', '+', '-', '_', '0'].includes(e.key) && document.documentElement.classList.contains('native')){
+      try { window.webkit.messageHandlers.fleet.postMessage({zoom: e.key === '0' ? 'reset' : (e.key === '-' || e.key === '_') ? 'out' : 'in'}); e.preventDefault(); } catch (x) {}
+      return;
+    }
+    if (k === 'k' && !e.shiftKey) return run('goto');
+    if (k === 'f' && !e.shiftKey) return run('find');
+    if (k === 'd') return run(e.shiftKey ? 'dock' : 'details');
+    if (k === ',') return run('settings');
+    if (k === '/') return run('keys');
+    if (k === 'r' && !e.shiftKey) return run('refresh');
+    if (k === 't' && !e.shiftKey && !typing) return run('terminal');
+    if (e.key === '[' || e.key === ']') return run('space-step', e.key === '[' ? -1 : 1);
+    if (/^Digit[1-9]$/.test(e.code) && !e.shiftKey) return run('space', +e.code.slice(5) - 1);
+    return;
+  }
+  if (e.altKey && !mod && /^Digit[1-5]$/.test(e.code)) return run('metric', METRIC_KEYS[+e.code.slice(5) - 1]);
+  if (typing || e.metaKey || e.ctrlKey || e.altKey || overlayOpen()) return;
+  if (e.key === '/') return run('find');
+  if (e.key === '?') return run('keys');
+  if (e.key === 'p' || e.key === 'P') return run('pin');
+  if (e.key.startsWith('Arrow')){
+    const a = document.activeElement;
+    if (a && a !== document.body && !a.closest('#tree, .side, .spacebar')) return;
+    if (treeStep(e.key)) e.preventDefault();
+  }
+});
+
+/* ---------- Go to (⌘K): any machine, VM, project, service, container or job, and every command ---------- */
+const GOTO = {q:'', i:0, items:[]};
+const METRIC_NAMES = {cpu:'CPU', mem:'Memory', gpu:'GPU', disk:'Disk I/O', net:'Network'};
+function gotoCommands(){
+  const tree = t => () => { S.tree = t; if (t === 'network') S.view = 'overview'; lastMainHTML = ''; save(); renderAll(); refreshNow(); };
+  return [
+    {label:'Settings', hint:MODK + ',', ic:'gear', run:() => fleetCommand('settings')},
+    {label:'Details: the process list', hint:MODK + 'D', ic:'chip', run:() => fleetCommand('details')},
+    {label:'Find a process', hint:MODK + 'F', ic:'search', run:() => fleetCommand('find')},
+    {label:'Dock Details beside the overview', hint:MODK + SHIFTK + 'D', ic:'panelright', run:() => fleetCommand('dock')}
+  ].concat(METRIC_KEYS.map((k, i) => ({label:'Show ' + METRIC_NAMES[k], hint:ALTK + (i + 1), ic:'chip', run:() => fleetCommand('metric', k)})), [
+    {label:'Machine tree', ic:'server', run:tree('machines')},
+    {label:'Network tree', ic:'net', run:tree('network')},
+    {label:S.pinsOnly ? 'Show all machines in the tree' : 'Show only pins in the tree', ic:'pin', run:() => { S.pinsOnly = !S.pinsOnly; save(); renderTree(); }},
+    {label:'Pin or unpin the selection as a space', hint:'P', ic:'pin', run:() => fleetCommand('pin')},
+    {label:'Open a terminal on the selection', hint:MODK + 'T', ic:'terminal', run:() => fleetCommand('terminal')},
+    {label:'Pin a grouping…', ic:'plus', run:() => openPicker()},
+    {label:'Import a theme…', ic:'upload', run:() => { openSettings().then(() => { const f = $('themefile'); if (f) f.click(); }); }},
+    {label:'Keyboard shortcuts', hint:'?', ic:'info', run:() => openKeys()}
+  ], allThemes().map(t => ({label:'Theme: ' + t.name, ic:'palette', run:() => pickTheme(t.id)})));
+}
+function gotoNodes(){
+  const out = [];
+  (function w(list, path){ list.forEach(n => { out.push({n, path}); w(orderedKids(n), path.concat(n.name)); }); })(sortedRoots(), []);
+  return out;
+}
+// every word must appear; names that start with the query come first, then names that contain it
+function gotoRank(q, name, rest){
+  const hay = (name + ' ' + rest).toLowerCase(), nm = name.toLowerCase(), words = q.split(/\s+/).filter(Boolean);
+  if (!words.every(w => hay.includes(w))) return -1;
+  return nm.startsWith(q) ? 3 : nm.includes(q) ? 2 : words.every(w => nm.includes(w)) ? 1 : 0;
+}
+function gotoItems(){
+  const q = GOTO.q.trim().toLowerCase();
+  const nodesList = gotoNodes().map(({n, path}) => ({n, path, label:n.name, kind:kindLabel(n), run:() => select(n.id)}));
+  const cmds = gotoCommands().map(c => Object.assign({kind:'Command'}, c));
+  if (!q) return nodesList.filter(x => x.n.kind === 'machine').concat(cmds.slice(0, 8));
+  const scored = [];
+  for (const x of nodesList){ const r = gotoRank(q, x.label, [x.kind, x.path.join(' '), x.n.os || '', (x.n.meta && x.n.meta.image) || ''].join(' ')); if (r >= 0) scored.push([r + 0.5, x]); }
+  for (const x of cmds){ const r = gotoRank(q, x.label, 'command'); if (r >= 0) scored.push([r, x]); }
+  return scored.sort((a, b) => b[0] - a[0]).map(x => x[1]).slice(0, 60);
+}
+function renderGoto(){
+  const box = $('gotolist'); if (!box) return;
+  GOTO.items = gotoItems();
+  GOTO.i = Math.max(0, Math.min(GOTO.i, GOTO.items.length - 1));
+  box.innerHTML = GOTO.items.length ? GOTO.items.map((x, i) => {
+    const ic = x.n ? icon(iconOf(x.n)) : icon(x.ic || 'chev'), col = x.n ? (x.n.kind === 'machine' ? 'var(--ink-2)' : colOf(x.n)) : 'var(--ink-3)';
+    const where = x.n && x.path.length ? `<span class="pw">${esc(x.path.join(' › '))}</span>` : '';
+    return `<div class="grow${i === GOTO.i ? ' on' : ''}" role="option" id="go-${i}" aria-selected="${i === GOTO.i}" data-goi="${i}"><span class="ico" style="color:${col}">${ic}</span>`
+      + `<span class="pn"><span>${esc(x.label)}</span>${where}</span>${x.hint ? `<kbd>${esc(x.hint)}</kbd>` : `<span class="pk">${esc(x.kind)}</span>`}</div>`;
+  }).join('') : `<div class="more">Nothing matches “${esc(GOTO.q)}”.</div>`;
+  $('gotoq').setAttribute('aria-activedescendant', GOTO.items.length ? 'go-' + GOTO.i : '');
+  const on = box.querySelector('.grow.on'); if (on) on.scrollIntoView({block:'nearest'});
+}
+function openGoto(){
+  if ($('goto')) return;
+  if (PICK.open) closePicker(false);
+  GOTO.q = ''; GOTO.i = 0;
+  const el = document.createElement('div'); el.id = 'goto'; el.className = 'sheet-bg goto-bg';
+  el.innerHTML = `<div class="goto" role="dialog" aria-modal="true" aria-label="Go to"><div class="pick-h">${icon('search')}<input type="search" id="gotoq" role="combobox" aria-expanded="true" aria-controls="gotolist" aria-autocomplete="list" placeholder="Go to a machine, VM, project, container or job, or type a command" autocomplete="off" spellcheck="false"></div><div class="picklist" id="gotolist" role="listbox"></div><div class="pick-f"><kbd>↑</kbd> <kbd>↓</kbd> to choose · <kbd>Enter</kbd> to go · <kbd>Esc</kbd> to close</div></div>`;
+  el.addEventListener('click', e => { if (e.target === el){ closeGoto(); return; } const r = e.target.closest('[data-goi]'); if (r) runGoto(+r.dataset.goi); });
+  el.addEventListener('mousemove', e => { const r = e.target.closest('[data-goi]'); if (r && +r.dataset.goi !== GOTO.i){ GOTO.i = +r.dataset.goi; el.querySelectorAll('.grow').forEach((g, i) => { g.classList.toggle('on', i === GOTO.i); g.setAttribute('aria-selected', i === GOTO.i); }); } });
+  el.addEventListener('input', e => { if (e.target.id === 'gotoq'){ GOTO.q = e.target.value; GOTO.i = 0; renderGoto(); } });
+  el.addEventListener('keydown', e => {
+    if (e.key === 'Escape'){ e.preventDefault(); e.stopPropagation(); closeGoto(); }
+    else if (e.key === 'ArrowDown' || e.key === 'ArrowUp'){ e.preventDefault(); const n = GOTO.items.length; if (n){ GOTO.i = (GOTO.i + (e.key === 'ArrowDown' ? 1 : -1) + n) % n; renderGoto(); } }
+    else if (e.key === 'Enter'){ e.preventDefault(); runGoto(GOTO.i); }
+  });
+  document.body.appendChild(el);
+  renderGoto();
+  $('gotoq').focus();
+}
+function closeGoto(){ const el = $('goto'); if (el) el.remove(); }
+function runGoto(i){ const x = GOTO.items[i]; if (!x) return; closeGoto(); x.run(); }

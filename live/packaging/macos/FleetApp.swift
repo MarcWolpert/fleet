@@ -51,6 +51,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         web.navigationDelegate = self
         web.uiDelegate = self
         web.setValue(false, forKey: "drawsBackground")  // no white flash before the page paints
+        let z = UserDefaults.standard.double(forKey: "FleetZoom")
+        if z >= 0.5 && z <= 2.5 { web.pageZoom = CGFloat(z) }
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1500, height: 950),
                           styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
                           backing: .buffered, defer: false)
@@ -89,6 +91,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
             window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)  // traffic lights, scroll bars, file panels
             UserDefaults.standard.set(dark, forKey: "FleetThemeDark")
         }
+        if let z = d["zoom"] as? String { zoom(z) }
         if let rs = d["regions"] as? [[Double]] {
             web.regions = rs.filter { $0.count == 4 }.map { NSRect(x: $0[0], y: $0[1], width: $0[2], height: $0[3]) }
         }
@@ -184,11 +187,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
 
     @objc func reloadPage(_ s: Any?) { web.reload() }
 
+    // Text size (⌘+ ⌘− ⌘0), kept for next time.
+    static let zoomSteps: [CGFloat] = [0.67, 0.75, 0.85, 0.92, 1.0, 1.1, 1.2, 1.35, 1.5, 1.7, 2.0]
+    func zoom(_ how: String) {
+        let cur = web.pageZoom, steps = AppDelegate.zoomSteps
+        var next: CGFloat = 1.0
+        if how == "in" { next = steps.first(where: { $0 > cur + 0.001 }) ?? steps.last! }
+        if how == "out" { next = steps.last(where: { $0 < cur - 0.001 }) ?? steps.first! }
+        web.pageZoom = next
+        UserDefaults.standard.set(Double(next), forKey: "FleetZoom")
+    }
+    @objc func zoomIn(_ s: Any?) { zoom("in") }
+    @objc func zoomOut(_ s: Any?) { zoom("out") }
+    @objc func zoomReset(_ s: Any?) { zoom("reset") }
+    // Menu commands the page carries out (the same ones as its keyboard shortcuts).
+    @objc func pageCommand(_ s: NSMenuItem) {
+        guard let c = s.representedObject as? String else { return }
+        web.evaluateJavaScript("window.fleetCommand && window.fleetCommand(\(c))", completionHandler: nil)
+    }
+    func cmdItem(_ title: String, _ js: String, _ key: String, _ mods: NSEvent.ModifierFlags = [.command]) -> NSMenuItem {
+        let i = NSMenuItem(title: title, action: #selector(pageCommand(_:)), keyEquivalent: key)
+        i.keyEquivalentModifierMask = mods
+        i.representedObject = js
+        i.target = self
+        return i
+    }
+
     func buildMenu() {
         let main = NSMenu()
         let appItem = NSMenuItem(); main.addItem(appItem)
         let appMenu = NSMenu()
         appMenu.addItem(withTitle: "About Fleet", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        appMenu.addItem(.separator())
+        appMenu.addItem(cmdItem("Settings…", "'settings'", ","))
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Hide Fleet", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
         appMenu.addItem(withTitle: "Quit Fleet", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
@@ -206,14 +237,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         editItem.submenu = edit
         let viewItem = NSMenuItem(); main.addItem(viewItem)
         let view = NSMenu(title: "View")
+        view.addItem(cmdItem("Go to…", "'goto'", "k"))
+        view.addItem(cmdItem("Find Processes", "'find'", "f"))
+        view.addItem(cmdItem("Details", "'details'", "d"))
+        view.addItem(cmdItem("Dock Details", "'dock'", "d", [.command, .shift]))
+        view.addItem(.separator())
+        for (i, (t, k)) in [("CPU", "cpu"), ("Memory", "mem"), ("GPU", "gpu"), ("Disk I/O", "disk"), ("Network", "net")].enumerated() {
+            view.addItem(cmdItem(t, "'metric', '\(k)'", "\(i + 1)", [.option]))
+        }
+        view.addItem(.separator())
+        view.addItem(withTitle: "Actual Size", action: #selector(zoomReset(_:)), keyEquivalent: "0")
+        view.addItem(withTitle: "Zoom In", action: #selector(zoomIn(_:)), keyEquivalent: "+")
+        view.addItem(withTitle: "Zoom Out", action: #selector(zoomOut(_:)), keyEquivalent: "-")
+        view.addItem(.separator())
         view.addItem(withTitle: "Reload", action: #selector(reloadPage(_:)), keyEquivalent: "r")
         viewItem.submenu = view
+        let spaceItem = NSMenuItem(); main.addItem(spaceItem)
+        let spaces = NSMenu(title: "Spaces")
+        spaces.addItem(cmdItem("Previous Space", "'space-step', -1", "["))
+        spaces.addItem(cmdItem("Next Space", "'space-step', 1", "]"))
+        spaces.addItem(.separator())
+        spaces.addItem(cmdItem("All Machines", "'space', 0", "1"))
+        for n in 2...9 { spaces.addItem(cmdItem("Space \(n)", "'space', \(n - 1)", "\(n)")) }
+        spaces.addItem(.separator())
+        spaces.addItem(cmdItem("Pin or Unpin Selection (P)", "'pin'", ""))  // a bare P in the page; a menu key would fire while typing
+        spaces.addItem(cmdItem("Open Terminal on Selection", "'terminal'", "t"))
+        spaceItem.submenu = spaces
         let winItem = NSMenuItem(); main.addItem(winItem)
         let win = NSMenu(title: "Window")
         win.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
         win.addItem(withTitle: "Zoom", action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")
         winItem.submenu = win
+        let helpItem = NSMenuItem(); main.addItem(helpItem)
+        let help = NSMenu(title: "Help")
+        help.addItem(cmdItem("Keyboard Shortcuts", "'keys'", "/"))
+        helpItem.submenu = help
         NSApp.mainMenu = main
+        NSApp.helpMenu = help
         NSApp.windowsMenu = win
     }
 }
