@@ -80,7 +80,7 @@ def nas(i):
     return {
         "t": t, "ncpu": 8, "hz": 100, "cpu": [1000 + int(round(busy * 100 * dt)), 0, 0, 1000 + int(round((8 - busy) * 100 * dt)), 0, 0, 0, 0],
         "lcpus": [], "mem": [32 * GiB, 24 * GiB], "disk": 1000 + int(9e6 * i),
-        "ifs": {"eth0": nic(6e6, 3e6, phys=True, master="br0", speed="1000"), "br0": nic(1.8e6, 0, bridge=True, addrs=["10.0.0.5/24"]),
+        "ifs": {"eth0": nic(6e6, 3e6, phys=True, master="br0", speed="1000"), "br0": nic(1.8e6, 0, bridge=True, addrs=["198.51.100.5/24"]),
                 "docker0": nic(0, 0, bridge=True), "br-0123456789ab": nic(3e5, 3e5, bridge=True), "vnet0": nic(9e5, 4.5e5, master="br0"),
                 "lo": nic(3e6, 3e6, state="unknown")},
         "procs": procs,
@@ -142,7 +142,7 @@ class Attribution(unittest.TestCase):
 
     def test_interfaces(self):
         self.assertEqual([(x["name"], x["kind"], round(x["rx"], 4), round(x["tx"], 4), x["master"], x["addrs"]) for x in self.v["ifs"]], [
-            ("eth0", "physical", 2.0, 1.0, "br0", []), ("br0", "bridge", 0.6, 0.0, "", ["10.0.0.5/24"]), ("docker0", "bridge", 0.0, 0.0, "", []),
+            ("eth0", "physical", 2.0, 1.0, "br0", []), ("br0", "bridge", 0.6, 0.0, "", ["198.51.100.5/24"]), ("docker0", "bridge", 0.0, 0.0, "", []),
             ("br-0123456789ab", "bridge", 0.1, 0.1, "", []), ("vnet0", "virtual", 0.3, 0.15, "br0", []), ("lo", "loopback", 1.0, 1.0, "", [])])
 
     def test_disks(self):

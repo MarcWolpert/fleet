@@ -33,7 +33,7 @@ def ss(*conns):
     return "\n".join(out) + ("\n" if out else "")
 
 
-IFADDR = {"10.0.0.5": "eth0", "10.0.1.5": "br0"}
+IFADDR = {"198.51.100.5": "eth0", "198.51.100.6": "br0"}
 NGINX, SSHD, SSHD_USER, CURL = ("nginx", 300), ("sshd", 400), ("sshd", 401), ("curl", 500)
 
 
@@ -52,11 +52,11 @@ class ProcessNetwork(unittest.TestCase):
         return got
 
     def test_closed_and_new_connections(self):
-        a = ("10.0.0.5:443", "192.0.2.10:50001")
-        b = ("10.0.0.5:443", "192.0.2.11:50002")
-        c = ("10.0.0.5:443", "192.0.2.12:50003")
-        s = ("10.0.0.5:22", "192.0.2.20:60000")
-        d = ("10.0.1.5:40000", "192.0.2.30:443")
+        a = ("198.51.100.5:443", "192.0.2.10:50001")
+        b = ("198.51.100.5:443", "192.0.2.11:50002")
+        c = ("198.51.100.5:443", "192.0.2.12:50003")
+        s = ("198.51.100.5:22", "192.0.2.20:60000")
+        d = ("198.51.100.6:40000", "192.0.2.30:443")
         got = self.readings(
             # the first reading only sets where counting starts
             (ss(a + ([NGINX], 1000, 500), b + ([NGINX], 4000, 1000), s + ([SSHD, SSHD_USER], 1500, 500)), (300, 400, 401)),
@@ -81,7 +81,7 @@ class ProcessNetwork(unittest.TestCase):
         ])
 
     def test_a_process_with_no_connection_is_not_listed(self):
-        s = ("10.0.0.5:22", "192.0.2.20:60000")
+        s = ("198.51.100.5:22", "192.0.2.20:60000")
         got = self.readings((ss(s + ([SSHD], 100, 100)), (400, 600)), (ss(s + ([SSHD], 150, 100)), (400, 600)))
         self.assertEqual(got, [{"400": (["eth0"], 0)}, {"400": (["eth0"], 50)}])
 
