@@ -263,7 +263,9 @@ class VmCapacity(TreeTest):
         give(f, "nas", host_view([vm("win-vm", [3.5, 16.0, 0, 2.0, 1.0], cpus="4-7")]))
         give(f, "win-vm", view(ncpu=8, cap=[8, 32.0, 0.0, 300.0, 125.0], os="Windows"))
         v = self.record(f, "nas")["vms"][0]
-        self.assertEqual((v["id"], v["status"], v["cap"], v["hostside"]), ("win-vm", "ok", [8, 32.0, 0.0, 300.0, 125.0], [3.5, 16.0, 0, 2.0, 1.0]))
+        self.assertEqual((v["id"], v["status"], v["cap"]), ("win-vm", "ok", [8, 32.0, 0.0, 300.0, 125.0]))
+        # what the host gives it, as a history (#206): its latest reading
+        self.assertEqual({k: h[-1] for k, h in v["hostside"].items()}, {"cpu": 3.5, "mem": 16.0, "gpu": 0.0, "disk": 2.0, "net": 1.0})
 
 
 VM2_CFG = {"id": "lab-vm", "name": "lab-vm", "ssh": "lab-vm", "os": "linux", "vm_on": "nas"}
