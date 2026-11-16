@@ -1,147 +1,221 @@
-<img float="left"  src="https://gitlab.com/mission-center-devs/mission-center/-/raw/main/data/icons/hicolor/scalable/apps/io.missioncenter.MissionCenter.svg" alt="drawing" width="64"/> 
+<div align="center">
 
-# Mission Center
+# Fleet
 
-Monitor your CPU, Memory, Disk, Network and GPU usage with [Mission Center](https://missioncenter.io/)
+**Every machine you manage, in one tree, and where each one's usage goes.**
 
-![](https://gitlab.com/mission-center-devs/mission-center/-/raw/main/screenshots/0001-cpu.png)
+[![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](COPYING)
+[![Platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)](#quick-start)
+[![Based on Mission Center](https://img.shields.io/badge/based%20on-Mission%20Center-3584e4)](https://gitlab.com/mission-center-devs/mission-center)
+
+[Features](#features) · [Quick start](#quick-start) · [Configuration](#configuration) · [How it works](#how-it-works) · [Roadmap](#roadmap) · [Building from source](#building-from-source) · [Contributing](#contributing)
+
+</div>
+
+---
+
+Fleet is a task manager for all your machines at once: laptops, servers, VMs,
+Compose projects, containers and the cron jobs inside them. It's a fork of
+[Mission Center](https://gitlab.com/mission-center-devs/mission-center), which
+shows one Linux machine; Fleet shows the whole fleet as a tree:
+
+```
+home-server (Unraid)
+├─ Base system                      the OS, daemons, apps
+│  └─ Cron jobs                     crontab, systemd timers, …
+├─ Docker Compose
+│  └─ photos: server, ml, redis, db
+├─ Containers: media, backup, …
+└─ VMs
+   └─ app-vm                        a machine again, all the way down
+```
 
 ## Features
 
-* Monitor overall or per-thread CPU usage
-* See system process, thread, and handle count, uptime, clock speed (base and current), cache sizes
-* Monitor RAM and Swap usage
-* See a breakdown of how the memory is being used by the system
-* Monitor Disk utilization and transfer rates
-* Monitor network utilization and transfer speeds
-* See network interface information such as network card name, connection type (Wi-Fi or Ethernet), wireless speeds and
-  frequency, hardware address, IP address
-* Monitor overall GPU usage, video encoder and decoder usage, memory usage and power consumption, powered by the popular
-  NVTOP project
-* Monitor system fans
-* Monitor battery charge and see detailed battery information
-* See a breakdown of resource usage by app and process
-* View and control system services using systemd or OpenRC
-* Supports a minified summary view for simple monitoring
-* Use hardware accelerated rendering for all the graphs in an effort to reduce CPU and overall resource usage
+**Fleet Live** is the version you can use today: a small read-only collector
+plus an app window.
 
-## Limitations
+| | Feature |
+|---|---|
+| ✅ | Machine tree: Base system, Docker Compose (project → service), containers, VMs, recursively |
+| ✅ | Where usage goes: CPU, memory, GPU, disk I/O and network split by type, as a share of capacity or of what's in use |
+| ✅ | Which GPU: per-GPU rows, "what runs on which GPU", and `GPU0`/`GPU1` tags on every workload |
+| ✅ | Scheduled jobs under what runs them: crontab, systemd timers, launchd, Windows Scheduled Tasks, with usage while they run |
+| ✅ | Details: a sortable, filterable process list for any node, groupable by CPU group (CCD, P-cores, E-cores), owner, user or status |
+| ✅ | Logical processors: one live graph per CPU, grouped by CCD, P/E cores or Apple core clusters |
+| ✅ | Network tree: tailnet → machines → interfaces and bridges → VMs and containers, with traffic on each |
+| ✅ | Pinned spaces: pin any machine, VM, project or container from the tree; **All machines** is always there |
+| ✅ | Offline machines explain why in plain language, with the steps to fix it and Retry; reconnecting machines keep their last reading |
+| ✅ | Settings: add and edit machines, test a connection, pick the terminal app and refresh rate |
+| ✅ | Open terminal: ssh to any machine, or a shell inside any container, in your preferred terminal |
+| ✅ | Pick processors, a CCD or a P/E-core group, or a GPU, and see just those, with what runs on them |
+| ✅ | Dock the Details process list beside the overview (drag the Details pill to the right) |
+| ✅ | Details columns: right-click a column header to hide, move or add columns, a layout per detail type |
+| ✅ | Themes: Fleet's own, Monokai Dimmed and 20 more built in (Dracula, Nord, Solarized, Gruvbox, Tokyo Night, Catppuccin, GitHub, …), or **Import theme** from any VS Code colour theme |
+| ✅ | Keyboard: ⌘K goes to any machine, container, job, command or theme; ⌘F finds a process; ⌘1–9 spaces, ⌥1–5 metrics, arrows in the tree, ⌘+/⌘− text size; `?` lists them all |
+| ✅ | macOS app and Linux package, with the Fleet icon |
+| ⬜ | Native app (the Mission Center fork) on macOS, Linux and Windows |
+| ⬜ | Actions (kill, stop, restart, run a job now), each confirmed and logged |
 
-Please note there is ongoing work to overcome all of these.
+## Quick start
 
-* Per-process network monitoring requires manual setup,
-  see [this page](https://gitlab.com/mission-center-devs/mission-center/-/wikis/Home/Nethogs) for more information.
-* Intel GPU monitoring is only supported for Broadwell and later GPUs.
-
-Please also note that as Mission Center is a libadwaita application, it will not follow system-defined stylesheets
-(themes).
-
-## Installing
-
-[AppImage (x86_64)](https://gitlab.com/mission-center-devs/mission-center/-/jobs/15536631699/artifacts/raw/MissionCenter-1.2.0-x86_64.AppImage)  
-[AppImage (ARM64)](https://gitlab.com/mission-center-devs/mission-center/-/jobs/15536631700/artifacts/raw/MissionCenter-1.2.0-aarch64.AppImage)  
-[Flatpak](https://flathub.org/apps/io.missioncenter.MissionCenter)  
-[Snap](https://snapcraft.io/mission-center)
-
-Also available from https://portable-linux-apps.github.io/apps/mission-center.html
-
-Might also be available in your distribution's repository:  
-[![](https://repology.org/badge/vertical-allrepos/mission-center.svg)](https://repology.org/project/mission-center/versions)
-
-Installed by default in:
-
-* [Aurora](https://getaurora.dev/)
-* [Bazzite](https://bazzite.gg)
-* [Bluefin](https://projectbluefin.io/)
-* [DeLinuxCo](https://www.delinuxco.com/)
-
-Source code is available at [GitLab](https://gitlab.com/mission-center-devs/mission-center)
-
-## Screenshots
+Fleet needs **Python 3.11+** on the computer you run it on, and SSH access to
+the machines you want to see. Nothing is installed on those machines.
 
 <details>
-  <summary><b>Show</b></summary>
+<summary><b>macOS</b>: Fleet.app</summary>
 
-  <br/>
+```bash
+git clone https://github.com/MarcWolpert/fleet.git && cd fleet
+live/packaging/macos/build_macos.sh          # → live/dist/Fleet.app (Apple silicon + Intel)
+ditto live/dist/Fleet.app ~/Applications/Fleet.app && open ~/Applications/Fleet.app
+```
 
-*CPU view*  
-![](https://gitlab.com/mission-center-devs/mission-center/-/raw/main/screenshots/0001-cpu.png)
+Fleet.app is a native window with its own Dock icon. It starts the collector
+itself and stops it when you quit; its log is `~/Library/Logs/Fleet.log`.
 
-*Memory view*  
-![](https://gitlab.com/mission-center-devs/mission-center/-/raw/main/screenshots/0002-memory.png)
+</details>
 
-*Disk view*  
-![](https://gitlab.com/mission-center-devs/mission-center/-/raw/main/screenshots/0003-disk.png)
+<details>
+<summary><b>Linux</b>: menu entry and <code>fleet</code> command</summary>
 
-*Ethernet and Wi-Fi view*  
-![](https://gitlab.com/mission-center-devs/mission-center/-/raw/main/screenshots/0004-ethernet.png)
-![](https://gitlab.com/mission-center-devs/mission-center/-/raw/main/screenshots/0005-wifi.png)
+```bash
+git clone https://github.com/MarcWolpert/fleet.git && cd fleet
+live/packaging/linux/build_linux.sh          # → live/dist/fleet-<version>-linux.tar.gz
+tar -xzf live/dist/fleet-*-linux.tar.gz && fleet-*-linux/install.sh
+fleet                                        # or open Fleet from your app menu
+```
 
-*GPU view*  
-![](https://gitlab.com/mission-center-devs/mission-center/-/raw/main/screenshots/0006-gpu.png)
+The window is Chrome, Chromium or Edge in app mode when one is installed,
+otherwise your default browser. `uninstall.sh` removes it again.
 
-*Fan view*  
-![](https://gitlab.com/mission-center-devs/mission-center/-/raw/main/screenshots/0007-fan.png)
+</details>
 
-*Apps page*  
-![](https://gitlab.com/mission-center-devs/mission-center/-/raw/main/screenshots/0008-apps.png)
+<details>
+<summary><b>Windows</b>, or anywhere without installing</summary>
 
-*Services page*  
-![](https://gitlab.com/mission-center-devs/mission-center/-/raw/main/screenshots/0008-services.png)
+```powershell
+git clone https://github.com/MarcWolpert/fleet.git
+cd fleet\live
+.\fleet-live.cmd        # ./fleet-live on macOS and Linux
+```
 
-*Dark mode*  
-![](https://gitlab.com/mission-center-devs/mission-center/-/raw/main/screenshots/0009-cpu-dark.png)
-![](https://gitlab.com/mission-center-devs/mission-center/-/raw/main/screenshots/0010-disk-dark.png)
+</details>
 
-  </details>
+The first run writes a starter `~/.config/fleet/machines.toml` with just this
+computer. Add your machines from **Settings** in the app (or edit the file).
 
-## Building
+## Configuration
 
-See [BUILD.md](BUILD.md) for instructions on building Mission Center.
+`~/.config/fleet/machines.toml`, one `[[machine]]` per machine:
+
+```toml
+interval = 3                      # seconds between readings
+
+[[machine]]
+id = "this"
+name = "this computer"
+kind = "local"
+tile = "laptop"
+
+[[machine]]
+id = "nas"
+name = "my-unraid-box"
+ssh = "root@nas.example.ts.net"   # any ssh destination: a Host alias, user@host, a Tailscale name
+os = "linux"
+tile = "globe"
+
+[[machine]]
+id = "app-vm"
+name = "app-vm"
+ssh = "app-vm"
+os = "linux"
+vm_on = "nas"                     # nests under that host's VMs
+
+[[machine]]
+id = "gaming-pc"
+name = "gaming-pc"
+ssh = "me@gaming-pc"
+os = "windows"
+tile = "desktop"
+```
+
+| Key | Meaning |
+|---|---|
+| `kind = "local"` | the computer running Fleet Live (macOS, Linux or Windows) |
+| `ssh` | how to reach it; uses your `~/.ssh/config`, keys and Tailscale as they are |
+| `os` | `linux` (the host needs `python3`) or `windows` (OpenSSH + PowerShell) |
+| `vm_on`, `domain` | this machine is a VM on another one; `domain` is its libvirt name when it differs |
+| `tile` | icon: `laptop`, `desktop`, `terminal`, `server`, `globe`, `vm` |
+
+Fleet keeps what you arrange in the app beside it, so it survives restarts:
+`pins.json` (pinned spaces), `tilepins.json` (pinned tiles and CPU groups) and
+`ui.json` (Details column layouts, the theme, imported themes).
+
+## Keyboard shortcuts
+
+⌘ on a Mac, Ctrl elsewhere. Press `?` in the app for the full list.
+
+| Keys | Does |
+|---|---|
+| ⌘K | Go to anything: machines, VMs, projects, containers, jobs, commands, themes |
+| ⌘F or `/` | Filter the process list |
+| ⌘D, ⌘⇧D | Details on and off; dock it beside the overview |
+| ⌥1 … ⌥5 | CPU, Memory, GPU, Disk I/O, Network |
+| ⌘1 … ⌘9, ⌘[ ⌘] | Go to a space; previous or next space |
+| ↑ ↓ ← → | Move through the tree; collapse, expand, go to the parent |
+| P | Pin or unpin the selection as a space |
+| ⌘T | Open a terminal on the selection |
+| ⌘+ ⌘− ⌘0 | Text bigger, smaller, actual size |
+| ⌘, | Settings |
+
+## Themes
+
+Settings → Appearance has Fleet's own theme (the default), Monokai Dimmed and
+20 more. Their chart colours were re-tuned where needed so the four kinds of
+workload stay distinct for colour-blind readers. **Import theme** reads a VS Code
+colour theme (`.json`, comments allowed) or a Fleet theme:
+
+```json
+{"name": "Paper", "type": "light", "colors": {"chrome": "#eeeeee", "ink": "#222222", "accent": "#0055cc"}}
+```
+
+Any token in `live/web/themes.js` (`THEME_KEYS`) can be set; the rest are derived.
+
+## How it works
+
+- Each machine gets one SSH session that runs a small collector streamed over
+  stdin (`collect_linux.py` with `python3 -`, `collect_windows.ps1` with
+  `powershell -EncodedCommand`). It loops, sending one reading every few
+  seconds, and ends when the connection closes. It only reads `/proc`, `/sys`,
+  performance counters and listing commands (`docker ps`, `virsh list`,
+  `crontab -l`, `systemctl list-timers`, `nvidia-smi`, …).
+- Compose projects come from Docker's `com.docker.compose.*` labels;
+  container usage comes from each container's cgroup; VMs are matched by their
+  QEMU process or the WSL utility VM.
+- A scheduled job's usage is a breakdown of what runs it, never added on top.
+- Everything stays on your computer: the server listens on `127.0.0.1` only.
+
+## Roadmap
+
+1. **Fleet Live** (now): the read-only web app above.
+2. **Native app:** Mission Center's GTK4/libadwaita UI on macOS, Linux and
+   Windows, with Fleet's tree and spaces, and collectors for macOS and Windows
+   alongside Mission Center's Linux daemon.
+3. **Actions:** kill, stop, restart and run-now everywhere, each confirmed and
+   audit-logged, with protected objects that need a typed confirmation.
+
+## Building from source
+
+Fleet Live is plain Python and HTML; there is nothing to build. The native app
+currently builds exactly like Mission Center on Linux: see [BUILD.md](BUILD.md).
+Mission Center's own README is kept at
+[docs/mission-center/README.md](docs/mission-center/README.md).
 
 ## Contributing
 
-### Issues
-
-Report issues to GitLab [issue tracking system](https://gitlab.com/mission-center-devs/mission-center/-/issues).
-
-### Discord
-
-Join [the Discord server](https://discord.gg/RG7QTeB9yk) and let's talk about what you think is missing or can be
-improved.
-
-### Translations
-
-If you'd like to help translating Mission Center into your language, please head over
-to [Weblate](https://hosted.weblate.org/engage/mission-center/).
-
-<a href="https://hosted.weblate.org/engage/mission-center/">
-  <img src="https://hosted.weblate.org/widgets/mission-center/-/mission-center/multi-auto.svg" alt="Translation status" />
-</a>
-
-### Monetary Contributions
-
-Instead of donating to Mission Center directly, consider supporting the projects that Mission Center depends on:
-
-* [GNOME](https://donate.gnome.org/)
-* [NNG](https://github.com/gdamore)
-* [NVTOP](https://github.com/Syllo/nvtop)
-* [Rust Foundation](https://rustfoundation.org/get-involved/)
-
-If you'd, still, like to support the development of Mission Center financially, please visit
-our [Open Collective page](https://opencollective.com/mission-center).
-
-Comments, suggestions, bug reports and contributions are welcome.
-
-## License
-
-This program is free software; you can redistribute it and/or modify it under the terms of the GNU General Public
-License as published by the Free Software Foundation; either version 3 of the License, or (at your option) any later
-version.
-
-Please see COPYING file in the root of this repository for the complete license text. Alternatively see
-[the official license](https://www.gnu.org/licenses/gpl-3.0.html) as written by the Free Software Foundation.
-
-## Code of Conduct
-
-Mission Center follows the GNOME Code of Conduct. All communications in project spaces are expected to follow it.
+How work is run here (tests first, small stacked PRs, extending upstream
+without editing it) is in [CLAUDE.md](CLAUDE.md) and [AGENTS.md](AGENTS.md);
+the few upstream lines Fleet changes are listed in
+[docs/fleet/HOOKS.md](docs/fleet/HOOKS.md). Fleet is GPL-3.0-or-later, like
+Mission Center.
