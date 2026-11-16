@@ -650,6 +650,14 @@ tr.fmatch>td{background:color-mix(in srgb, var(--stale) 16%, transparent)!import
 .tg-name{font:inherit;background:var(--card);color:var(--ink);border:1px solid var(--line-2);border-radius:5px;padding:1px 5px;width:170px;outline:none}
 .mqbox{position:fixed;z-index:50;border:1px solid var(--accent);background:color-mix(in srgb, var(--accent) 12%, transparent);border-radius:4px;pointer-events:none}
 #tree .row.mqhit{background:color-mix(in srgb, var(--accent) 16%, transparent)}
+
+/* Drag handles in the trees */
+#tree .row{position:relative}
+.tdrag{position:absolute;left:0;top:50%;transform:translateY(-50%);width:12px;height:20px;display:grid;place-items:center;color:var(--ink-3);opacity:0;cursor:grab}
+.tdrag svg{width:11px;height:11px}
+#tree .row:hover .tdrag{opacity:.8}
+#tree .row.dragging{opacity:.45}
+#tree .droptarget{outline:2px dashed color-mix(in srgb, var(--accent) 70%, transparent);outline-offset:-2px;border-radius:8px}
 </style>
 </head>
 <body>

@@ -365,6 +365,7 @@ function renderTree(){
     const st = n.kind === 'machine' ? ' ' + statusClass(n) : '';
     const pin = (n.kind === 'machine' || n.kind === 'project' || n.kind === 'service' || n.kind === 'container' || n.kind === 'group') ? pinBtn(n.id) : '<span style="width:22px;flex:none"></span>';
     return `<div class="row ${n.kind}${st}${S.sel===n.id?' sel':''}" style="--d:${d}" role="treeitem" aria-level="${d+1}" ${kids?`aria-expanded="${open}"`:''} aria-selected="${S.sel===n.id}" data-select="${esc(n.id)}" data-pk="${esc(pk)}">`
+      + `<span class="tdrag" draggable="true" title="Drag into a group" aria-hidden="true">${icon('grip')}</span>`
       + `<button type="button" class="chev${open?' open':''}${kids?'':' leaf'}" ${kids?`data-toggle="${esc(n.id)}" aria-label="${open?'Collapse':'Expand'} ${esc(n.name)}"`:'tabindex="-1" aria-hidden="true"'}>${icon('chev', 2.4)}</button>`
       + `<span class="ico" style="color:${n.kind==='cronfolder'||n.kind==='cron'?'var(--ink-3)':colOf(n)}">${icon(iconOf(n))}</span>`
       + `<button type="button" class="nm" data-select="${esc(n.id)}">${esc(n.name)}</button>${count}${gtag}${dot}${pin}`
@@ -434,6 +435,7 @@ function renderNetTree(){
     const sub = n.kind === 'nmachine' ? `<i class="sdot ${n.status}" title="${esc(n.status)}"></i>` : n.vm ? `<span class="count">${esc(n.vm)}</span>` : n.dnet && n.kind === 'if' ? `<span class="count">${esc(n.dnet)}</span>` : '';
     const rate = `<span>↓ ${rateText(n.rx)}</span><span>↑ ${n.kind === 'ncontainer' ? '—' : rateText(n.tx)}</span>`;
     return `<div class="row${S.netSel===n.id?' sel':''}" style="--d:${d}" role="treeitem" aria-level="${d+1}" ${kids?`aria-expanded="${open}"`:''} data-netsel="${esc(n.id)}" data-pk="${esc(pk)}">`
+      + `<span class="tdrag" draggable="true" title="Drag into a group" aria-hidden="true">${icon('grip')}</span>`
       + `<button type="button" class="chev${open?' open':''}${kids?'':' leaf'}" ${kids?`data-toggle="${esc(n.id)}" aria-label="${open?'Collapse':'Expand'} ${esc(n.name)}"`:'tabindex="-1" aria-hidden="true"'}>${icon('chev', 2.4)}</button>`
       + `<span class="ico" style="color:var(--ink-2)">${icon(ic)}</span><button type="button" class="nm" data-netsel="${esc(n.id)}">${esc(n.name)}</button>${sub}<span class="nrate">${rate}</span></div>`;
   }
@@ -2134,6 +2136,7 @@ function ctxFor(t){
       {label:'Open', run:() => goNode(n.id, 'overview')}, {label:'Show its processes', run:() => goNode(n.id, 'details')},
       pinnable && {label:pinned ? 'Unpin' : 'Pin as a space', run:() => togglePin(n.id)},
       termOk(n) && {label:'Open a terminal', run:() => openTerminal(n.id)},
+      ...groupMoveItems(n.id, tr.dataset.pk),
       '—', {label:'Copy name', run:() => copyText(n.name, n.name)},
       n.kind === 'machine' && n.ssh && {label:'Copy SSH destination', run:() => copyText(n.ssh, 'the SSH destination')}]};
   }
@@ -2253,7 +2256,7 @@ $('tree').addEventListener('dblclick', e => { const h = e.target.closest('.tg-h'
 // the box: a press that moves more than a few pixels draws it instead of clicking
 const MQ = {st:null, until:0};
 $('tree').addEventListener('pointerdown', e => {
-  if (e.button !== 0 || e.target.closest('[data-toggle], [data-pin], [data-unpin], .tpin, .pin, input, .tg-h')) return;
+  if (e.button !== 0 || e.target.closest('[data-toggle], [data-pin], [data-unpin], .tpin, .pin, input, .tg-h, .tdrag')) return;
   MQ.st = {x0:e.clientX, y0:e.clientY, on:false};
 });
 document.addEventListener('pointermove', e => {
@@ -2286,3 +2289,57 @@ function finishMarquee(hits){
   all[key] = list;
   PREFS = Object.assign({}, PREFS, {tgroups:all}); renderTree(); savePrefs('the groups');
 }
+
+// Moving items between groups: by the drag handle on every row, or from the row's menu (issue #22).
+function treeScope(){ return S.tree === 'network' ? 'network' : S.pinsOnly ? 'pins' : 'machines'; }
+function groupOf(key, id){ return ((PREFS.tgroups || {})[key] || []).find(g => g.ids.includes(id)); }
+// id leaves every group at its level; then joins gid, or makes a new group with `withId`
+function moveToGroup(key, id, gid, withId){
+  const all = Object.assign({}, PREFS.tgroups || {});
+  let list = (all[key] || []).map(g => Object.assign({}, g, {ids:g.ids.filter(x => x !== id && x !== withId)}));
+  if (gid) list = list.map(g => g.id === gid ? Object.assign({}, g, {ids:g.ids.concat([id])}) : g);
+  list = list.filter(g => g.ids.length);
+  if (withId){
+    const names = new Set(list.map(g => g.name)), cs = new Set(list.map(g => g.c));
+    let k = 1; while (names.has('Group ' + k)) k++;
+    let c = 0; while (cs.has(c) && c < TG_COLORS.length - 1) c++;
+    list.push({id:'g' + Date.now().toString(36), name:'Group ' + k, c, ids:[withId, id]});
+  }
+  all[key] = list;
+  PREFS = Object.assign({}, PREFS, {tgroups:all}); renderTree(); savePrefs('the groups');
+}
+function groupMoveItems(id, pk){
+  const key = treeScope() + '|' + pk, gs = (PREFS.tgroups || {})[key] || [], mine = gs.find(g => g.ids.includes(id));
+  const items = gs.filter(g => g !== mine).map(g => ({label:'Move to ' + g.name, run:() => moveToGroup(key, id, g.id)}));
+  if (mine) items.push({label:'Remove from ' + mine.name, run:() => moveToGroup(key, id, null)});
+  return items.length ? ['—'].concat(items) : [];
+}
+const TDRAG = {id:null, pk:null};
+$('tree').addEventListener('dragstart', e => {
+  const h = e.target.closest && e.target.closest('.tdrag'); if (!h) return;
+  const row = h.closest('.row'); TDRAG.id = row.dataset.select || row.dataset.netsel; TDRAG.pk = row.dataset.pk;
+  try { e.dataTransfer.setData('application/x-fleet-node', TDRAG.id); e.dataTransfer.effectAllowed = 'move'; } catch (x) {}
+  row.classList.add('dragging');
+});
+$('tree').addEventListener('dragover', e => {
+  if (!TDRAG.id) return;
+  e.preventDefault();
+  document.querySelectorAll('#tree .droptarget').forEach(x => x.classList.remove('droptarget'));
+  const t = e.target.closest && (e.target.closest('.tgroup') || e.target.closest('.row')); if (t) t.classList.add('droptarget');
+});
+$('tree').addEventListener('drop', e => {
+  if (!TDRAG.id) return;
+  e.preventDefault();
+  const {id, pk} = TDRAG, key = treeScope() + '|' + pk;
+  TDRAG.id = null;
+  const row = e.target.closest && e.target.closest('.row'), box = e.target.closest && e.target.closest('.tgroup');
+  const other = () => toast('Only items at the same level can share a group: drag it among its siblings');
+  if (row && (row.dataset.select || row.dataset.netsel) !== id){
+    if (row.dataset.pk !== pk) return other();
+    const g = groupOf(key, row.dataset.select || row.dataset.netsel);
+    return g ? moveToGroup(key, id, g.id) : moveToGroup(key, id, null, row.dataset.select || row.dataset.netsel);
+  }
+  if (box && !row){ if (box.dataset.tgkey !== key) return other(); return moveToGroup(key, id, box.dataset.tgroup); }
+  if (!row && groupOf(key, id)) moveToGroup(key, id, null);   // empty space: out of its group
+});
+$('tree').addEventListener('dragend', () => { TDRAG.id = null; document.querySelectorAll('#tree .dragging, #tree .droptarget').forEach(x => x.classList.remove('dragging', 'droptarget')); });
