@@ -20,7 +20,7 @@ export const WEB = path.resolve(process.env.FLEET_TEST_WEB || path.join(HERE, '.
 
 /* ---------- fixture server ---------- */
 const TYPES = {'.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml'};
-const WRITES = ['/api/config', '/api/test', '/api/terminal', '/api/prefs', '/api/tilepins', '/api/connect', '/api/retry', '/api/pins'];
+const WRITES = ['/api/config', '/api/test', '/api/terminal', '/api/prefs', '/api/tilepins', '/api/connect', '/api/retry', '/api/pins', '/api/inline-terminal', '/api/inline-terminal/close'];
 // A write, judged the way fleet_live.py's do_POST judges it: [status] or [200, its answer]. 403 unless it comes
 // from this page (Host, Origin, X-Fleet: 1), 404 for a route the server doesn't have, 400 for a body it won't keep
 // (the server drops the connection on a body that isn't JSON; the page sees a failed write either way).

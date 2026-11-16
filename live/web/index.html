@@ -373,6 +373,29 @@ main{flex:1;min-width:0;overflow:auto;background:var(--win)}
 .termbtn svg{width:14px;height:14px}
 .termsplit{display:inline-flex;align-items:stretch;vertical-align:middle;margin-left:12px}
 .termsplit .termbtn{margin-left:0;border-top-right-radius:0;border-bottom-right-radius:0}
+/* inline terminals (#329): the main pane splits, the page above (its own scroll) and the terminal below */
+.mcol{flex:1;min-width:0;min-height:0;display:flex;flex-direction:column}
+.mcol>main{min-height:0}
+.tdrawer{position:relative;flex:none;display:flex;flex-direction:column;box-sizing:border-box;background:var(--win);border-top:1px solid var(--line-2)}
+.tdrawer[hidden]{display:none}
+.td-grip{position:absolute;left:0;right:0;top:-4px;height:8px;cursor:ns-resize;z-index:1}
+.td-grip:hover,.td-grip:focus-visible{background:color-mix(in srgb,var(--accent) 35%,transparent);outline:none}
+.td-bar{display:flex;align-items:center;gap:6px;padding:4px 8px;background:var(--chrome-2);border-bottom:1px solid var(--line);min-height:32px}
+.td-tabs{display:flex;gap:4px;overflow-x:auto;min-width:0}
+.td-tab{display:inline-flex;align-items:center;border-radius:7px;color:var(--ink-2)}
+.td-tab.on{background:var(--chrome-act);color:var(--ink)}
+.td-tab [role=tab]{display:inline-flex;align-items:center;gap:6px;padding:4px 4px 4px 9px;font:500 12.5px/1.2 var(--sans);color:inherit;background:none;border:0;white-space:nowrap;cursor:pointer}
+.td-tab [role=tab] svg{width:14px;height:14px}
+.td-tab .td-x{display:inline-grid;place-items:center;width:22px;height:22px;margin-right:2px;border:0;border-radius:5px;background:none;color:var(--ink-3);cursor:pointer}
+.td-tab .td-x:hover{background:var(--hover);color:var(--ink)}
+.td-tab .td-x svg{width:12px;height:12px}
+.td-frames{flex:1;min-height:0;position:relative}
+.td-pane{position:absolute;inset:0}
+.td-pane[hidden]{display:none}
+.td-pane iframe{width:100%;height:100%;border:0;display:block;background:var(--win)}
+.tdrawer.dragging iframe{pointer-events:none}
+.td-msg{padding:14px 16px;color:var(--ink-2);font-size:13px;line-height:1.5}
+.td-msg[role=alert]{color:var(--warn)}
 .termchev{display:inline-grid;place-items:center;padding:0 7px;border:1px solid var(--line-2);border-left:0;border-radius:0 8px 8px 0;color:var(--ink-2)}
 .termchev:hover{background:var(--hover);color:var(--ink)}
 .termchev svg{width:12px;height:12px;transform:rotate(90deg)}
@@ -395,6 +418,8 @@ main{flex:1;min-width:0;overflow:auto;background:var(--win)}
 .tres.good{color:var(--run)}
 .tres.bad{color:var(--warn)}
 .inline{font-size:13px;color:var(--ink-2);display:flex;align-items:center;gap:8px}
+.inline input.inlinecmd,input.inlinecmd{display:block;width:min(100%,420px);margin-top:8px;background:var(--side);border:1px solid var(--line-2);border-radius:8px;padding:6px 8px;color:var(--ink);font:13px var(--mono)}
+input.inlinecmd[hidden]{display:none}
 .inline input{width:64px;background:var(--side);border:1px solid var(--line-2);border-radius:8px;padding:6px 8px;color:var(--ink);font:13px var(--mono)}
 .scopeseg{display:inline-flex;gap:2px;background:var(--chrome-2);border:1px solid var(--line);border-radius:8px;padding:2px;vertical-align:middle;max-width:100%}
 .scopeseg button{padding:4px 9px;border-radius:6px;font:500 12px/1.2 var(--sans);color:var(--ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:150px}
@@ -435,10 +460,10 @@ html.native .addpin{width:32px;height:32px}
 html.native .setbtn{height:32px}
 .split{display:flex;align-items:flex-start;min-height:100%}
 .split>.wrap{flex:1 1 auto;min-width:0}
-.dpanel{position:sticky;top:0;flex:none;max-width:70vw;height:calc(100vh - 112px);overflow:auto;border-left:1px solid var(--line-2);background:var(--panel);padding:14px 14px 24px}
+.dpanel{position:sticky;top:0;flex:none;max-width:70vw;height:var(--paneh,calc(100vh - 112px));overflow:auto;border-left:1px solid var(--line-2);background:var(--panel);padding:14px 14px 24px}
 .dpanel .card{padding:12px}
 .dpanel .pscroll{max-height:none}
-.dresize{position:sticky;top:0;float:left;margin:-14px 0 0 -18px;width:8px;height:calc(100vh - 112px);cursor:col-resize;touch-action:none}
+.dresize{position:sticky;top:0;float:left;margin:-14px 0 0 -18px;width:8px;height:var(--paneh,calc(100vh - 112px));cursor:col-resize;touch-action:none}
 .dresize:hover,.dresize:active{background:linear-gradient(90deg,transparent 3px,var(--accent) 3px,var(--accent) 5px,transparent 5px)}
 .dhead{display:flex;align-items:center;gap:6px;margin-bottom:12px}
 .dtitle{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
@@ -791,7 +816,7 @@ html.hc .sub,html.hc .facts{color:var(--ink-2)}
       <div id="side-note"></div>
       <div class="side-foot"><span id="autoconn"></span><button type="button" class="btn addm-btn" style="margin-left:auto" data-addmachinedlg="1" aria-haspopup="dialog"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>Add a machine</button></div>
     </aside>
-    <main id="main"></main>
+    <div class="mcol" id="mcol"><main id="main"></main></div>
     <div class="mfind" id="mfind" role="search" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg><input type="search" id="mfq" placeholder="Find on this page" aria-label="Find on this page" autocomplete="off" spellcheck="false"><span id="mfcount" aria-live="polite"></span><button type="button" data-mfstep="-1" aria-label="Previous match" title="Previous (⇧Enter)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M6 15l6-6 6 6"/></svg></button><button type="button" data-mfstep="1" aria-label="Next match" title="Next (Enter)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button><button type="button" data-mfclose="1" aria-label="Close find" title="Close (Esc)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
   </div>
 </div>

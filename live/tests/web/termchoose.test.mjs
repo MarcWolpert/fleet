@@ -23,7 +23,7 @@ test('the chevron and a right-click list the terminals; picking one opens it the
     await p.waitFor(`document.querySelector('.hero [data-termchoose="lx"]')`);
     await p.eval(`(document.querySelector('.hero [data-termchoose="lx"]').click(), true)`);
     await p.waitFor(`document.querySelector('#ctxmenu [role=menuitem]')`);
-    assert.deepEqual(await p.eval(MENU), ['✓ Ghostty', 'iTerm', 'Terminal', '—', 'Change the default…']);
+    assert.deepEqual(await p.eval(MENU), ['✓ Ghostty', 'iTerm', 'Terminal', '—', 'Open inline, below the page', 'Change the default…']);
     await pick(p, 'iTerm');
     await p.waitFor(`${JSON.stringify(true)} && document.getElementById('ctxmenu').hidden`);
     await p.waitFor(`true`);
@@ -31,7 +31,7 @@ test('the chevron and a right-click list the terminals; picking one opens it the
     // a right-click on the button itself: the same menu
     const took = await p.eval(`(() => { const b = document.querySelector('.hero [data-terminal="lx"]'), r = b.getBoundingClientRect(); const ev = new MouseEvent('contextmenu', {bubbles: true, cancelable: true, clientX: r.left + 5, clientY: r.top + 5}); b.dispatchEvent(ev); return ev.defaultPrevented; })()`);
     assert.equal(took, true);
-    assert.deepEqual(await p.eval(MENU), ['✓ Ghostty', 'iTerm', 'Terminal', '—', 'Change the default…']);
+    assert.deepEqual(await p.eval(MENU), ['✓ Ghostty', 'iTerm', 'Terminal', '—', 'Open inline, below the page', 'Change the default…']);
     await pick(p, 'Terminal');
     assert.deepEqual(terms(fx).pop(), {node: 'lx', terminal: 'terminal'});
     // the button itself still opens the default

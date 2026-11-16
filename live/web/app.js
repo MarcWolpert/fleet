@@ -1655,7 +1655,7 @@ function renderSettings(){
         <div class="mcards">${d.machines.map(machineCard).join('')}</div>
         <button type="button" class="btn" data-addmachine="1">${icon('plus', 2)}Add a machine</button></section>
       ${appearanceSection()}
-      <section><h3>Terminal</h3><p class="sub">Used by <b>Open terminal</b> on a machine or container.</p><label class="inline">Open in <select data-field="-1:terminal" aria-label="Terminal app"><option value="auto"${d.terminal === 'auto' ? ' selected' : ''}>Automatic${SET.termAuto ? ' (' + esc(SET.termAuto) + ')' : ''}</option>${SET.terminals.map(([k, l]) => `<option value="${esc(k)}"${d.terminal === k ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select></label></section>
+      <section><h3>Terminal</h3><p class="sub">Used by <b>Open terminal</b> on a machine or container.</p><label class="inline">Open in <select data-field="-1:terminal" aria-label="Terminal app"><option value="auto"${d.terminal === 'auto' ? ' selected' : ''}>Automatic${SET.termAuto ? ' (' + esc(SET.termAuto) + ')' : ''}</option>${SET.terminals.map(([k, l]) => `<option value="${esc(k)}"${d.terminal === k ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select></label>${inlineCmdField()}</section>
       <section><h3>Keyboard</h3><p class="sub">Press <kbd>?</kbd> anywhere for the list: find, spaces, metrics, the tree, text size and more.</p><button type="button" class="btn" data-showkeys="1">Show keyboard shortcuts</button></section>
       <section><h3>Refresh</h3><label class="inline">Read every machine every <input type="number" min="1" max="60" step="1" data-field="-1:interval" value="${esc(d.interval)}" aria-label="Seconds between readings"> seconds</label></section>
       <p class="sub">Saved to <code>${esc(SET.path)}</code>; the previous version is kept beside it as <code>machines.toml.bak</code>.</p>
@@ -2974,8 +2974,129 @@ function termMenu(id){
   if (!TERMS.list) loadTerms();
   return {title:'Open in', items:[...list.map(([k, l]) => ({label:(k === TERMS.def ? '✓ ' : '') + l, run:() => openTerminal(id, k)})),
     ...(list.length ? [] : [{label:n && n.kind !== 'machine' ? 'Open shell' : 'Open terminal', run:() => openTerminal(id)}]),
-    '—', {label:'Change the default…', run:() => openSettings()}]};
+    '—', {label:'Open inline, below the page', run:() => openInline(id)}, {label:'Change the default…', run:() => openSettings()}]};
 }
+
+// Settings › Terminal: what an inline terminal starts (#329), kept in ui.json; a login shell when empty
+const INLINE_CMDS = [['', 'A login shell'], ['tmux new -A -s fleet', 'tmux, reattaching to the session named fleet']];
+function inlineCmdField(){
+  const cur = PREFS.inlineCmd || '', custom = !INLINE_CMDS.some(([v]) => v === cur);
+  return `<label class="inline">Inline terminal starts <select data-inlinecmd aria-describedby="inline-help">${INLINE_CMDS.map(([v, l]) => `<option value="${esc(v)}"${!custom && cur === v ? ' selected' : ''}>${esc(l)}</option>`).join('')}<option value="custom"${custom ? ' selected' : ''}>A command of your own…</option></select></label>`
+    + `<input type="text" class="inlinecmd" data-inlinecmdtext maxlength="300" placeholder="e.g. htop" aria-label="Inline terminal command" value="${custom ? esc(cur) : ''}"${custom ? '' : ' hidden'} spellcheck="false" autocomplete="off">`
+    + `<p class="sub" id="inline-help"><b>Open inline</b> (the arrow by Open terminal) splits the pane: the page above, the terminal below, on the machine or in the container. It uses <code>ttyd</code> on this computer.</p>`;
+}
+document.addEventListener('change', e => {
+  const sel = e.target.closest('#sheet [data-inlinecmd]');
+  if (sel){
+    const txt = $('sheet').querySelector('[data-inlinecmdtext]');
+    if (sel.value === 'custom'){ txt.hidden = false; txt.focus(); return; }
+    txt.hidden = true; txt.value = '';
+    PREFS = Object.assign({}, PREFS, {inlineCmd:sel.value}); savePrefs('the inline terminal command');
+    return;
+  }
+  const txt = e.target.closest('#sheet [data-inlinecmdtext]');
+  if (txt){ PREFS = Object.assign({}, PREFS, {inlineCmd:txt.value.replace(/[\r\n]+/g, ' ').trim().slice(0, 300)}); savePrefs('the inline terminal command'); }
+});
+
+// Inline terminals (#329): ttyd, started by the server on loopback at a secret path, framed below the page: the main
+// pane splits, the page above with its own scroll and the terminals below. Each frame (and its session) lives through
+// refreshes, the split moves from the terminals' top edge (S.termH) and closing a tab ends that session.
+// Settings › Terminal picks what it starts.
+const TD = {list:[], active:'', seq:0, ro:null};
+function termHex(c){
+  const d = document.createElement('span'); d.style.color = c; document.body.appendChild(d);
+  const m = getComputedStyle(d).color.match(/rgba?\(([\d.]+)[, ]+([\d.]+)[, ]+([\d.]+)(?:[,/ ]+([\d.]+%?))?/); d.remove();
+  if (!m) return '';
+  const a = m[4] == null ? 1 : (m[4].endsWith('%') ? parseFloat(m[4]) / 100 : +m[4]);
+  return '#' + [m[1], m[2], m[3]].map(v => Math.round(+v).toString(16).padStart(2, '0')).join('') + (a < 1 ? Math.round(a * 255).toString(16).padStart(2, '0') : '');
+}
+function termTheme(){
+  const cs = getComputedStyle(document.documentElement), v = k => termHex(cs.getPropertyValue(k).trim());
+  const t = {background:v('--win'), foreground:v('--ink'), cursor:v('--accent'), selectionBackground:v('--sel')};
+  Object.keys(t).forEach(k => { if (!t[k]) delete t[k]; });
+  return t;
+}
+function openInline(id){
+  const n = nodes[id], key = 'k' + (++TD.seq);
+  const s = {key, id:key, title:n ? n.name : String(id), pending:true};
+  TD.list.push(s); TD.active = key; renderDrawer();
+  api('/api/inline-terminal', {node:id, then:PREFS.inlineCmd || '', theme:termTheme(), fontSize:13}).then(r => {
+    if (!TD.list.includes(s)){ if (r.ok) api('/api/inline-terminal/close', {id:r.id}).catch(() => {}); return; }  // closed while it opened
+    if (r.ok) Object.assign(s, {id:r.id, url:r.url, title:r.title || s.title, pending:false, live:true});
+    else Object.assign(s, {pending:false, error:r.error || 'Couldn’t open an inline terminal'});
+    renderDrawer();
+  }).catch(() => { Object.assign(s, {pending:false, error:'Couldn’t reach Fleet'}); renderDrawer(); });
+}
+function closeInline(id){
+  const s = TD.list.find(x => x.id === id); if (!s) return;
+  TD.list = TD.list.filter(x => x !== s);
+  if (s.live) api('/api/inline-terminal/close', {id:s.id}).catch(() => {});
+  if (TD.active === s.key) TD.active = TD.list.length ? TD.list[TD.list.length - 1].key : '';
+  renderDrawer();
+}
+function termHMax(){ const c = $('mcol'); return Math.max(140, (c ? c.getBoundingClientRect().height : 700) - 140); }   // the page keeps 140px
+function termH(){ return Math.round(Math.min(termHMax(), Math.max(120, Number(S.termH) || 300))); }
+function placeDrawer(){
+  const d = $('tdrawer'), m = $('main'); if (!d || !m) return;
+  if (d.hidden){ m.style.removeProperty('--paneh'); return; }
+  d.style.height = termH() + 'px';
+  m.style.setProperty('--paneh', m.clientHeight + 'px');   // docked Details fills the page's part
+}
+function renderDrawer(){
+  let d = $('tdrawer');
+  if (!TD.list.length){ if (d){ d.hidden = true; placeDrawer(); } return; }
+  if (!d){
+    d = document.createElement('section'); d.id = 'tdrawer'; d.className = 'tdrawer'; d.setAttribute('aria-label', 'Inline terminals');
+    d.innerHTML = `<div class="td-grip" role="separator" aria-orientation="horizontal" aria-label="Resize the terminal" tabindex="0"></div><div class="td-bar"><div class="td-tabs" role="tablist" aria-label="Inline terminals"></div></div><div class="td-frames"></div>`;
+    $('mcol').appendChild(d);
+    if (typeof ResizeObserver === 'function'){ TD.ro = new ResizeObserver(() => placeDrawer()); TD.ro.observe($('mcol')); }
+  }
+  d.hidden = false;
+  if (!TD.list.some(x => x.key === TD.active)) TD.active = TD.list[TD.list.length - 1].key;
+  d.querySelector('.td-tabs').innerHTML = TD.list.map(s => `<span class="td-tab${s.key === TD.active ? ' on' : ''}"><button type="button" role="tab" id="tdt-${esc(s.key)}" aria-controls="tdp-${esc(s.key)}" aria-selected="${s.key === TD.active}" tabindex="${s.key === TD.active ? 0 : -1}" data-tdtab="${esc(s.key)}">${icon('terminal')}${esc(s.title)}${s.pending ? ' <span class="sub">opening…</span>' : ''}</button><button type="button" class="td-x" data-tdclose="${esc(s.id)}" aria-label="Close ${esc(s.title)}" title="Close (ends this session)">${icon('x', 2.2)}</button></span>`).join('');
+  const fr = d.querySelector('.td-frames');
+  [...fr.children].forEach(p => { if (!TD.list.some(s => s.key === p.dataset.tdpane)) p.remove(); });
+  TD.list.forEach(s => {
+    let p = fr.querySelector(`[data-tdpane="${s.key}"]`);
+    if (!p){ p = document.createElement('div'); p.className = 'td-pane'; p.dataset.tdpane = s.key; p.id = 'tdp-' + s.key; p.setAttribute('role', 'tabpanel'); p.setAttribute('aria-labelledby', 'tdt-' + s.key); fr.appendChild(p); }
+    if (s.url && !p.querySelector('iframe')){
+      p.textContent = '';
+      const f = document.createElement('iframe'); f.src = s.url; f.title = 'Terminal: ' + s.title; f.setAttribute('allow', 'clipboard-read; clipboard-write');
+      f.addEventListener('load', () => { if (TD.active === s.key) f.focus(); }, {once:true});
+      p.appendChild(f);
+    } else if (!s.url){
+      p.innerHTML = s.error ? `<div class="td-msg" role="alert">${esc(s.error)}</div>` : `<div class="td-msg">Starting ${esc(s.title)}…</div>`;
+    }
+    p.hidden = s.key !== TD.active;
+  });
+  placeDrawer();
+}
+function setTermH(h, keep){
+  S.termH = Math.round(Math.min(termHMax(), Math.max(120, h)));
+  placeDrawer();
+  const g = document.querySelector('#tdrawer .td-grip'); if (g) g.setAttribute('aria-valuenow', S.termH);
+  if (keep) save();
+}
+document.addEventListener('click', e => {
+  const x = e.target.closest('#tdrawer [data-tdclose]'); if (x){ closeInline(x.dataset.tdclose); return; }
+  const t = e.target.closest('#tdrawer [data-tdtab]'); if (t){ TD.active = t.dataset.tdtab; renderDrawer(); }
+});
+document.addEventListener('pointerdown', e => {
+  const g = e.target.closest('#tdrawer .td-grip'); if (!g || e.button !== 0) return;
+  e.preventDefault();
+  const d = $('tdrawer'), y0 = e.clientY, h0 = d.getBoundingClientRect().height;
+  d.classList.add('dragging');   // the frames don't swallow the drag
+  const mv = ev => setTermH(h0 + (y0 - ev.clientY), false);
+  const up = ev => { document.removeEventListener('pointermove', mv); document.removeEventListener('pointerup', up); d.classList.remove('dragging'); setTermH(h0 + (y0 - ev.clientY), true); };
+  document.addEventListener('pointermove', mv); document.addEventListener('pointerup', up);
+});
+document.addEventListener('keydown', e => {
+  const g = e.target.closest && e.target.closest('#tdrawer .td-grip'); if (!g) return;
+  const step = e.shiftKey ? 80 : 20, h = termH();
+  if (e.key === 'ArrowUp'){ e.preventDefault(); setTermH(h + step, true); }
+  else if (e.key === 'ArrowDown'){ e.preventDefault(); setTermH(h - step, true); }
+});
+window.addEventListener('resize', () => placeDrawer());
 
 // The zoom level by Settings when it isn't 100% (#225): Fleet.app calls this after every zoom and on every load
 window.fleetZoomed = z => {

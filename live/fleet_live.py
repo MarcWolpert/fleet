@@ -13,7 +13,7 @@ connection closes. Nothing is installed on any machine and nothing is changed.
 Usage: python3 fleet_live.py [--port 4518] [--config PATH] [--open]
 """
 import argparse, base64, collections, ctypes, ctypes.util, glob, http.server, json, os, platform, plistlib, shlex
-import re, shutil, subprocess, sys, tempfile, threading, time, tomllib, urllib.parse, urllib.request, webbrowser, zlib
+import re, secrets, shutil, subprocess, sys, tempfile, threading, time, tomllib, urllib.parse, urllib.request, webbrowser, zlib
 
 VERSION = "0.0.1"
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -257,6 +257,8 @@ def reap_leftover_collectors():
 
 
 def stop_collectors(fleet):
+    for sid in list(INLINE):   # inline terminals end with Fleet
+        close_inline(sid)
     for m in fleet.machines.values():
         p = m.proc
         if p and p.poll() is None:
@@ -2438,6 +2440,80 @@ def open_terminal(choice, argv, title):
     raise RuntimeError("No terminal app found. Set $TERMINAL or install one.")
 
 
+# Inline terminals (#329): ttyd serves a terminal running the same command as Open terminal, on loopback only, at a
+# random port and an unguessable path, for one client, letting only its own page connect. The page frames it.
+INLINE = {}   # session id -> {"proc", "url", "title", "t"}
+INLINE_LOCK = threading.Lock()
+INLINE_MAX = 6
+
+
+def ttyd_path():
+    return shutil.which("ttyd") or next((p for p in ("/opt/homebrew/bin/ttyd", "/usr/local/bin/ttyd", "/usr/bin/ttyd") if os.path.exists(p)), None)
+
+
+def ttyd_argv(ttyd, token, argv, opts):
+    lo = "lo0" if platform.system() == "Darwin" else "lo"
+    a = [ttyd, "--port", "0", "--interface", lo, "--once", "--writable", "--check-origin", "--base-path", "/" + token]
+    for k, v in opts.items():
+        a += ["--client-option", "%s=%s" % (k, v)]
+    return a + list(argv)
+
+
+def inline_argv(fleet, node_id, then=""):
+    """(argv, title) an inline terminal runs: what Open terminal runs; for a machine, then (the Settings' command,
+    e.g. tmux new -A -s fleet) runs there instead of a plain login shell. A container gets its shell as it is."""
+    then = (then or "").strip()
+    if len(then) > 300 or re.search(r"[\r\n\x00]", then):
+        raise ValueError("That command is too long or has more than one line.")
+    argv, title = terminal_target(fleet, node_id)
+    if argv is None:   # this computer
+        sh = os.environ.get("SHELL") or "/bin/sh"
+        return ([sh, "-lc", then] if then else [sh, "-l"]), title
+    if then and argv[0] == "ssh" and len(argv) == 2:
+        return ["ssh", "-t", argv[1], then], title
+    return argv, title
+
+
+def open_inline(argv, title, opts):
+    ttyd = ttyd_path()
+    if not ttyd:
+        raise RuntimeError("Inline terminals use ttyd, which isn't installed here: brew install ttyd (macOS), sudo apt install ttyd (Debian, Ubuntu).")
+    token = secrets.token_urlsafe(24)
+    p = subprocess.Popen(ttyd_argv(ttyd, token, argv, opts), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    port, seen, end = None, [], time.time() + 6
+    while time.time() < end:
+        line = p.stdout.readline()
+        if not line and p.poll() is not None:
+            break
+        seen.append(line.strip())
+        m = re.search(r"Listening on port: (\d+)", line)
+        if m:
+            port = int(m.group(1))
+            break
+    if not port:
+        p.kill()
+        raise RuntimeError("ttyd didn't start: " + (" ".join(x for x in seen if x)[-200:] or "no answer"))
+    threading.Thread(target=lambda: [None for _ in p.stdout], daemon=True).start()   # keep its output drained
+    sid = token[:12]
+    with INLINE_LOCK:
+        INLINE[sid] = {"proc": p, "url": "http://127.0.0.1:%d/%s/" % (port, token), "title": title, "t": time.time()}
+        old = sorted(INLINE, key=lambda k: INLINE[k]["t"])[:-INLINE_MAX]
+    for k in old:
+        close_inline(k)
+    return {"id": sid, "url": INLINE[sid]["url"], "title": title}
+
+
+def close_inline(sid):
+    with INLINE_LOCK:
+        s = INLINE.pop(sid, None)
+    if s and s["proc"].poll() is None:
+        try:
+            s["proc"].terminate()
+        except Exception:
+            pass
+    return bool(s)
+
+
 def terminal_target(fleet, node_id):
     """(argv, title) for a node: ssh to a machine, a local shell, or a shell inside a container."""
     machine = fleet.machines.get(node_id)
@@ -2612,6 +2688,21 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if u.path == "/api/test":
             d = self.read_json() or {}
             return self.send_json(test_connection(str(d.get("ssh", "")), str(d.get("os", "linux"))))
+        if u.path == "/api/inline-terminal":   # #329: start one; {node, then, theme, fontSize}
+            d = self.read_json() or {}
+            try:
+                argv, title = inline_argv(self.fleet, str(d.get("node", "")), str(d.get("then", "")))
+                th = d.get("theme") if isinstance(d.get("theme"), dict) else {}
+                keep = {k: str(v)[:32] for k, v in th.items() if k in ("background", "foreground", "cursor", "selectionBackground") and re.match(r"^#[0-9a-fA-F]{3,8}$", str(v))}
+                opts = {"fontSize": str(max(9, min(24, int(d.get("fontSize") or 13)))), "titleFixed": title}
+                if keep:
+                    opts["theme"] = json.dumps(keep, separators=(",", ":"))
+                return self.send_json(dict(open_inline(argv, title, opts), ok=True))
+            except Exception as e:
+                return self.send_json({"ok": False, "error": str(e)[:300]})
+        if u.path == "/api/inline-terminal/close":
+            d = self.read_json() or {}
+            return self.send_json({"ok": close_inline(str(d.get("id", "")))})
         if u.path == "/api/terminal":
             d = self.read_json() or {}
             try:
