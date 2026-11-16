@@ -140,3 +140,190 @@ test('one click folds a group to its header; another brings it back exactly as i
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
 });
+
+// Renaming a group survives the tree being redrawn while you type: a poll that brings other rows (the network tree's,
+// or a new node in the machine tree) leaves the name field, what's in it and its focus alone, so the rest of the name
+// is typed into it, not read as shortcuts ('p' pins, '/' finds). The redraw happens once the name is in (#293).
+const typeKeys = async (p, text) => { for (const c of text){ await p.send('Input.dispatchKeyEvent', {type: 'keyDown', key: c, text: c}); await p.send('Input.dispatchKeyEvent', {type: 'keyUp', key: c}); } };
+const NAMEBOX = `(() => { const i = document.querySelector('#tree input.tg-name'); return i ? {value: i.value, focused: document.activeElement === i} : null; })()`;
+const dblHeader = p => p.eval(`(() => { const h = document.querySelector('#tree .tg-h'); h.dispatchEvent(new MouseEvent('dblclick', {bubbles: true, cancelable: true})); return true; })()`);
+test('renaming a group in the network tree survives a poll that brings other rows', async () => {
+  const fx = fixture();
+  const nm = (id, name) => ({id, name, status: 'ok', ts: {ip: '100.64.0.' + id.length, online: true, direct: true}, ifs: []});
+  fx.net = {tailnet: 'tailnet', machines: [nm('lx', 'lab-linux'), nm('lx2', 'lab-linux-2'), nm('mac', 'lab-mac')]};
+  fx.fleet.prefs = {tgroups: {'network|net:tailnet': [{id: 'gn', name: 'Linux', ids: ['net:m:lx', 'net:m:lx2']}]}};
+  const p = await open({tree: 'network', netSel: 'net:tailnet'}, fx);
+  try {
+    await p.waitFor(`${NROW('lab-mac')} && document.querySelector('#tree .tg-h')`);
+    await dblHeader(p);
+    await p.waitFor(`document.activeElement && document.activeElement.classList.contains('tg-name')`);
+    await p.eval(`(document.activeElement.select(), true)`);
+    await typeKeys(p, 'Proxmox h');
+    await p.waitFor(`!netBusy && (refreshNet(), true)`);   // the same rows: only the rates (#157)
+    await p.waitFor(`!netBusy`);
+    assert.deepEqual(await p.eval(NAMEBOX), {value: 'Proxmox h', focused: true});
+    fx.net.machines.push(nm('win', 'lab-windows'));
+    await p.waitFor(`(refreshNet(), NET.machines.length === 4)`);
+    await p.waitFor(`!netBusy`);
+    assert.deepEqual(await p.eval(NAMEBOX), {value: 'Proxmox h', focused: true});
+    await typeKeys(p, 'osts/p');
+    assert.deepEqual(await p.eval(NAMEBOX), {value: 'Proxmox hosts/p', focused: true});
+    await p.key('Enter');
+    await p.waitFor(`${NROW('lab-windows')} && !document.querySelector('#tree input.tg-name')`);
+    assert.deepEqual(await p.eval(GROUPS), [{name: 'Proxmox hosts/p', rows: ['net:m:lx', 'net:m:lx2']}]);
+    assert.equal(saved(fx)['network|net:tailnet'][0].name, 'Proxmox hosts/p');
+    assert.deepEqual(await p.eval(`({pins: PINS, find: !!(document.getElementById('treefind') && !document.getElementById('treefind').hidden), mfind: TF.open || false})`), {pins: [], find: false, mfind: false});
+    assert.deepEqual((fx.posts || []).filter(x => x.path === '/api/pins'), []);
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
+test('renaming a group in the machine tree survives a poll that brings a new node', async () => {
+  const fx = fixture();
+  fx.fleet.prefs = {tgroups: {'machines|root': [{id: 'g1', name: 'Lab', ids: ['lx', 'lx2']}]}};
+  const p = await open({sel: 'win', open: Object.assign({}, CLOSED, {mac: true, 'mac/containers': true})}, fx);
+  try {
+    await p.waitFor(`${ROW('mac/containers/web')} && document.querySelector('#tree .tg-h')`);
+    await dblHeader(p);
+    await p.waitFor(`document.activeElement && document.activeElement.classList.contains('tg-name')`);
+    await p.eval(`(document.activeElement.select(), true)`);
+    await typeKeys(p, 'Proxmox h');
+    const mac = fx.fleet.machines.find(m => m.id === 'mac');
+    mac.containers = mac.containers.concat([{id: 'mac/containers/db', name: 'db', image: 'postgres:1', status: 'Up 2 hours', g: []}]);
+    await p.waitFor(`(refreshNow(), !!nodes['mac/containers/db'])`);
+    await p.waitFor(`!busy`);
+    assert.deepEqual(await p.eval(NAMEBOX), {value: 'Proxmox h', focused: true});
+    await typeKeys(p, 'osts/p');
+    assert.deepEqual(await p.eval(NAMEBOX), {value: 'Proxmox hosts/p', focused: true});
+    await p.key('Enter');
+    await p.waitFor(`${ROW('mac/containers/db')} && !document.querySelector('#tree input.tg-name')`);
+    assert.deepEqual(await p.eval(GROUPS), [{name: 'Proxmox hosts/p', rows: ['lx', 'lx2']}]);
+    assert.equal(saved(fx)['machines|root'][0].name, 'Proxmox hosts/p');
+    assert.deepEqual(await p.eval(`({pins: PINS, sel: S.sel, tf: !!TF.open})`), {pins: [], sel: 'win', tf: false});
+    assert.deepEqual((fx.posts || []).filter(x => x.path === '/api/pins'), []);
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
+// The box groups what you can see: rows scrolled out of the tree's view (above or below it) stay out of it, even when
+// the box is dragged past the tree's edge into the title above. A hidden row at another level doesn't refuse the
+// box, and a hidden sibling doesn't join (#293).
+const cloneMachine = (m, id, name) => Object.assign(JSON.parse(JSON.stringify(m).split('"' + m.id + '/').join('"' + id + '/').split('"' + m.id + '"').join('"' + id + '"')), {name});
+function manyMachines(){
+  const fx = fixture(), lx2 = fx.fleet.machines.find(m => m.id === 'lx2');
+  for (let i = 3; i <= 12; i++) fx.fleet.machines.push(cloneMachine(lx2, 'lab' + i, 'lab-' + String(i).padStart(2, '0')));
+  return fx;
+}
+const allClosed = fx => Object.fromEntries(fx.fleet.machines.map(m => [m.id, false]));
+// press in a row, drag straight up to y, let go (and the click that follows a drag)
+const dragUpTo = (p, from, y1) => p.eval(`(() => { const a = (${from}).getBoundingClientRect(); const x0 = a.left + 40, y0 = a.top + a.height / 2; const t = document.elementFromPoint(x0, y0); const o = (x, y) => ({bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0, pointerId: 1}); t.dispatchEvent(new PointerEvent('pointerdown', o(x0, y0))); for (let i = 1; i <= 6; i++) document.dispatchEvent(new PointerEvent('pointermove', o(x0 + 10 * i, y0 + (${y1} - y0) * i / 6))); document.dispatchEvent(new PointerEvent('pointerup', o(x0 + 60, ${y1}))); t.dispatchEvent(new MouseEvent('click', o(x0 + 60, ${y1}))); return true; })()`);
+const VISIBLE = `(() => { const t = document.getElementById('tree').getBoundingClientRect(); return [...document.querySelectorAll('#tree .row[data-select]')].filter(r => { const b = r.getBoundingClientRect(); return Math.min(b.bottom, t.bottom) - Math.max(b.top, t.top) >= b.height / 2; }).map(r => r.dataset.select); })()`;
+for (const [name, open] of [
+  ['hidden siblings above stay out of it', {}],
+  ['a hidden row at another level does not refuse it', {lab3: true}]])
+  test(`a box dragged past the top of a scrolled tree groups only the rows you can see: ${name}`, async () => {
+    const fx = manyMachines();
+    const p = await browser.page(fx, {ui: ui({sel: 'fleet', open: Object.assign(allClosed(fx), open)}), height: 600});
+    try {
+      await p.waitFor(`document.querySelectorAll('#tree .row').length > 10`);
+      await p.eval(`(() => { const t = document.getElementById('tree'); t.scrollTop = 98; return true; })()`);
+      const seen = await p.eval(VISIBLE), top3 = seen.slice(0, 3);
+      assert.equal(await p.eval(`document.getElementById('tree').scrollTop`), 98);   // three rows (and the tree's padding) out of view
+      assert.deepEqual(top3, open.lab3 ? ['lab4', 'lab5', 'lab6'] : ['lab6', 'lab7', 'lab8']);
+      const titleTop = await p.eval(`document.getElementById('tree-title').getBoundingClientRect().top`);
+      await dragUpTo(p, ROW(top3[2]), titleTop - 25);   // about 90 px above the tree's top: three hidden rows' worth
+      await p.waitFor(`document.querySelector('#tree .tgroup') || (document.getElementById('toast') || {}).textContent`);
+      assert.equal(await p.eval(`(document.getElementById('toast') || {}).textContent || ''`), '');
+      assert.deepEqual(saved(fx)['machines|root'].map(g => g.ids), [top3]);
+      assert.deepEqual(Object.keys(saved(fx)), ['machines|root']);
+      assert.deepEqual(await p.eval(`[...document.querySelectorAll('#tree .tgroup .row')].map(r => r.dataset.select)`), top3);
+      assert.equal(await p.eval(`S.sel`), 'fleet');
+      assert.deepEqual(p.errors, []);
+    } finally { await p.close(); }
+  });
+
+// A real double-click on a group's name renames it (#295). The first click selects the group and redraws the tree,
+// so the second lands on a new header and the browser sends no dblclick; the second click itself says it's one.
+async function realDblclick(p, selector){
+  const r = await p.eval(`(() => { const e = document.querySelector(${JSON.stringify(selector)}), b = e.getBoundingClientRect(); return {x: b.left + b.width / 2, y: b.top + b.height / 2}; })()`);
+  await p.send('Input.dispatchMouseEvent', {type: 'mouseMoved', x: r.x, y: r.y});
+  for (const clickCount of [1, 2]){
+    await p.send('Input.dispatchMouseEvent', {type: 'mousePressed', x: r.x, y: r.y, button: 'left', buttons: 1, clickCount});
+    await p.send('Input.dispatchMouseEvent', {type: 'mouseReleased', x: r.x, y: r.y, button: 'left', buttons: 0, clickCount});
+  }
+}
+for (const [name, over, key, ids, sel] of [
+  ['the machine tree', {sel: 'fleet', open: CLOSED}, 'machines|root', ['lx', 'lx2'], 'div:g1'],
+  ['Pins only', {sel: 'fleet', open: CLOSED, pinsOnly: true}, 'pins|root', ['lx', 'mac'], 'div:g1'],
+  ['the network tree (its header selects nothing)', {tree: 'network', netSel: 'net:tailnet', sel: 'lx'}, 'network|net:tailnet', ['net:m:lx', 'net:m:lx2'], 'lx']])
+  test(`a real double-click on a group's name renames it: ${name}`, async () => {
+    const fx = fixture(); fx.fleet.pins = ['lx', 'mac'];
+    const nm = (id, nme) => ({id, name: nme, status: 'ok', ts: {ip: '100.64.0.' + id.length, online: true, direct: true}, ifs: []});
+    fx.net = {tailnet: 'tailnet', machines: [nm('lx', 'lab-linux'), nm('lx2', 'lab-linux-2'), nm('mac', 'lab-mac')]};
+    fx.fleet.prefs = {tgroups: {[key]: [{id: 'g1', name: 'Lab', ids}]}};
+    const p = await open(over, fx);
+    try {
+      await p.waitFor(`document.querySelector('#tree .tgroup[data-tgroup="g1"] .tg-n')`);
+      await realDblclick(p, '#tree .tgroup[data-tgroup="g1"] .tg-n');
+      await p.waitFor(`document.activeElement && document.activeElement.classList.contains('tg-name')`).catch(() => null);
+      assert.deepEqual(await p.eval(NAMEBOX), {value: 'Lab', focused: true});
+      assert.equal(await p.eval(`S.sel`), sel);
+      await p.eval(`(document.activeElement.select(), true)`);
+      await typeKeys(p, 'Bench');
+      await p.key('Enter');
+      await p.waitFor(`!document.querySelector('#tree input.tg-name')`);
+      assert.deepEqual(await p.eval(`[...document.querySelectorAll('#tree .tgroup .tg-n')].map(x => x.textContent)`), ['Bench']);
+      assert.deepEqual(saved(fx)[key].map(g => [g.id, g.name, g.ids]), [['g1', 'Bench', ids]]);
+      assert.deepEqual(p.errors, []);
+    } finally { await p.close(); }
+  });
+
+// when the browser does send the dblclick too (nothing redrawn between the clicks), one name field opens, even where
+// the group also shows as a row of its own (a pinned group in Pins only)
+test('a double-click sent as a click and a dblclick opens one name field', async () => {
+  const fx = fixture(); fx.fleet.pins = ['lx', 'mac', 'div:g1']; fx.fleet.prefs = {tgroups: {'pins|root': [{id: 'g1', name: 'Lab', ids: ['lx', 'mac']}]}};
+  const p = await open({sel: 'fleet', open: CLOSED, pinsOnly: true}, fx);
+  try {
+    await p.waitFor(`document.querySelector('#tree .tgroup[data-tgroup="g1"] .tg-n')`);
+    await p.eval(`(() => { const t = document.querySelector('#tree .tgroup[data-tgroup="g1"] .tg-n'); t.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, detail: 2})); document.querySelector('#tree .tgroup[data-tgroup="g1"] .tg-h').dispatchEvent(new MouseEvent('dblclick', {bubbles: true, cancelable: true, detail: 2})); return true; })()`);
+    assert.equal(await p.eval(`document.querySelectorAll('#tree input.tg-name').length`), 1);
+    assert.deepEqual(await p.eval(NAMEBOX), {value: 'Lab', focused: true});
+    await p.key('Escape');
+    await p.waitFor(`!document.querySelector('#tree input.tg-name')`);
+    assert.deepEqual(await p.eval(`[...document.querySelectorAll('#tree .tgroup .tg-n')].map(x => x.textContent)`), ['Lab']);
+    assert.equal(saved(fx), undefined);
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
+// Find in the tree sees inside a folded group (#295): while it filters, a folded group shows what in it matches,
+// as a collapsed row opens on the way to a match; the fold is kept, and comes back when the find closes.
+test('find in the tree shows matches inside a folded group, and the fold comes back after', async () => {
+  const fx = fixture(); fx.fleet.prefs = {tgroups: {'machines|root': [{id: 'g1', name: 'Lab', ids: ['lx', 'lx2']}]}};
+  const p = await browser.page(fx, {ui: ui({sel: 'fleet', open: CLOSED, gfold: {g1: true}}), height: 900});
+  const press = (key, o = {}) => p.eval(`(() => { const t = document.activeElement || document.body; t.dispatchEvent(new KeyboardEvent('keydown', Object.assign({key: ${JSON.stringify(key)}, code: ${JSON.stringify(o.code || '')}, bubbles: true, cancelable: true}, ${JSON.stringify(o.mod ? {metaKey: true, ctrlKey: true} : {})}))); return true; })()`);
+  const type = v => p.eval(`(() => { const i = document.getElementById('tfq'); i.value = ${JSON.stringify(v)}; i.dispatchEvent(new Event('input', {bubbles: true})); return true; })()`);
+  const TREE = `({rows: [...document.querySelectorAll('#tree .row')].map(r => (r.closest('.tgroup') ? 'Lab>' : '') + r.dataset.select), empty: (document.querySelector('#tree .tempty') || {}).textContent || ''})`;
+  try {
+    await p.waitFor(`document.querySelector('#tree .tgroup[data-tgroup="g1"] .tg-h')`);
+    assert.deepEqual(await p.eval(TREE), {rows: ['mac', 'win'], empty: ''});
+    await p.eval(`(() => { document.querySelector('#tree .row').dispatchEvent(new PointerEvent('pointerdown', {bubbles: true})); return true; })()`);
+    await press('f', {mod: true, code: 'KeyF'});
+    await p.waitFor(`document.activeElement && document.activeElement.id === 'tfq'`);
+    await type('lab-linux');
+    await p.waitFor(`TF.q === 'lab-linux'`);
+    assert.deepEqual(await p.eval(TREE), {rows: ['Lab>lx', 'Lab>lx2'], empty: ''});
+    await type('web');
+    await p.waitFor(`TF.q === 'web'`);
+    assert.deepEqual(await p.eval(TREE), {rows: ['Lab>lx', 'Lab>lx/containers', 'Lab>lx/containers/web', 'Lab>lx2', 'Lab>lx2/containers', 'Lab>lx2/containers/web',
+      'mac', 'mac/containers', 'mac/containers/web', 'win', 'win/containers', 'win/containers/web'], empty: ''});
+    await type('nothing-has-this');
+    await p.waitFor(`TF.q === 'nothing-has-this'`);
+    assert.deepEqual(await p.eval(TREE), {rows: [], empty: 'Nothing in the tree matches “nothing-has-this”.'});
+    await press('Escape');
+    await p.waitFor(`!TF.q`);
+    assert.deepEqual(await p.eval(TREE), {rows: ['mac', 'win'], empty: ''});
+    assert.deepEqual(await p.eval(`S.gfold`), {g1: true});
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});

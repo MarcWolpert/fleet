@@ -185,10 +185,31 @@ function ctxOf(key){
     bt:(metric, i) => { const o = {base:0, compose:0, container:0, vm:0}; roots.forEach(r => { const b = byType(r, metric, i); for (const k in o) o[k] += b[k]; }); return o; },
     cap:metric => roots.filter(r => hasData(r)).reduce((s, r) => s + capOf(r, metric), 0)};
   const m = nodes[key];
-  if (m && m.kind === 'division' && !m.parent) return {name:m.name,
-    bt:(metric, i) => { const o = {base:0, compose:0, container:0, vm:0}; m.children.forEach(r => { const b = byType(r, metric, i); for (const k in o) o[k] += b[k]; }); return o; },
-    cap:metric => m.children.filter(r => hasData(r)).reduce((s, r) => s + capOf(r, metric), 0)};
+  if (m && m.kind === 'division' && !m.parent) return {name:m.name, bt:(metric, i) => divBt(m, metric, i),
+    cap:metric => divHosts(m).filter(r => hasData(r)).reduce((s, r) => s + capOf(r, metric), 0)};
   return {name:m.name, bt:(metric, i) => byType(m, metric, i), cap:metric => capOf(m.kind === 'machine' ? m : hostOf(m), metric)};
+}
+// A group with nothing above it counts against the machines its members run on (#294): a group of machines, their
+// own; a group of things on several machines (Pins only groups anything), the machines those are on.
+const topMachine = n => n.kind === 'machine' && !n.parent;
+function divHosts(d, seen = new Set([d])){
+  const out = new Set();
+  d.children.forEach(c => {
+    if (topMachine(c)) out.add(c);
+    else if (c.kind === 'division' && !c.parent){ if (!seen.has(c)){ seen.add(c); divHosts(c, seen).forEach(h => out.add(h)); } }
+    else { const h = hostOf(c); if (h.kind === 'machine') out.add(h); }
+  });
+  return [...out];
+}
+// ...and adds up its members by type: a machine by what's in it, anything else as what it is
+function divBt(d, metric, i, seen = new Set([d])){
+  const o = {base:0, compose:0, container:0, vm:0};
+  d.children.forEach(c => {
+    const b = topMachine(c) ? byType(c, metric, i) : c.kind === 'division' && !c.parent ? (seen.has(c) ? {} : (seen.add(c), divBt(c, metric, i, seen)))
+      : {[c.type]:i == null ? cur(c, metric) : c.series[metric][i]};
+    for (const k in o) o[k] += b[k] || 0;
+  });
+  return o;
 }
 function cronCount(n){ let c = 0; (function v(x){ if (x.kind === 'cron') c++; x.children.forEach(v); })(n); return c; }
 function shareOfHost(n, metric){   // under a host without a reading there's no host to take a share of: a VM's is of its own capacity
@@ -411,10 +432,19 @@ function cmpNodes(a, b){ const pa = PINS.includes(a.id), pb = PINS.includes(b.id
 function orderedKids(n){ return n.kind === 'machine' ? n.children : n.children.slice().sort(cmpNodes); }
 function sortedRoots(){ return roots.slice().sort(cmpNodes); }
 function treeRoots(){
-  if (S.pinsOnly) return PINS.map(id => nodes[id]).filter(Boolean).sort((a, b) => COLL.compare(a.name, b.name));
+  if (S.pinsOnly){
+    // a pinned Pins only group is already among the pins, as its box around them: not a row of its own too (#296)
+    const boxed = new Set(((PREFS.tgroups || {})['pins|root'] || []).filter(g => g.ids.some(id => PINS.includes(id) && nodes[id])).map(g => 'div:' + g.id));
+    return PINS.filter(id => !boxed.has(id)).map(id => nodes[id]).filter(Boolean).sort((a, b) => COLL.compare(a.name, b.name));
+  }
   return S.space === 'fleet' ? sortedRoots() : (nodes[S.space] ? [nodes[S.space]] : sortedRoots());
 }
+// A group's name field while it's open (renameGroup): the tree isn't redrawn under it, since a poll can bring other
+// rows at any time, so what's typed and the focus stay. Closing it redraws the tree (#293).
+let RENAMING = null;
+const renaming = () => !!(RENAMING && RENAMING.isConnected);
 function renderTree(){
+  if (renaming()) return;
   if (S.tree === 'network') return renderNetTree();
   if (S.groupsOnly) return renderGroupsTree();
   const rows = [];
@@ -568,6 +598,7 @@ function netTreeHTML(){
   }
 }
 function renderNetTree(html = netTreeHTML()){
+  if (renaming()) return;
   $('tree').innerHTML = html; netDrawn = {html, first:$('tree').firstElementChild};
   netRates();
   $('tree-title').innerHTML = 'Network';
@@ -1099,11 +1130,14 @@ function selectionFilters(m, all, gpuProcs){
   }
   return out;
 }
-// The node whose processes a Details view shows right now (full or docked), or null.
+// A selection with a machine of its own; not All machines, nor a group of machines or of things on several (#294)
+const ownsMachine = n => !!n && !(n.kind === 'division' && !n.parent);
+// The node whose processes a Details view shows right now (full or docked), or null. With nothing of one machine
+// selected, the full view shows the first machine (All machines) or member (a group), and the docked panel asks for one.
 function shownDetails(){
   const n = S.sel === 'fleet' ? null : nodes[S.sel];
-  if (S.view === 'details') return n || roots[0] || null;
-  return S.detailsDocked && S.tree !== 'network' ? n : null;
+  if (S.view === 'details'){ let x = n || roots[0] || null; for (let i = 0; x && !ownsMachine(x) && i < 9; i++) x = x.children[0] || null; return ownsMachine(x) ? x : null; }
+  return S.detailsDocked && S.tree !== 'network' && ownsMachine(n) ? n : null;
 }
 // Left of the view pills: what Details is filtered to, each part with its own ×, plus Clear all; and a
 // dot on the CPU, GPU and Disk I/O pills while their selection filters Details.
@@ -1277,10 +1311,10 @@ function renderMain(){
   if (S.tree === 'network' && S.view !== 'details') html = netView();
   else {
     const n = S.sel === 'fleet' ? null : nodes[S.sel];
-    if (S.view === 'details') html = detailsView(n || (roots[0] || {id:'', name:'—'}));
-    else html = !n ? (S.pinsOnly && S.space === 'fleet' ? pinsView() : fleetView()) : n.kind === 'division' && !n.parent ? fleetView(n) : n.kind === 'machine' ? machineView(n) : n.kind === 'cronfolder' ? cronFolderView(n) : n.kind === 'cron' ? cronView(n) : n.hist ? leafView(n) : groupView(n);
+    if (S.view === 'details') html = detailsView(shownDetails() || {id:'', name:'—'});
+    else html = !n ? (S.pinsOnly && S.space === 'fleet' ? pinsView() : fleetView()) : n.kind === 'division' && !n.parent ? (n.children.every(topMachine) ? fleetView(n) : mixView(n)) : n.kind === 'machine' ? machineView(n) : n.kind === 'cronfolder' ? cronFolderView(n) : n.kind === 'cron' ? cronView(n) : n.hist ? leafView(n) : groupView(n);
     if (S.detailsDocked && S.view !== 'details')
-      panel = n ? detailsView(n, true) : `<div class="dhead"><div class="dtitle"><b>Details</b><span>Select a machine or anything in it to see its processes.</span></div><button type="button" class="iconbtn" data-closedock="1" aria-label="Close the Details panel">${icon('x', 2.2)}</button></div>`;
+      panel = ownsMachine(n) ? detailsView(n, true) : `<div class="dhead"><div class="dtitle"><b>Details</b><span>Select a machine or anything in it to see its processes.</span></div><button type="button" class="iconbtn" data-closedock="1" aria-label="Close the Details panel">${icon('x', 2.2)}</button></div>`;
   }
   const full = panel
     ? `<div class="split"><div class="wrap">${html}</div><aside class="dpanel" style="width:${Math.round(S.dockW || 560)}px" aria-label="Details panel"><div class="dresize" data-resize="1" role="separator" aria-orientation="vertical" aria-label="Resize the Details panel" title="Drag to resize"></div>${panel}</aside></div>`
@@ -1430,7 +1464,13 @@ document.addEventListener('click', e => {
   const tf = e.target.closest('[data-tgfold]'); if (tf){ S.gfold = Object.assign({}, S.gfold, {[tf.dataset.tgfold]:tf.getAttribute('aria-expanded') === 'true'}); save(); renderTree(); const b = document.querySelector(`[data-tgfold="${CSS.escape(tf.dataset.tgfold)}"]`); if (b) b.focus(); return; }
   // a group's header selects the group: its own all-up view (a fleet's is All machines for its members)
   const tgh = e.target.closest('#tree .tg-h');
-  if (tgh && !e.target.closest('input, [data-pin], [data-unpin]') && S.tree !== 'network'){ const id = 'div:' + tgh.closest('.tgroup').dataset.tgroup; buildDivisions(); if (nodes[id]) select(id); return; }   // empty space in a tree: nothing selected, everything shown
+  // The first click of a double-click selects it and redraws the tree, so the second lands on a new header and the
+  // browser sends no dblclick: that second click (detail 2) renames it, as a double-click does (#295).
+  if (tgh && !e.target.closest('input, [data-pin], [data-unpin]') && S.tree !== 'network'){
+    const box = tgh.closest('.tgroup'), id = 'div:' + box.dataset.tgroup;
+    if (e.detail >= 2){ renameGroup(box.dataset.tgkey, box.dataset.tgroup); return; }
+    buildDivisions(); if (nodes[id]) select(id); return;
+  }   // empty space in a tree: nothing selected, everything shown
   const nv = e.target.closest('[data-nav]'); if (nv){ navGo(nv.dataset.nav === 'back' ? -1 : 1); return; }
   const fs = e.target.closest('[data-mfstep]'); if (fs){ stepFind(+fs.dataset.mfstep); return; }
   if (e.target.closest('[data-mfclose]')){ closeFind(); return; }
@@ -1561,7 +1601,8 @@ async function refreshNow(){
     if (S.sel !== 'fleet' && !nodes[S.sel]) { /* keep selection; it may come back */ }
     const n = S.sel === 'fleet' ? null : nodes[S.sel];
     const jobs = [];
-    if ((S.view === 'details' || (S.detailsDocked && n && S.tree !== 'network')) && (n || roots[0])){ const mid = procMachineFor(n || roots[0]); if (mid) jobs.push(fetch('/api/procs?machine=' + encodeURIComponent(mid), {cache:'no-store'}).then(r => r.json()).then(d => takeProcs(mid, d))); }
+    const shown = shownDetails();
+    if (shown){ const mid = procMachineFor(shown); if (mid) jobs.push(fetch('/api/procs?machine=' + encodeURIComponent(mid), {cache:'no-store'}).then(r => r.json()).then(d => takeProcs(mid, d))); }
     if (S.view !== 'details' && !S.detailsDocked && n && n.kind === 'machine' && S.metric === 'cpu' && S.cpuView === 'logical' && cpuSel(n).length && n.status === 'ok') jobs.push(fetch('/api/procs?machine=' + encodeURIComponent(n.id), {cache:'no-store'}).then(r => r.json()).then(d => takeProcs(n.id, d)));
     if (S.view !== 'details' && n && n.kind === 'machine' && S.metric === 'cpu' && S.cpuView === 'logical') jobs.push(fetch('/api/cpus?machine=' + encodeURIComponent(n.id), {cache:'no-store'}).then(r => r.json()).then(d => { CPUS[n.id] = d; }));
     const nm = n && n.kind === 'machine' ? n : null;
@@ -2061,8 +2102,9 @@ document.addEventListener('keydown', e => {
     if ($('keys')){ e.preventDefault(); closeKeys(); return; }
     if (e.target.id === 'tfq'){ e.preventDefault(); closeTreeFind(); return; }
     if (e.target.id === 'mfq'){ e.preventDefault(); closeFind(); return; }
+    // the innermost thing first: a Details drop-down on screen closes before the tree lets go of its selection (#292)
+    if (INSP.pid && !typing && !overlayOpen() && (PANEL !== 'tree' || document.querySelector('tr.pinsp'))){ e.preventDefault(); closeInspect(); return; }
     if (PANEL === 'tree' && !typing && !overlayOpen() && !TF.q){ e.preventDefault(); selectNone(); return; }
-    if (INSP.pid && !typing && !overlayOpen()){ e.preventDefault(); closeInspect(); return; }
     if (e.target.id === 'pfilter'){ e.preventDefault(); if (e.target.value){ e.target.value = ''; S.filter = ''; save(); renderMain(); } else e.target.blur(); return; }
     return;
   }
@@ -2150,9 +2192,10 @@ function gotoItems(){
   for (const x of cmds){ const r = gotoRank(q, x.label, 'command'); if (r >= 0) scored.push([r, x]); }
   return scored.sort((a, b) => b[0] - a[0]).map(x => x[1]).slice(0, 60);
 }
-function renderGoto(){
+// keep: draw the same items in the same order (a pin from the list changes only its pin), see gotoPin
+function renderGoto(keep){
   const box = $('gotolist'); if (!box) return;
-  GOTO.items = gotoItems();
+  if (!keep) GOTO.items = gotoItems();
   GOTO.i = Math.max(0, Math.min(GOTO.i, GOTO.items.length - 1));
   box.innerHTML = GOTO.items.length ? GOTO.items.map((x, i) => {
     const ic = x.n ? icon(iconOf(x.n)) : icon(x.ic || 'chev'), col = x.n ? (x.n.kind === 'machine' ? 'var(--ink-2)' : colOf(x.n)) : 'var(--ink-3)';
@@ -2188,7 +2231,10 @@ function openGoto(){
   $('gotoq').focus();
 }
 function closeGoto(){ const el = $('goto'); if (el) el.remove(); }
-function gotoPin(id){ const was = PINS.includes(id); togglePin(id); renderGoto(); const q = $('gotoq'); if (q) q.focus(); toast(was ? 'Unpinned' : 'Pinned as a space'); }
+// A pin from the list leaves the list as it is while it's open (#296): sorting it again (pinned items go first) would
+// move another item under the highlight and the pointer, so the next ⇧Enter or click would act on that one. A new
+// query sorts it again.
+function gotoPin(id){ const was = PINS.includes(id); togglePin(id); renderGoto(true); const q = $('gotoq'); if (q) q.focus(); toast(was ? 'Unpinned' : 'Pinned as a space'); }
 function runGoto(i){ const x = GOTO.items[i]; if (!x) return; closeGoto(); x.run(); }
 
 
@@ -2442,14 +2488,25 @@ function copyText(text, what){
 const termOk = n => n.kind === 'machine' ? (n.agent === 'local' || !!n.ssh) : (n.kind === 'service' || n.kind === 'container');
 function openTerminal(id, terminal){ api('/api/terminal', terminal ? {node:id, terminal} : {node:id}).then(r => toast(r.ok ? `Opened ${r.title} in ${r.terminal}` : (r.error || 'Couldn’t open a terminal'))).catch(() => toast('Couldn’t reach Fleet')); }
 function goNode(id, view){ S.view = view; select(id); if (view === 'details'){ S.detailsDocked = false; save(); lastMainHTML = ''; renderAll(); } }
+// Tiles redraw on every poll (their numbers change) while the menu stays open, so an item keeps what its tile's
+// button stands for, not the button: the one the menu opened on is usually gone by the time a person picks (#292).
 // a tile's own pin button, as a menu item
-function pinItem(scope, label){ const b = scope && scope.querySelector('[data-tpin]'); if (!b) return null; const on = b.getAttribute('aria-pressed') === 'true'; return {label:(on ? 'Unpin ' : 'Pin ') + label, run:() => b.click()}; }
+function pinItem(scope, label){ const b = scope && scope.querySelector('[data-tpin]'); if (!b) return null; const on = b.getAttribute('aria-pressed') === 'true', spec = b.dataset.tpin; return {label:(on ? 'Unpin ' : 'Pin ') + label, run:() => toggleTilePin(spec)}; }
+// whether the selection is that tile's and nothing else (a plain click on it would then let it go). Judged from the
+// selection, not by counting pressed buttons: in Each GPU one GPU has a pressed button in its header and in each metric.
+function onlyPicked(attr, v){
+  const m = nodes[S.sel]; if (!m) return false;
+  const cur = (attr === 'data-lcpu' || attr === 'data-lgroup' ? cpuSel(m) : attr === 'data-gsel' ? gpuSel(m) : attr === 'data-dsel' ? diskSel(m) : ifSel(m)).map(String);
+  const want = attr === 'data-lgroup' ? v.split(',') : [v];
+  return cur.length === want.length && want.every(x => cur.includes(x));
+}
 // a tile's own select button: pick just it, or add it to (take it out of) the selection
 function selItems(btn, what){
   if (!btn) return [];
-  const on = btn.getAttribute('aria-pressed') === 'true';
-  return [{label:`See what runs on ${what}`, run:() => { if (!on || document.querySelectorAll(`[aria-pressed="true"][${[...btn.attributes].find(a => /^data-(lcpu|lgroup|gsel|dsel|isel)$/.test(a.name)).name}]`).length > 1) btn.click(); }},
-    ...(btn.matches('[data-lgroup], .lgbtn') ? [] : [{label:on ? `Take ${what} out of the selection` : `Add ${what} to the selection`, run:() => btn.dispatchEvent(new MouseEvent('click', {bubbles:true, metaKey:true, ctrlKey:true}))}])];
+  const on = btn.getAttribute('aria-pressed') === 'true', attr = [...btn.attributes].find(a => /^data-(lcpu|lgroup|gsel|dsel|isel)$/.test(a.name)).name, v = btn.getAttribute(attr);
+  const live = () => document.querySelector(`[${attr}="${CSS.escape(v)}"]`);
+  return [{label:`See what runs on ${what}`, run:() => { const b = live(); if (b && !onlyPicked(attr, v)) b.click(); }},
+    ...(btn.matches('[data-lgroup], .lgbtn') ? [] : [{label:on ? `Take ${what} out of the selection` : `Add ${what} to the selection`, run:() => { const b = live(); if (b) b.dispatchEvent(new MouseEvent('click', {bubbles:true, metaKey:true, ctrlKey:true})); }}])];
 }
 function ctxFor(t){
   if (!t || !t.closest || t.closest('.ptbl thead th, #ctxmenu, #colmenu, input, textarea, select')) return null;
@@ -2583,8 +2640,9 @@ function groupedWalk(roots, kidsOf, openFn, shownFn, scope){
     const pinnedFirst = items.filter(it => it.gx && PINS.includes('div:' + it.gx.g.id)).concat(items.filter(it => !(it.gx && PINS.includes('div:' + it.gx.g.id))));
     pinnedFirst.forEach(({n, gx}) => {
       if (n) return one(n);
-      // a folded group is just its header; its members keep their own open state for when it unfolds
-      const folded = !!(S.gfold && S.gfold[gx.g.id]);
+      // a folded group is just its header; its members keep their own open state for when it unfolds. While find in
+      // the tree filters, it shows what in it matches, as a collapsed row opens on the way to a match (#295)
+      const folded = !TF.q && !!(S.gfold && S.gfold[gx.g.id]);
       out.push({open:gx.g, key, d, kind:groupKind(gx.members), folded, count:gx.members.length}); if (!folded) gx.members.forEach(one); out.push({close:true});
     });
   })(roots, 0, 'root');
@@ -2608,12 +2666,13 @@ function groupEditItems(n){
   return ['—', {label:'Rename', run:() => renameGroup(key, id)}, {label:'Disband ' + GKIND[n.gkind || 'taskforce'][1], run:() => updGroup(key, id, null)}];
 }
 function renameGroup(key, id){
+  if (renaming()) return;   // one name field at a time (a double-click's second click and its dblclick both ask)
   // the group's header in the tree, or its row in Groups only
   const n = document.querySelector(`#tree .tgroup[data-tgroup="${CSS.escape(id)}"] .tg-n`) || document.querySelector(`#tree .row[data-select="div:${CSS.escape(id)}"] .nm`); if (!n) return;
   const inp = document.createElement('input'); inp.className = 'tg-name'; inp.value = n.textContent; inp.setAttribute('aria-label', 'Group name');
-  n.replaceWith(inp); inp.focus(); inp.select();
+  n.replaceWith(inp); inp.focus(); inp.select(); RENAMING = inp;
   let done = false;
-  const commit = ok => { if (done) return; done = true; const v = inp.value.trim().slice(0, 60); if (ok && v) updGroup(key, id, g => Object.assign({}, g, {name:v})); else renderTree(); };
+  const commit = ok => { if (done) return; done = true; RENAMING = null; const v = inp.value.trim().slice(0, 60); if (ok && v) updGroup(key, id, g => Object.assign({}, g, {name:v})); else renderTree(); };
   inp.addEventListener('keydown', e => { if (e.key === 'Enter'){ e.preventDefault(); commit(true); } if (e.key === 'Escape'){ e.preventDefault(); e.stopPropagation(); commit(false); } });
   inp.addEventListener('blur', () => commit(true));
 }
@@ -2630,7 +2689,9 @@ document.addEventListener('pointermove', e => {
   if (!m.on){ if (Math.hypot(e.clientX - m.x0, e.clientY - m.y0) < 6) return; m.on = true; m.box = document.createElement('div'); m.box.className = 'mqbox'; document.body.appendChild(m.box); }
   const x = Math.min(m.x0, e.clientX), y = Math.min(m.y0, e.clientY), w = Math.abs(e.clientX - m.x0), h = Math.abs(e.clientY - m.y0);
   Object.assign(m.box.style, {left:x + 'px', top:y + 'px', width:w + 'px', height:h + 'px'});
-  document.querySelectorAll('#tree .row').forEach(r => { const b = r.getBoundingClientRect(); r.classList.toggle('mqhit', b.bottom > y && b.top < y + h && b.right > x && b.left < x + w); });
+  // only what you can see: the box is cut to the tree's view, so rows scrolled above or below it stay out (#293)
+  const t = $('tree').getBoundingClientRect(), x0 = Math.max(x, t.left), y0 = Math.max(y, t.top), x1 = Math.min(x + w, t.right), y1 = Math.min(y + h, t.bottom);
+  document.querySelectorAll('#tree .row').forEach(r => { const b = r.getBoundingClientRect(); r.classList.toggle('mqhit', b.bottom > y0 && b.top < y1 && b.right > x0 && b.left < x1); });
 });
 document.addEventListener('pointerup', () => {
   const m = MQ.st; MQ.st = null; if (!m || !m.on) return;
@@ -2716,12 +2777,20 @@ function buildDivisions(){
       const members = g.ids.map(id => nodes[id]).filter(Boolean); if (!members.length) return;
       const types = new Set(members.map(m => m.type));
       const d = {id:'div:' + g.id, name:g.name, kind:'division', type:types.size === 1 ? [...types][0] : 'base', children:members,
-        parent:pk === 'root' ? null : (nodes[pk] || null), gkind:groupKind(members)};
+        parent:divParent(pk, members), gkind:groupKind(members)};
       d.color = `var(--g-${d.gkind})`;
       d.series = sumSeries(members); d.gseries = members.reduce((t, c) => addG(t, c.gseries), {});
       nodes[d.id] = d;
     });
   }
+}
+// What a group hangs off (#294): the node its key names, or, for one saved at the top of Pins only or inside another
+// group's space (whose key names no node of the tree), the nearest node all its members are under; nothing when
+// they're on different machines (or are machines), so it counts against those machines (ctxOf).
+function divParent(pk, members){
+  const at = nodes[pk]; if (at && at.kind !== 'division') return at;
+  const above = n => { const a = []; for (let p = n.parent; p; p = p.parent) a.push(p); return a; };
+  return members.slice(1).reduce((common, m) => { const up = above(m); return common.filter(p => up.includes(p)); }, above(members[0]))[0] || null;
 }
 function divisionsChanged(){ buildDivisions(); renderSpaces(); renderTree(); if (PICK.open) renderPickerList(); }
 
@@ -2741,6 +2810,25 @@ function newGroupName(list, ids){
   return word + ' ' + k;
 }
 
+// each one with its share of its host (or of itself, for a machine), to open it: Pins only's mix, a group's members
+function shareRows(items){
+  return items.map(n => {
+    const v = rowVal(n), w = parseFloat(v) || 0, where = n.kind === 'machine' && !n.parent ? '' : n.kind === 'division' && !n.parent ? kindLabel(n) : (n.kind === 'division' ? kindLabel(n) + ' on ' : '') + hostOf(n).name;
+    return `<div class="prow2"><button type="button" class="namebtn" data-select="${esc(n.id)}"><span class="ico" style="color:${colOf(n)}">${icon(iconOf(n))}</span>${esc(n.name)}</button>`
+      + `<span class="pw">${esc(where)}</span><div class="track"><i style="width:${Math.min(100, w).toFixed(1)}%;background:${colOf(n)}"></i></div><span class="pv">${esc(v)}</span></div>`;
+  }).join('');
+}
+// A group of things on several machines (Pins only groups anything) (#295): its share of the machines they run on,
+// where that goes by type, and each member with its share of its own host, to open it, as Pins only lists a mix.
+function mixView(d){
+  const c = ctxOf(d.id), hosts = divHosts(d), series = typeSeries(i => c.bt(S.metric, i));
+  const stat = m => { const cap = c.cap(m), used = sumv(c.bt(m)); return {k:mlabel(m) + ' of its machines', v:cap ? pct(used / cap * 100) : '—', s:cap ? `${fmt(used, m)} of ${capText(cap, m)}` : `no ${mlabel(m)}`}; };
+  return `<div class="hero"><span class="tile" style="background:color-mix(in srgb, ${d.color} 22%, transparent);color:${d.color}">${icon(iconOf(d))}</span><div><h1>${esc(d.name)}</h1>`
+    + `<div class="facts"><span>${esc(kindLabel(d))}</span><span>${d.children.length} members on ${hosts.length} machine${hosts.length === 1 ? '' : 's'}</span><span>${hosts.map(h => esc(h.name)).join(', ')}</span></div></div>${heroStats(['cpu', 'mem', 'gpu'].map(stat))}</div>`
+    + `<div class="grid2">${whereCard(d.id, `Where ${esc(d.name)}’s usage goes`)}${graphCard(mlabel(S.metric), 'its members, by type', series, graphMax(c.cap(S.metric), series, S.metric), S.metric)}</div>`
+    + `<section class="card"><div class="card-h"><h2>In ${esc(d.name)} · ${mlabel(S.metric)}</h2><span class="sub">each one’s share of its host</span></div><div class="pinlist">${shareRows(d.children)}</div></section>`;
+}
+
 // Pins only, with nothing selected: an all-up view of the pins (#57). Pinned machines alone get the All machines
 // view of just them; a mix gets each pin with its share, to open it.
 function pinsView(){
@@ -2750,11 +2838,7 @@ function pinsView(){
     pv.series = sumSeries(items); pv.gseries = items.reduce((t, c) => addG(t, c.gseries), {});
     return fleetView(pv);
   }
-  const rows = items.map(n => {
-    const v = rowVal(n), w = parseFloat(v) || 0, where = n.kind === 'machine' && !n.parent ? '' : n.kind === 'division' && !n.parent ? kindLabel(n) : (n.kind === 'division' ? kindLabel(n) + ' on ' : '') + hostOf(n).name;
-    return `<div class="prow2"><button type="button" class="namebtn" data-select="${esc(n.id)}"><span class="ico" style="color:${colOf(n)}">${icon(iconOf(n))}</span>${esc(n.name)}</button>`
-      + `<span class="pw">${esc(where)}</span><div class="track"><i style="width:${Math.min(100, w).toFixed(1)}%;background:${colOf(n)}"></i></div><span class="pv">${esc(v)}</span></div>`;
-  }).join('');
+  const rows = shareRows(items);
   return `<div class="hero"><span class="tile" style="background:color-mix(in srgb, var(--accent) 22%, transparent);color:var(--accent)">${icon('pin')}</span><div><h1>Pins only</h1><div class="facts"><span>${items.length} pinned</span><span>${mlabel(S.metric)}: each pin's share of its host (or of itself, for a machine)</span></div></div></div>`
     + (items.length ? `<section class="card"><div class="card-h"><h2>Your pins · ${mlabel(S.metric)}</h2></div><div class="pinlist">${rows}</div></section>`
       : noteHTML('Nothing pinned yet: pin a machine, container or group with the pin on its row, or with <b>+</b> in the top bar.'));
