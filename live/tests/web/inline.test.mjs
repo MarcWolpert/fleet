@@ -256,14 +256,29 @@ test('the terminals’ font: from Settings, live, with Fleet’s symbols last', 
     await p.eval(`(window.__acks = [], addEventListener('message', e => { if (e.data && e.data.fleet === 'ack') __acks.push(e.data.family); }), openInline('lx'), true)`);
     await p.waitFor(`document.querySelector('#tdrawer iframe')`);
     const first = posts(fx, '/api/inline-terminal')[0].fontFamily;
-    assert.match(first, /^"MesloLGS NF".*, "Fleet Symbols"$/);
+    assert.match(first, /^"MesloLGS NF".*, "Fleet Symbols", monospace$/);
     await p.waitFor(`__acks.includes(${JSON.stringify(first)})`, 20000);
     await p.eval(`(openSettings(), true)`);
     await p.waitFor(`document.querySelector('#sheet [data-termfontfamily]')`);
     assert.match(await p.eval(`document.querySelector('#sheet [data-termfontfamily]').placeholder`), /MesloLGS NF/);
     await p.eval(`(() => { const i = document.querySelector('#sheet [data-termfontfamily]'); i.value = '"Source Code Pro for Powerline", monospace'; i.dispatchEvent(new Event('change', {bubbles: true})); return true; })()`);
     await p.waitFor(`PREFS.termFontFamily === '"Source Code Pro for Powerline", monospace'`);
-    await p.waitFor(`__acks.includes('"Source Code Pro for Powerline", monospace, "Fleet Symbols"')`, 20000);
+    await p.waitFor(`__acks.includes('"Source Code Pro for Powerline", "Fleet Symbols", monospace')`, 20000);
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
 });
+
+// #392: in WebKit (Fleet.app, Safari) ttyd's GPU renderer draws glyphs on an offscreen canvas, which can't use the page's
+// web fonts (Fleet's symbols drew as boxes): the terminals there use ttyd's DOM renderer. Chrome keeps the GPU one.
+for (const [vendor, want] of [['Apple Computer, Inc.', '?rendererType=dom'], ['Google Inc.', '']])
+  test(`${vendor.split(' ')[0]}: the terminal's renderer suits the engine`, async () => {
+    const fx = fx1();
+    const p = await browser.page(fx, {ui: ui({sel: 'lx'})});
+    try {
+      await p.waitFor(`document.querySelector('.hero [data-terminal="lx"]')`);
+      await p.eval(`(Object.defineProperty(navigator, 'vendor', {get: () => ${JSON.stringify(vendor)}}), openInline('lx'), true)`);
+      await p.waitFor(`document.querySelector('#tdrawer iframe')`);
+      assert.equal(await p.eval(`document.querySelector('#tdrawer iframe').getAttribute('src')`), '/inline-fake-1.html' + want);
+      assert.deepEqual(p.errors, []);
+    } finally { await p.close(); }
+  });

@@ -2984,7 +2984,10 @@ def ttyd_path():
 def ttyd_argv(ttyd, token, argv, opts, index=None):
     lo = "lo0" if platform.system() == "Darwin" else "lo"
     a = [ttyd, "--port", "0", "--interface", lo, "--writable", "--check-origin", "--base-path", "/fleet-" + token]   # fleet-: Fleet's own, for reap_leftover_ttyd
-    for k, v in opts.items():
+    for k, v in opts.items():   # ttyd reads each value as JSON when it can: text goes as a JSON string, read whole (#392)
+        v = str(v)
+        if k not in ("theme", "fontSize"):   # theme is JSON already; the size, a number
+            v = json.dumps(v)
         a += ["--client-option", "%s=%s" % (k, v)]
     if index:
         a += ["--index", index]
@@ -2999,11 +3002,20 @@ FONT_LIST = re.compile(r"""^[\w ,"'.\-]{1,240}$""")
 SYMBOLS_FONT = os.path.join(HERE, "web", "fonts", "SymbolsNerdFontMono-Regular.ttf")
 
 
+GENERIC_FONTS = ("monospace", "ui-monospace", "sans-serif", "serif", "system-ui", "ui-sans-serif", "ui-serif", "cursive", "fantasy")
+
+
 def term_font_family(asked):
+    """The font list with Fleet's symbols font in it: before the first generic family (in WebKit, fallback stops at a
+    generic: macOS's last-resort font draws every missing symbol as a box), or last (#392)."""
     fam = str(asked or "").strip()
     if not FONT_LIST.match(fam):
         fam = TERM_FONT_DEFAULT
-    return fam if "Fleet Symbols" in fam else fam + ', "Fleet Symbols"'
+    if "Fleet Symbols" in fam:
+        return fam
+    parts = [x.strip() for x in fam.split(",") if x.strip()]
+    i = next((n for n, x in enumerate(parts) if x.lower() in GENERIC_FONTS), len(parts))
+    return ", ".join(parts[:i] + ['"Fleet Symbols"'] + parts[i:])
 
 
 def inline_opts(d, title):
@@ -3041,6 +3053,14 @@ TTYD_BRIDGE_JS = r"""
     P.postMessage({fleet: 'termKey', act: act}, '*');
   }, true);
   window.addEventListener('focus', function(){ P.postMessage({fleet: 'termFocus'}, '*'); });
+  // the symbols font only draws on the terminal's canvas, which never makes a web font load: load it, then redraw
+  // (and drop the glyphs drawn without it) (#392)
+  function redraw(tries){
+    var t = window.term;
+    if (!t){ if (tries < 100) setTimeout(function(){ redraw(tries + 1); }, 100); return; }
+    try { if (t.clearTextureAtlas) t.clearTextureAtlas(); t.refresh(0, t.rows - 1); } catch (x) {}
+  }
+  try { if (document.fonts && document.fonts.load) document.fonts.load('16px "Fleet Symbols"', '\ue0a0\uf418').then(function(){ redraw(0); }); } catch (x) {}
   function apply(n, tries){
     var t = window.term;
     if (!t || !t.options){ if (tries < 100) setTimeout(function(){ apply(n, tries + 1); }, 100); return; }

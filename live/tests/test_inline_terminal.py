@@ -22,6 +22,18 @@ class Command(unittest.TestCase):
                          ["/x/ttyd", "--port", "0", "--interface", lo, "--writable", "--check-origin", "--base-path", "/fleet-TOKEN",
                           "--client-option", "fontSize=13", "ssh", "-t", "nas"])
 
+    def test_text_options_reach_ttyd_whole(self):
+        # #392: ttyd reads each --client-option value as JSON when it can: a font list that starts with a quoted name
+        # was read as that one name (a font not installed: WebKit drew Times, spaced out). Text goes as a JSON string.
+        a = fl.ttyd_argv("/x/ttyd", "T", ["sh"], {"fontFamily": '"MesloLGS NF", Menlo, "Fleet Symbols"', "titleFixed": "1.5", "fontSize": "13", "theme": '{"background":"#000000"}'})
+        opts = [a[i + 1] for i, x in enumerate(a) if x == "--client-option"]
+        self.assertIn('fontFamily="\\"MesloLGS NF\\", Menlo, \\"Fleet Symbols\\""', opts)
+        self.assertIn('titleFixed="1.5"', opts, "a title that looks like a number stays a title")
+        self.assertIn("fontSize=13", opts)
+        self.assertIn('theme={"background":"#000000"}', opts)
+        for o in opts:
+            fl.json.loads(o.split("=", 1)[1])   # every value is JSON ttyd reads whole
+
     def test_its_own_page_when_fleet_has_one(self):
         lo = "lo0" if platform.system() == "Darwin" else "lo"
         self.assertEqual(fl.ttyd_argv("/x/ttyd", "TOKEN", ["sh"], {}, index="/tmp/i.html"),
@@ -30,8 +42,10 @@ class Command(unittest.TestCase):
 
     def test_the_font_ends_with_fleets_symbols(self):
         # #387: whatever font you name, Powerline and Nerd Font symbols it lacks come from the one Fleet carries
-        self.assertEqual(fl.inline_opts({"fontFamily": '"MesloLGS NF", Menlo, monospace'}, "nas")["fontFamily"], '"MesloLGS NF", Menlo, monospace, "Fleet Symbols"')
-        self.assertTrue(fl.inline_opts({}, "nas")["fontFamily"].endswith(', "Fleet Symbols"'))
+        # before a generic family: in WebKit, fallback stops there (macOS's last-resort font draws every symbol as a box)
+        self.assertEqual(fl.inline_opts({"fontFamily": '"MesloLGS NF", Menlo, monospace'}, "nas")["fontFamily"], '"MesloLGS NF", Menlo, "Fleet Symbols", monospace')
+        self.assertEqual(fl.inline_opts({"fontFamily": '"Fira Code"'}, "nas")["fontFamily"], '"Fira Code", "Fleet Symbols"')
+        self.assertTrue(fl.inline_opts({}, "nas")["fontFamily"].endswith(', "Fleet Symbols", monospace'))
         self.assertEqual(fl.inline_opts({"fontFamily": 'x;}</style><script>'}, "nas")["fontFamily"], fl.inline_opts({}, "nas")["fontFamily"], "nothing but a font list")
 
     def test_text_size_and_title_options(self):
@@ -91,6 +105,11 @@ class OwnPage(unittest.TestCase):
         out = fl.inject_index("<html><head></head><body><script>window.term=t</script></body></html>")
         self.assertIn('@font-face{font-family:"Fleet Symbols";src:url(data:font/ttf;base64,', out)
         self.assertLess(out.index("@font-face"), out.index("</head>"))
+
+    def test_the_symbols_font_is_loaded_and_the_terminal_redrawn(self):
+        # #392: a web font used only on a canvas never loads by itself
+        self.assertIn("document.fonts.load('16px \"Fleet Symbols\"'", fl.TTYD_BRIDGE_JS)
+        self.assertIn("clearTextureAtlas", fl.TTYD_BRIDGE_JS)
 
     def test_the_script_goes_into_ttyds_page(self):
         page = "<html><body><script>window.term=t</script></body></html>"

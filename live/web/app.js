@@ -3587,10 +3587,17 @@ function termFontPx(){ return Math.round(termFont() / ZOOM * 100) / 100; }
 // the terminals' font (#387): yours, or a list that tries the common Nerd Fonts first; Fleet's symbols font is always
 // last (the server adds it to ttyd's page), so Powerline and Nerd Font symbols draw where no Nerd Font is installed
 const TERM_FONT_DEFAULT = '"MesloLGS NF", "JetBrainsMono Nerd Font", "Hack Nerd Font", "FiraCode Nerd Font", Menlo, "DejaVu Sans Mono", Consolas, "Liberation Mono", monospace';
-function termFontFamily(){
+function termFontFamily(){   // Fleet's symbols before the first generic family: WebKit's fallback stops at one (#392)
   const f = String(PREFS.termFontFamily || '').trim(), fam = /^[\w ,"'.\-]{1,240}$/.test(f) ? f : TERM_FONT_DEFAULT;
-  return fam.includes('Fleet Symbols') ? fam : fam + ', "Fleet Symbols"';
+  if (fam.includes('Fleet Symbols')) return fam;
+  const parts = fam.split(',').map(x => x.trim()).filter(Boolean), gen = ['monospace', 'ui-monospace', 'sans-serif', 'serif', 'system-ui', 'ui-sans-serif', 'ui-serif', 'cursive', 'fantasy'];
+  const i = parts.findIndex(x => gen.includes(x.toLowerCase()));
+  parts.splice(i < 0 ? parts.length : i, 0, '"Fleet Symbols"');
+  return parts.join(', ');
 }
+// In WebKit (Fleet.app, Safari) ttyd's GPU renderer draws on an offscreen canvas that can't use the page's web fonts,
+// so Fleet's symbols font drew boxes: there the terminals use ttyd's DOM renderer (#392). Chrome keeps the GPU one.
+function termFrameUrl(u){ return u && /^Apple/.test(navigator.vendor || '') ? u + (u.includes('?') ? '&' : '?') + 'rendererType=dom' : u; }
 function frameOrigin(f){ try { const u = new URL(f.src); return /^https?:$/.test(u.protocol) ? u.origin : '*'; } catch (e) { return '*'; } }
 function sendTermFont(f){
   (f ? [f] : [...document.querySelectorAll('#tdrawer iframe')]).forEach(x => { try { x.contentWindow.postMessage({fleet:'termFont', size:termFontPx(), family:termFontFamily()}, frameOrigin(x)); } catch (e) {} });
@@ -3784,10 +3791,10 @@ function renderDrawer(){
     if (vis){ p.style.left = (s._left * 100) + '%'; p.style.width = (s._width * 100) + '%'; }
     p.classList.toggle('cur', vis && shown.length > 1 && s.key === TD.active);
     const fr0 = p.querySelector('iframe');
-    if (s.url && fr0 && fr0.getAttribute('src') !== s.url) fr0.setAttribute('src', s.url);   // the same frame, on Fleet's new ttyd
+    if (s.url && fr0 && fr0.getAttribute('src') !== termFrameUrl(s.url)) fr0.setAttribute('src', termFrameUrl(s.url));   // the same frame, on Fleet's new ttyd
     if (s.url && !fr0){
       p.textContent = '';
-      const f = document.createElement('iframe'); f.src = s.url; f.title = 'Terminal: ' + s.title; f.setAttribute('allow', 'clipboard-read; clipboard-write');
+      const f = document.createElement('iframe'); f.src = termFrameUrl(s.url); f.title = 'Terminal: ' + s.title; f.setAttribute('allow', 'clipboard-read; clipboard-write');
       f.addEventListener('load', () => { if (TD.active === s.key && termMayTakeFocus()) f.focus(); }, {once:true});
       p.appendChild(f);
     } else if (!s.url && !fr0){
