@@ -139,3 +139,37 @@ test('a box drawn over the rows makes no group here, and the network tree is unc
     assert.equal(await p.eval(`!!${BTN}`), false, 'no Fleet button in the network tree');
   } finally { await p.close(); }
 });
+
+// Groups only shows the groups of the tree it replaces (#297): in a machine's space, only the groups the normal
+// tree draws there (it once listed every group of every machine, and a click on one left the space); in Pins only,
+// only a pins group with a member still pinned. Each case is checked against the normal tree's boxes.
+for (const [space, rows, boxes] of [['lx2', ['div:gD@0'], ['Solo']], ['lx', ['div:gA@0', 'div:gC@1'], ['Lab', 'Web tier']], ['fleet', ['div:gB@0', 'div:gA@0', 'div:gC@1', 'div:gD@0'], ['Home', 'Lab', 'Solo', 'Web tier']]]){
+  test(`in the ${space} space, Groups only shows just the groups its tree has`, async () => {
+    const p = await open({space, sel: space});
+    try {
+      assert.deepEqual(await p.eval(BOXES), boxes, 'the normal tree in this space');
+      await p.click('#tree-title [data-groupsonly]');
+      assert.deepEqual(await p.eval(ROWS), rows, 'the same groups, nothing else');
+      const inner = rows[rows.length - 1].split('@')[0];   // a group inside the space (Lab also holds win, so it leaves lx's)
+      await p.click(`#tree .row[data-select="${inner}"] .nm`);
+      assert.deepEqual(await p.eval(`[S.space, S.sel]`), [space, inner], 'selecting one stays in the space');
+      assert.deepEqual(p.errors, []);
+    } finally { await p.close(); }
+  });
+}
+
+test('with Pins only, a pins group whose members are all unpinned is not shown, as in the normal Pins only tree', async () => {
+  const f = fx({'pins|root': [{id: 'gP', name: 'Pinned pair', c: 5, ids: ['lx2', 'mac']}, {id: 'gQ', name: 'Still pinned', c: 6, ids: ['lx', 'win']}]});
+  f.fleet.pins = ['lx', 'win'];
+  const p = await open({pinsOnly: true}, f);
+  try {
+    assert.deepEqual(await p.eval(BOXES), ['Still pinned'], 'the normal Pins only tree');
+    await p.click('#tree-title [data-groupsonly]');
+    assert.deepEqual(await p.eval(ROWS), ['div:gQ@0']);
+    f.fleet.pins = [];
+    await p.eval(`(PINS = [], renderTree(), true)`);
+    assert.deepEqual(await p.eval(ROWS), []);
+    assert.match(await p.eval(`document.querySelector('#tree .tempty').textContent`), /^No groups in Pins only yet\./);
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});

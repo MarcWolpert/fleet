@@ -3,7 +3,7 @@
 // group without subgroups expands to show what's in it, and folds back.
 import {test, before, after} from 'node:test';
 import assert from 'node:assert/strict';
-import {launch} from './harness.mjs';
+import {launch, sleep} from './harness.mjs';
 import {fixture, ui} from './fixtures.mjs';
 
 let browser;
@@ -57,6 +57,48 @@ test('a group without subgroups expands to show what\'s in it, and folds back', 
     await p.waitFor(`S.sel === 'lx/containers/web'`);
     await p.eval(`(${chev}.click(), true)`);
     await p.waitFor(`${ROWS}.length === 2`);
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
+// A click inside the rename box moves the caret; it doesn't end the edit (it once selected the row under it,
+// whose redraw saved the half-typed name and left the old one in the tree). Groups only, and a pinned group's row
+// in Pins only, where the box sits in a row that selects on click (#297).
+for (const [where, opts] of [['Groups only', {groupsOnly: true}], ['a pinned group in Pins only', {pinsOnly: true}]]){
+  test(`a click inside the rename box keeps editing, and the new name shows everywhere (${where})`, async () => {
+    const f = fx(); if (opts.pinsOnly) f.fleet.pins = ['div:gC'];
+    const p = await browser.page(f, {ui: ui(Object.assign({sel: 'fleet'}, opts)), height: 900});
+    try {
+      await p.waitFor(`document.querySelector('#tree .row[data-select="div:gC"] .nm')`);
+      await menu(p, 'div:gC'); await pick(p, 'Rename');
+      await p.waitFor(`document.activeElement && document.activeElement.classList.contains('tg-name')`);
+      await p.eval(`(() => { document.activeElement.value = 'Web ti'; return true; })()`);
+      await p.click('#tree input.tg-name');
+      await sleep(300);
+      assert.deepEqual(await p.eval(`(() => { const i = document.querySelector('#tree input.tg-name'); return [!!i && document.activeElement === i, i && i.value, S.sel]; })()`), [true, 'Web ti', 'fleet']);
+      assert.equal(saved(f), null, 'nothing saved while the name is still being typed');
+      await p.eval(`(() => { const i = document.activeElement; i.value = 'Storefront'; i.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', bubbles: true})); return true; })()`);
+      await p.waitFor(`document.querySelector('#tree .row[data-select="div:gC"] .nm').textContent === 'Storefront'`);
+      assert.equal(saved(f)['machines|lx/containers'][0].name, 'Storefront');
+      await sleep(2500);   // a poll later, the tree still says the new name
+      assert.equal(await p.eval(`document.querySelector('#tree .row[data-select="div:gC"] .nm').textContent`), 'Storefront');
+      assert.deepEqual(p.errors, []);
+    } finally { await p.close(); }
+  });
+}
+
+// A redraw while the box is open (a poll that brings a new container) takes the box away and keeps what was typed,
+// as a click elsewhere does; the tree then shows that name, not the old one (#297)
+test('a redraw of the tree while a group is being renamed keeps the typed name, and the tree shows it', async () => {
+  const f = fx(); const p = await open(f);
+  try {
+    await menu(p, 'div:gC'); await pick(p, 'Rename');
+    await p.waitFor(`document.activeElement && document.activeElement.classList.contains('tg-name')`);
+    await p.eval(`(() => { document.activeElement.value = 'Web ti'; renderTree(); return true; })()`);
+    await p.waitFor(`!document.querySelector('#tree input.tg-name')`);
+    await sleep(300);
+    assert.equal(saved(f)['machines|lx/containers'][0].name, 'Web ti');
+    assert.equal(await p.eval(`document.querySelector('#tree .row[data-select="div:gC"] .nm').textContent`), 'Web ti');
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
 });

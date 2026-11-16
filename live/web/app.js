@@ -104,6 +104,7 @@ function machineFrom(s, isVm){
     hostHist:s.hostside && !Array.isArray(s.hostside) ? histOf(s.hostside) : null,
     hostG:Object.fromEntries(Object.entries(s.hostside_gh || {}).filter(([, a]) => a && a.length === H)),
     ssh:s.ssh || '', hasData:s.has_data !== false || s.status === 'hostonly', lastOk:s.last_ok || 0, on:s.on !== false});
+  connAsked(m, s);
   // what a node measurably uses of each of this machine's GPUs (the server's gh: one history per GPU); without gh, the
   // GPU keys it names (g), over which its GPU use is split
   const ghOf = gh => gh ? Object.fromEntries(gpus.filter(g => gh[g.key] && gh[g.key].length === H).map(g => [g.key, gh[g.key]])) : null;
@@ -486,11 +487,16 @@ function treeHeader(){
 // the nearest group of its own tree (All machines or Pins only) that holds one of its members' ancestors. Pins
 // only adds the groups you pinned, with their subgroups. Folding (S.gfold) is the same fold as in the normal tree.
 function groupsHierarchy(){
+  // only the groups of the tree this replaces (a machine's space, Pins only): a group at the top holds one of its
+  // roots, a deeper one sits under a node in it (#297)
+  const tops0 = treeRoots(), rootIds = new Set(tops0.map(n => n.id)), reach = new Set();
+  (function walk(list){ list.forEach(n => { if (reach.has(n.id)) return; reach.add(n.id); walk(n.children); }); })(tops0);
+  const inTree = (g, pk) => pk === 'root' ? rootIds.has('div:' + g.id) || g.ids.some(id => rootIds.has(id)) : reach.has(pk) && g.ids.some(id => reach.has(id));
   const all = [];
   for (const [key, list] of Object.entries(PREFS.tgroups || {})){
-    const at = key.indexOf('|'), sc = key.slice(0, at);
+    const at = key.indexOf('|'), sc = key.slice(0, at), pk = key.slice(at + 1);
     if (sc === 'network') continue;
-    list.forEach(g => { const n = nodes['div:' + g.id]; if (n) all.push({g, sc, pk:key.slice(at + 1), n}); });
+    list.forEach(g => { const n = nodes['div:' + g.id]; if (n && inTree(g, pk)) all.push({g, sc, pk, n}); });
   }
   all.forEach(x => {
     x.up = null;
@@ -721,7 +727,7 @@ function cpuSelCard(m){
   else {
     const on = machineProcs.filter(p => sel.includes(p[12])).sort((a, b) => b[4] - a[4]);
     const ncpu = m.ncpu || capOf(m, 'cpu');
-    procs = on.length ? `<div class="scroll-x"><table class="tbl"><thead><tr><th>Process</th><th>PID</th><th style="text-align:left">Runs in</th><th>CPU (machine)</th><th>Memory</th><th>Last ran on</th></tr></thead><tbody>${on.slice(0, 15).map(p => `<tr><td>${esc(p[1])}</td><td>${p[0]}</td><td class="l"><button type="button" class="namebtn" data-select="${esc(p[10])}" style="font-weight:400">${esc(nodes[p[10]] ? nodes[p[10]].name : '')}</button></td><td>${pct(p[4] / ncpu * 100)}</td><td>${memText(p[5])}</td><td>CPU ${p[12]}</td></tr>`).join('')}</tbody></table></div>${on.length > 15 ? `<div class="more">${on.length - 15} more on these processors.</div>` : ''}` : `<div class="sub">Nothing ran on these processors in the last reading.</div>`;
+    procs = on.length ? `<div class="scroll-x"><table class="tbl"><thead><tr><th>Process</th><th>PID</th><th style="text-align:left">Runs in</th><th>CPU (machine)</th><th>Memory</th><th>Last ran on</th></tr></thead><tbody>${on.slice(0, 15).map(p => `<tr><td>${esc(p[1])}</td><td>${esc(p[0])}</td><td class="l"><button type="button" class="namebtn" data-select="${esc(p[10])}" style="font-weight:400">${esc(nodes[p[10]] ? nodes[p[10]].name : '')}</button></td><td>${pct(p[4] / ncpu * 100)}</td><td>${memText(p[5])}</td><td>CPU ${p[12]}</td></tr>`).join('')}</tbody></table></div>${on.length > 15 ? `<div class="more">${on.length - 15} more on these processors.</div>` : ''}` : `<div class="sub">Nothing ran on these processors in the last reading.</div>`;
   }
   return `<section class="card"><div class="card-h"><h2>${esc(title)}</h2><span class="sub">${cs.length} of ${d.cpus.length} processors</span><span class="grow"></span><button type="button" class="btn" data-cpuclear="1">${icon('x', 2.2)}Clear selection</button></div>`
     + `<div class="cpustats">${heroStats([{k:'Now', v:pct(now), s:'average'}, {k:'Peak', v:pct(peak), s:'any one, last ' + ago(WINDOW).replace(' ago', '')}].concat(mhz ? [{k:'Clock', v:(mhz / 1000).toFixed(2) + ' GHz', s:'average'}] : []))}</div>`
@@ -766,7 +772,7 @@ function ifSelCard(m){
   if (!P) list = `<div class="sub">Loading processes…</div>`;
   else {
     const on = P.filter(p => (p[15] || []).some(x => sel.includes(x))).sort((a, b) => (b[16] || 0) - (a[16] || 0) || b[4] - a[4]);
-    list = on.length ? `<div class="scroll-x"><table class="tbl"><thead><tr><th>Process</th><th>PID</th><th style="text-align:left">Runs in</th><th>Network (TCP)</th><th style="text-align:left">Via</th></tr></thead><tbody>${on.slice(0, 15).map(p => `<tr><td>${esc(p[1])}</td><td>${p[0]}</td><td class="l"><button type="button" class="namebtn" data-select="${esc(p[10])}" style="font-weight:400">${esc(nodes[p[10]] ? nodes[p[10]].name : '')}</button></td><td>${p[16] >= 0 ? rateText(p[16]) : '—'}</td><td class="l">${esc((p[15] || []).filter(x => sel.includes(x)).join(', '))}</td></tr>`).join('')}</tbody></table></div>${on.length > 15 ? `<div class="more">${on.length - 15} more.</div>` : ''}` : `<div class="sub">Nothing is talking through ${xs.length === 1 ? 'this interface' : 'these interfaces'} right now.</div>`;
+    list = on.length ? `<div class="scroll-x"><table class="tbl"><thead><tr><th>Process</th><th>PID</th><th style="text-align:left">Runs in</th><th>Network (TCP)</th><th style="text-align:left">Via</th></tr></thead><tbody>${on.slice(0, 15).map(p => `<tr><td>${esc(p[1])}</td><td>${esc(p[0])}</td><td class="l"><button type="button" class="namebtn" data-select="${esc(p[10])}" style="font-weight:400">${esc(nodes[p[10]] ? nodes[p[10]].name : '')}</button></td><td>${p[16] >= 0 ? rateText(p[16]) : '—'}</td><td class="l">${esc((p[15] || []).filter(x => sel.includes(x)).join(', '))}</td></tr>`).join('')}</tbody></table></div>${on.length > 15 ? `<div class="more">${on.length - 15} more.</div>` : ''}` : `<div class="sub">Nothing is talking through ${xs.length === 1 ? 'this interface' : 'these interfaces'} right now.</div>`;
   }
   return card.replace(/<\/section>$/, `<h3 class="cpuproc">Using ${xs.length === 1 ? 'this interface' : 'these interfaces'}</h3>${list}</section>`);
 }
@@ -838,7 +844,7 @@ function diskSelCard(m){
   else if (!P) list = `<div class="sub">Loading processes…</div>`;
   else {
     const on = P.filter(p => (p[14] || []).some(x => sel.includes(x))).sort((a, b) => b[6] - a[6]);
-    list = on.length ? `<div class="scroll-x"><table class="tbl"><thead><tr><th>Process</th><th>PID</th><th style="text-align:left">Runs in</th><th>Disk I/O (all disks)</th><th style="text-align:left">On</th></tr></thead><tbody>${on.slice(0, 15).map(p => `<tr><td>${esc(p[1])}</td><td>${p[0]}</td><td class="l"><button type="button" class="namebtn" data-select="${esc(p[10])}" style="font-weight:400">${esc(nodes[p[10]] ? nodes[p[10]].name : '')}</button></td><td>${rateText(p[6])}</td><td class="l">${esc((p[14] || []).filter(x => sel.includes(x)).join(', '))}</td></tr>`).join('')}</tbody></table></div>` : `<div class="sub">No process did I/O on ${ds.length === 1 ? 'this disk' : 'these disks'} in the last reading.</div>`;
+    list = on.length ? `<div class="scroll-x"><table class="tbl"><thead><tr><th>Process</th><th>PID</th><th style="text-align:left">Runs in</th><th>Disk I/O (all disks)</th><th style="text-align:left">On</th></tr></thead><tbody>${on.slice(0, 15).map(p => `<tr><td>${esc(p[1])}</td><td>${esc(p[0])}</td><td class="l"><button type="button" class="namebtn" data-select="${esc(p[10])}" style="font-weight:400">${esc(nodes[p[10]] ? nodes[p[10]].name : '')}</button></td><td>${rateText(p[6])}</td><td class="l">${esc((p[14] || []).filter(x => sel.includes(x)).join(', '))}</td></tr>`).join('')}</tbody></table></div>` : `<div class="sub">No process did I/O on ${ds.length === 1 ? 'this disk' : 'these disks'} in the last reading.</div>`;
   }
   return card.replace(/<\/section>$/, `<h3 class="cpuproc">Doing I/O on ${ds.length === 1 ? 'this disk' : 'these disks'}</h3>${list}</section>`);
 }
@@ -1457,6 +1463,8 @@ function select(id){
 }
 document.addEventListener('click', e => {
   if (e.target === $('tree')){ selectNone(); return; }
+  // a click in a group's rename box moves the caret; the row around it doesn't take it as a select (#297)
+  if (e.target.closest('#tree input.tg-name')) return;
   // a machine's dot (or Connect on its page) turns its connection off or on; it doesn't select the row
   const cn = e.target.closest('[data-conn]'); if (cn){ e.stopPropagation(); setConnected(cn.dataset.conn, cn.getAttribute('aria-pressed') !== 'true'); return; }
   if (e.target.closest('[data-autoconn]')){ openAutoConn(e.target.closest('[data-autoconn]')); return; }
@@ -2672,7 +2680,9 @@ function renameGroup(key, id){
   const inp = document.createElement('input'); inp.className = 'tg-name'; inp.value = n.textContent; inp.setAttribute('aria-label', 'Group name');
   n.replaceWith(inp); inp.focus(); inp.select(); RENAMING = inp;
   let done = false;
-  const commit = ok => { if (done) return; done = true; RENAMING = null; const v = inp.value.trim().slice(0, 60); if (ok && v) updGroup(key, id, g => Object.assign({}, g, {name:v})); else renderTree(); };
+  // saved once the code running now is done: a redraw that takes the box away (its blur fires mid-render) would
+  // otherwise put the old name back over the new one (#297)
+  const commit = ok => { if (done) return; done = true; RENAMING = null; const v = inp.value.trim().slice(0, 60); queueMicrotask(() => { if (ok && v) updGroup(key, id, g => Object.assign({}, g, {name:v})); else renderTree(); }); };
   inp.addEventListener('keydown', e => { if (e.key === 'Enter'){ e.preventDefault(); commit(true); } if (e.key === 'Escape'){ e.preventDefault(); e.stopPropagation(); commit(false); } });
   inp.addEventListener('blur', () => commit(true));
 }
@@ -2904,23 +2914,36 @@ function connTitle(n){
   if (!n.on) return 'off · click to connect';
   return (n.status === 'off' ? 'stopped on its host' : statusText(n)) + ' · click to disconnect';
 }
+// A connection turned on or off by hand shows as asked until the server says so (#302): /api/fleet answers from
+// machine specs built once a reading (up to an interval old), and a poll already on its way left before the change.
+// CONN_ASKED: machine id -> {on, until}; it goes when the server agrees, turns it down, or after 15 s.
+const CONN_ASKED = {};
+function connAsked(m, s){
+  const a = CONN_ASKED[m.id]; if (!a) return;
+  if (s && ((s.on !== false) === a.on || Date.now() > a.until)){ delete CONN_ASKED[m.id]; return; }
+  m.on = a.on; m.status = a.on ? 'connecting' : 'disabled'; if (!a.on) m.hasData = false;
+}
 async function setConnected(id, on){
   const n = nodes[id];
-  if (n){ n.on = on; n.status = on ? 'connecting' : 'disabled'; updateTree(); }
+  CONN_ASKED[id] = {on, until:Date.now() + 15000};
+  if (n){ connAsked(n); updateTree(); if (S.sel === id){ lastMainHTML = ''; renderMain(); } }   // the click shows at once, on its page too
   try {
     const r = await api('/api/connect', {machine:id, on});
     if (r.connect && DATA) DATA.connect = r.connect;
-    if (!r.ok) toast('Couldn’t change that connection');
+    if (!r.ok){ delete CONN_ASKED[id]; toast('Couldn’t change that connection'); }
     else toast(`${on ? 'Connecting to' : 'Disconnected'} ${n ? n.name : id}`);
-  } catch (e) { toast('Couldn’t change that connection'); }
+  } catch (e) { delete CONN_ASKED[id]; toast('Couldn’t change that connection'); }
   lastMainHTML = ''; refreshNow();
 }
 function autoLabel(c){ return !c || c.auto === 'none' ? 'None' : c.auto === 'all' ? 'All' : c.auto; }   // nothing chosen: None (#224)
 function renderAutoConn(){
   const box = $('autoconn'); if (!box || AC.naming) return;
   const c = DATA && DATA.connect, label = autoLabel(c);
-  const html = `<button type="button" class="btn autoc-btn" data-autoconn="1" aria-haspopup="menu" title="Which machines Fleet connects to when it starts">${icon('power')}<span>Auto: ${esc(label)}</span></button>`;
-  if (box.innerHTML !== html) box.innerHTML = html;
+  // drawn again only for a new label: the browser writes the icon's <path/> back as <path></path>, so comparing
+  // innerHTML never matched and every poll replaced the button, its focus and a click in progress with it (#302)
+  if (box.dataset.label === label && box.querySelector('[data-autoconn]')) return;
+  box.dataset.label = label;
+  box.innerHTML = `<button type="button" class="btn autoc-btn" data-autoconn="1" aria-haspopup="menu" title="Which machines Fleet connects to when it starts">${icon('power')}<span>Auto: ${esc(label)}</span></button>`;
 }
 async function connApi(body){
   try {

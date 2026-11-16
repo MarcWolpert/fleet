@@ -32,8 +32,15 @@ test('the + sits at the bottom of the tree panel, in both trees, and opens the i
   }
 });
 
+// machines.toml as /api/config reads it back: the machines already there (one a VM on another, with a domain, a
+// Tailscale name and a note), an interval and a terminal that aren't the defaults (#298)
+const SAVED = () => ({path: '/dev/null', interval: 5, terminal: 'iterm', terminals: [['iterm', 'iTerm']], status: {}, machines: [
+  {id: 'nas', name: 'nas', ssh: 'me@nas', os: 'linux', tile: 'server', tailscale: 'nas.example.ts.net'},
+  {id: 'dev-vm', name: 'dev-vm', ssh: 'me@dev-vm', os: 'linux', tile: 'vm', vm_on: 'nas', domain: 'dev-vm', note: {label: 'Note', text: 'a test VM'}},
+  {id: 'build-box', name: 'old build box', ssh: 'me@old-build', os: 'linux', tile: 'server'}]});
+
 test('the form tests the connection and adds the machine to the saved config', async () => {
-  const fx = fixture();
+  const fx = fixture(); fx.config = SAVED();
   const p = await browser.page(fx, {ui: ui()});
   try {
     await p.waitFor(`document.querySelector('[data-addmachinedlg]')`);
@@ -47,10 +54,9 @@ test('the form tests the connection and adds the machine to the saved config', a
     assert.deepEqual(posts(fx, '/api/test').pop(), {ssh: 'me@build.example.ts.net', os: 'windows'});
     await p.eval(`(() => { document.querySelector('#addm [data-addmsave]').click(); return true; })()`);
     await p.waitFor(`!document.getElementById('addm')`);
-    const cfg = posts(fx, '/api/config').pop();
-    assert.equal(cfg.machines.length, 1);
-    assert.deepEqual(cfg.machines[0], {id: 'build-box', name: 'build box', ssh: 'me@build.example.ts.net', os: 'windows', tile: 'desktop'});
-    assert.equal(cfg.interval, 3);
+    // the whole file comes back as it was, the new machine after the others (its id beside the taken build-box)
+    assert.deepEqual(posts(fx, '/api/config'), [{interval: 5, terminal: 'iterm', machines: SAVED().machines.concat([
+      {id: 'build-box-2', name: 'build box', ssh: 'me@build.example.ts.net', os: 'windows', tile: 'desktop'}])}]);
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
 });

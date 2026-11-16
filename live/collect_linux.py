@@ -468,16 +468,23 @@ def net_users(ifaddr, procs):
 def guest_mem(meminfo, vmstat, balloon_features, page):
     """[MemTotal, MemAvailable] in bytes, as this machine has them now. In a VM whose virtio balloon
     negotiated deflate-on-OOM (feature bit 2), the pages the host took back stay inside MemTotal and read
-    as used, so they come out of the total; without that feature the kernel already took them out."""
+    as used, so they come out of the total; without that feature the kernel already took them out.
+    The balloon's size is nr_balloon_pages where the kernel has it (6.15 on); before that, every page the
+    balloon took and gave back is counted, so it is balloon_inflate - balloon_deflate (#300)."""
     mi = {}
     for line in meminfo.splitlines():
         k, _, v = line.partition(":")
         if v.split():
             mi[k] = int(v.split()[0]) * 1024
     total, avail = mi.get("MemTotal", 0), mi.get("MemAvailable", 0)
-    m = re.search(r"^nr_balloon_pages (\d+)$", vmstat, re.M)
-    if m and any(len(f.strip()) > 2 and f.strip()[2] == "1" for f in balloon_features):
-        total = max(avail, total - int(m.group(1)) * page)
+    def stat(name):
+        m = re.search(r"^%s (\d+)$" % name, vmstat, re.M)
+        return int(m.group(1)) if m else None
+    pages = stat("nr_balloon_pages")
+    if pages is None and stat("balloon_inflate") is not None:
+        pages = max(0, stat("balloon_inflate") - (stat("balloon_deflate") or 0))
+    if pages and any(len(f.strip()) > 2 and f.strip()[2] == "1" for f in balloon_features):
+        total = max(avail, total - pages * page)
     return [total, avail]
 
 
@@ -532,6 +539,14 @@ def qemu_vm(cmdline):
                 if kv.startswith("guest="):
                     return kv[6:].replace("\1", ",")
     return ""
+
+
+def hugetlb_bytes(status):
+    """The huge pages (hugetlbfs) a process has mapped, from its /proc/<pid>/status (Linux 4.4 on). They are not in
+    its RSS, so a VM whose guest RAM is on huge pages (libvirt <memoryBacking><hugepages/>) would cost its host
+    almost nothing and leave the rest to Base system (#300)."""
+    m = re.search(r"^HugetlbPages:\s*(\d+) kB", status, re.M)
+    return int(m.group(1)) * 1024 if m else 0
 
 
 def libvirt_vms():
@@ -673,17 +688,19 @@ def snapshot():
         iob = (int(rb.group(1)) + int(wb.group(1))) if rb and wb else -1
         argv = rd("/proc/%s/cmdline" % pid)
         cmd = argv.replace("\0", " ").strip()
-        vm = ""
+        vm, rss = "", int(f[21]) * PAGE
         if comm.startswith("qemu"):
             vm = qemu_vm(argv)
             if vm:
-                m = re.search(r"Cpus_allowed_list:\s*(\S+)", rd("/proc/%s/status" % pid))
+                status = rd("/proc/%s/status" % pid)
+                m = re.search(r"Cpus_allowed_list:\s*(\S+)", status)
                 out.setdefault("vm_cpus", {})[vm] = m.group(1) if m else ""
+                rss += hugetlb_bytes(status)   # its guest RAM on huge pages isn't in RSS
         if cid and cid not in first_pid_of:
             first_pid_of[cid] = pid
         if cid:  # when the container's first process started (ticks since boot)
             started[cid] = min(started.get(cid, int(f[19])), int(f[19]))
-        procs.append([int(pid), int(f[1]), comm, f[0], int(f[11]) + int(f[12]), int(f[21]) * PAGE,
+        procs.append([int(pid), int(f[1]), comm, f[0], int(f[11]) + int(f[12]), rss,
                       int(f[17]), users.get(uid, uid), iob, cid, vm, unit, cmd[:300], int(f[36]) if len(f) > 36 else -1])
     out["procs"] = procs
 
