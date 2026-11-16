@@ -63,6 +63,24 @@ class Icon(unittest.TestCase):
             self.assertEqual(f.read().strip(), hashlib.sha256(re.sub(r"<!--.*?-->", "", svg, flags=re.S).encode()).hexdigest(),
                              "the drawing changed: run live/packaging/make_icons.sh")
 
+    def test_the_boat_sits_centred_top_to_bottom(self):
+        # #355: as much tile above the boat as below it. Its bounds come from its shapes: every rect, and every point of
+        # every path (the curves here bend toward their control points, never past them)
+        import re
+        svg = open(os.path.join(LIVE, "packaging", "icon", "fleet.svg"), encoding="utf-8").read()
+        tile = re.search(r'<rect x="(\d+)" y="(\d+)" width="(\d+)" height="(\d+)" rx="\d+" fill="url\(#g2\)"/>', svg)
+        top, bottom = int(tile.group(2)), int(tile.group(2)) + int(tile.group(4))
+        dx, dy = map(float, re.search(r'<g transform="translate\(([-\d.]+) ([-\d.]+)\)">', svg).groups())
+        boat = svg[svg.index('<g transform="translate(0 0)'):]
+        ys = []
+        for m in re.finditer(r'<rect x="[-\d.]+" y="([-\d.]+)" width="[-\d.]+" height="([-\d.]+)"', boat):
+            ys += [float(m.group(1)), float(m.group(1)) + float(m.group(2))]
+        for d in re.findall(r' d="([^"]+)"', boat):
+            ys += [float(y) for _, y in re.findall(r"(-?[\d.]+),(-?[\d.]+)", d)]
+        above, below = min(ys) + dy - top, bottom - (max(ys) + dy)
+        self.assertGreater(above, 100)
+        self.assertLessEqual(abs(above - below), 2, "%.0f px above the boat, %.0f below" % (above, below))
+
     def test_the_icon_names_no_local_path(self):
         # the page serves web/icon.svg as its favicon, and fleet.svg ships in the packages: neither may say where on
         # a developer's machine it was made (#298)
