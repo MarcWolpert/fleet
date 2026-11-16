@@ -37,6 +37,9 @@ test('the tree, the space bar, the machine page and All machines show each machi
     assert.equal(await p.eval(LEFT('.mrow .tile[data-os="windows"]')), true, 'tile');
     await p.eval(`(document.querySelector('#tree .row[data-select="mac"] .nm').click(), true)`);
     await p.waitFor(`document.querySelector('.hero .tile[data-os="macos"]')`);
+    // the drawing fills its tile at every size (#222): the 46 px machine page tile, a pill, a row
+    const FILL = sel => `(() => { const t = document.querySelector(${JSON.stringify(sel)}), a = t.getBoundingClientRect(), b = t.querySelector('svg').getBoundingClientRect(); return [Math.round(a.width), Math.round(b.width), Math.round(a.height), Math.round(b.height)]; })()`;
+    for (const sel of ['.hero .tile.ostile', '.space .tile.ostile']){ const [tw, sw, th, sh] = await p.eval(FILL(sel)); assert.ok(tw > 20 && sw === tw && sh === th, `${sel}: ${tw}x${th} tile, ${sw}x${sh} drawing`); }
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
 });
