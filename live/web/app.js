@@ -1095,7 +1095,7 @@ function detailsView(n, docked){
   // A process is open: rows keep the places they had when it opened (new ones go last), so nothing moves under you.
   const holding = INSP.pid && INSP.mid === mid && INSP.order;
   if (holding){ const pos = new Map(INSP.order.map((pid, i) => [pid, i])); list = list.filter(p => pos.has(p[0])).sort((a, b) => pos.get(a[0]) - pos.get(b[0])).concat(list.filter(p => !pos.has(p[0]))); }
-  const groupBy = {none:null, cpugroup:groupOf, owner:p => ownerName(p[10]) || '—', user:p => p[2] || '—', state:p => stateLabel(p[3]) || '—'}[S.group];
+  const groupBy = {none:null, cpugroup:groupOf, owner:p => nodes[p[10]] ? p[10] : '—', user:p => p[2] || '—', state:p => stateLabel(p[3]) || '—'}[S.group];
   const LIMIT = 400;
   let body = '', shown = 0, more = '';
   const isInsp = p => INSP.pid === p[0] && INSP.mid === mid;
@@ -1107,6 +1107,9 @@ function detailsView(n, docked){
     // and share the row limit.
     const groups = new Map();
     list.forEach(p => { const g = groupBy(p); if (!groups.has(g)) groups.set(g, []); groups.get(g).push(p); });
+    // Where it runs is keyed by tree node; a name two of them share (db in two Compose projects) says what each is in
+    const names = S.group === 'owner' ? [...groups.keys()].map(ownerName) : [];
+    const label = g => { const o = S.group === 'owner' && nodes[g]; if (!o) return g; const par = o.kind === 'cron' ? ownerOf(o) : o.parent; return names.filter(x => x === o.name).length > 1 && par ? o.name + ' · ' + par.name : o.name; };
     let ordered = [...groups.entries()].sort((a, b) => b[1].reduce((s, p) => s + p[4], 0) - a[1].reduce((s, p) => s + p[4], 0));
     if (holding && INSP.gorder){ const gp = new Map(INSP.gorder.map((g, i) => [g, i])); ordered = ordered.filter(x => gp.has(x[0])).sort((a, b) => gp.get(a[0]) - gp.get(b[0])).concat(ordered.filter(x => !gp.has(x[0]))); }
     const isOpen = g => groupOpen(S.group, g);
@@ -1116,7 +1119,7 @@ function detailsView(n, docked){
     ordered.forEach(([g, ps]) => {
       const c = ps.reduce((s, p) => s + p[4], 0), mem = ps.reduce((s, p) => s + p[5], 0), open = isOpen(g);
       const dk = ps.reduce((s, p) => s + (p[6] || 0), 0), nt = ps.reduce((s, p) => s + Math.max(0, p[16] || 0), 0);
-      body += `<tr class="gh"><td colspan="${COLS.length}"><button type="button" class="ghbtn" data-gtoggle="${esc(g)}" aria-expanded="${open}" aria-label="${open ? 'Collapse' : 'Expand'} ${esc(g)}">${icon('chev', 2.4)}${esc(g)}<span>${ps.length} process${ps.length === 1 ? '' : 'es'} · CPU ${pct(c / ncpu * 100)} · ${memText(mem)}${dk > 0 ? ' · disk ' + rateText(dk) : ''}${nt > 0 ? ' · net ' + rateText(nt) : ''}</span></button></td></tr>`;
+      body += `<tr class="gh"><td colspan="${COLS.length}"><button type="button" class="ghbtn" data-gtoggle="${esc(g)}" aria-expanded="${open}" aria-label="${open ? 'Collapse' : 'Expand'} ${esc(label(g))}">${icon('chev', 2.4)}${esc(label(g))}<span>${ps.length} process${ps.length === 1 ? '' : 'es'} · CPU ${pct(c / ncpu * 100)} · ${memText(mem)}${dk > 0 ? ' · disk ' + rateText(dk) : ''}${nt > 0 ? ' · net ' + rateText(nt) : ''}</span></button></td></tr>`;
       if (!open){ closedN += ps.length; closedG++; return; }
       ps.slice(0, per).forEach(p => { body += rowHTML(p); shown++; });
       cut += Math.max(0, ps.length - per);
