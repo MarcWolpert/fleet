@@ -386,6 +386,30 @@ def libvirt_vms():
     return vms
 
 
+def nvidia_gpus():
+    """NVIDIA GPUs from nvidia-smi --query-gpu."""
+    gpus = []
+    # the newer fields fail the whole query on old drivers, so fall back to the basic one
+    q = "index,name,utilization.gpu,memory.used,memory.total,pci.bus_id"
+    extra = ",utilization.memory,temperature.gpu,power.draw,power.limit,clocks.gr,clocks.max.gr,clocks.mem,fan.speed,utilization.encoder,utilization.decoder"
+    rows = run(["nvidia-smi", "--query-gpu=" + q + extra, "--format=csv,noheader,nounits"]).splitlines()
+    if not any(line.count(",") >= 15 for line in rows):
+        rows = run(["nvidia-smi", "--query-gpu=" + q, "--format=csv,noheader,nounits"]).splitlines()
+    num = lambda x: float(x) if re.match(r"^-?\d+(\.\d+)?$", x) else None   # "[N/A]", "[Not Supported]" -> None
+    for line in rows:
+        f = [x.strip() for x in line.split(",")]
+        if len(f) in (6, 16):
+            bus = f[5].lower()
+            bus = bus[4:] if re.match(r"^0000[0-9a-f]{4}:", bus) else bus  # 00000000:83:00.0 -> 0000:83:00.0
+            # a field it can't read (utilization in MIG mode, memory on unified-memory parts) counts as 0, like an empty one
+            g = {"index": int(f[0]), "name": f[1], "util": num(f[2]) or 0.0, "memUsed": num(f[3]) or 0.0, "memTotal": num(f[4]) or 0.0, "pdev": bus}
+            if len(f) == 16:
+                for k, x in zip(("memUtil", "temp", "power", "powerLimit", "clock", "clockMax", "memClock", "fan", "enc", "dec"), f[6:]):
+                    g[k] = num(x)
+            gpus.append(g)
+    return gpus
+
+
 def snapshot():
     global out
     out = {"t": time.time(), "hz": HZ, "ncpu": os.cpu_count(), "host": os.uname()[1], "kernel": os.uname()[2]}
@@ -562,24 +586,7 @@ def snapshot():
     out["timers"] = timers
 
     # NVIDIA GPUs and which processes use them.
-    gpus = []
-    # the newer fields fail the whole query on old drivers, so fall back to the basic one
-    q = "index,name,utilization.gpu,memory.used,memory.total,pci.bus_id"
-    extra = ",utilization.memory,temperature.gpu,power.draw,power.limit,clocks.gr,clocks.max.gr,clocks.mem,fan.speed,utilization.encoder,utilization.decoder"
-    rows = run(["nvidia-smi", "--query-gpu=" + q + extra, "--format=csv,noheader,nounits"]).splitlines()
-    if not any(line.count(",") >= 15 for line in rows):
-        rows = run(["nvidia-smi", "--query-gpu=" + q, "--format=csv,noheader,nounits"]).splitlines()
-    num = lambda x: float(x) if re.match(r"^-?\d+(\.\d+)?$", x) else None   # "[N/A]", "[Not Supported]" -> None
-    for line in rows:
-        f = [x.strip() for x in line.split(",")]
-        if len(f) in (6, 16):
-            bus = f[5].lower()
-            bus = bus[4:] if re.match(r"^0000[0-9a-f]{4}:", bus) else bus  # 00000000:83:00.0 -> 0000:83:00.0
-            g = {"index": int(f[0]), "name": f[1], "util": float(f[2] or 0), "memUsed": float(f[3] or 0), "memTotal": float(f[4] or 0), "pdev": bus}
-            if len(f) == 16:
-                for k, x in zip(("memUtil", "temp", "power", "powerLimit", "clock", "clockMax", "memClock", "fan", "enc", "dec"), f[6:]):
-                    g[k] = num(x)
-            gpus.append(g)
+    gpus = nvidia_gpus()
     try:
         cards = drm_gpus()
     except Exception:

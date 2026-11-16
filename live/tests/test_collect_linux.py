@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """collect_linux.py's parsers, fed the text each source prints (/proc/net/dev, sysfs CPU lists, crontabs, virsh,
-QEMU command lines).
+QEMU command lines, nvidia-smi).
 Importing the collector reads nothing from this machine: its reading loop runs only when the file runs as a
 script, the way Fleet Live pipes it to `python3 -`. Every assertion is the exact result.
 
@@ -164,6 +164,57 @@ class QemuVm(unittest.TestCase):
     def test_no_name_is_no_vm(self):
         c = collector()
         self.assertEqual([c.qemu_vm(qemu_cmdline()), c.qemu_vm("")], ["", ""])
+
+
+def fake_nvidia_smi(full, basic=""):
+    """nvidia-smi answering the collector's full --query-gpu with `full` and the basic one (old drivers) with `basic`."""
+    def run(cmd, timeout=8):
+        if cmd[0] != "nvidia-smi" or not cmd[1].startswith("--query-gpu="):
+            return ""
+        return full if "utilization.decoder" in cmd[1] else basic
+    return run
+
+
+def nv(index, name, bus, **kw):
+    g = {"index": index, "name": name, "util": 0.0, "memUsed": 0.0, "memTotal": 0.0, "pdev": bus}
+    g.update(kw)
+    return g
+
+
+NO_EXTRA = dict.fromkeys(("memUtil", "temp", "power", "powerLimit", "clock", "clockMax", "memClock", "fan", "enc", "dec"))
+
+
+class NvidiaGpus(unittest.TestCase):
+    def gpus(self, full, basic=""):
+        c = collector()
+        with mock.patch.object(c, "run", fake_nvidia_smi(full, basic)):
+            return c.nvidia_gpus()
+
+    def test_fields_nvidia_smi_cannot_read(self):
+        # a healthy card; an A100 in MIG mode (no utilization); a unified-memory part (no memory.used/total)
+        full = ("0, NVIDIA RTX A4000, 41, 1654, 16376, 00000000:83:00.0, 3, 47, 36.70, 140.00, 1410, 1950, 7000, 30, 4, 12\n"
+                "1, NVIDIA A100-SXM4-40GB, [N/A], 1024, 40960, 00000000:07:00.0, [N/A], 33, 61.20, 400.00, 1410, 1410, 1215, [N/A], [N/A], [N/A]\n"
+                "2, NVIDIA GB10, 5, [N/A], [N/A], 0000000F:01:00.0, [N/A], 41, 11.50, [N/A], 2405, 3003, [N/A], [N/A], 0, 0\n")
+        self.assertEqual(self.gpus(full), [
+            nv(0, "NVIDIA RTX A4000", "0000:83:00.0", util=41.0, memUsed=1654.0, memTotal=16376.0, memUtil=3.0, temp=47.0, power=36.7,
+               powerLimit=140.0, clock=1410.0, clockMax=1950.0, memClock=7000.0, fan=30.0, enc=4.0, dec=12.0),
+            nv(1, "NVIDIA A100-SXM4-40GB", "0000:07:00.0", memUsed=1024.0, memTotal=40960.0, memUtil=None, temp=33.0, power=61.2,
+               powerLimit=400.0, clock=1410.0, clockMax=1410.0, memClock=1215.0, fan=None, enc=None, dec=None),
+            nv(2, "NVIDIA GB10", "000f:01:00.0", util=5.0, memUtil=None, temp=41.0, power=11.5, powerLimit=None, clock=2405.0, clockMax=3003.0,
+               memClock=None, fan=None, enc=0.0, dec=0.0)])
+
+    def test_a_gpu_after_an_xid_error(self):
+        full = "0, NVIDIA GeForce RTX 3090, " + ", ".join(["[Unknown Error]"] * 3) + ", 00000000:01:00.0, " + ", ".join(["[Unknown Error]"] * 10) + "\n"
+        self.assertEqual(self.gpus(full), [nv(0, "NVIDIA GeForce RTX 3090", "0000:01:00.0", **NO_EXTRA)])
+
+    def test_old_driver_basic_query(self):
+        full = 'Field "clocks.max.gr" is not a valid field to query.\n'
+        basic = "0, Tesla K80, [Not Supported], 0, 11441, 00000000:04:00.0\n1, Tesla K80, 12, 300, 11441, 00000000:05:00.0\n"
+        self.assertEqual(self.gpus(full, basic), [nv(0, "Tesla K80", "0000:04:00.0", memTotal=11441.0),
+                                                  nv(1, "Tesla K80", "0000:05:00.0", util=12.0, memUsed=300.0, memTotal=11441.0)])
+
+    def test_no_nvidia_gpu(self):
+        self.assertEqual(self.gpus(""), [])
 
 
 if __name__ == "__main__":
