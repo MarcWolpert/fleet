@@ -61,7 +61,7 @@ test('a VM its host sees but that isn\'t running looks off, not reconnecting', a
   try {
     await p.waitFor(`document.querySelector('#tree .row[data-select="lx/vms/win11"]') && document.querySelector('#main .hero h1')`);
     assert.deepEqual(await p.eval(`['ubuntu', 'win11'].map(n => { const r = document.querySelector('#tree .row[data-select="lx/vms/' + n + '"]'), d = r.querySelector('.sdot'); return [[...r.classList].sort().join(' '), d.className, d.title]; })`),
-      [['machine ok row', 'sdot ok', 'live'], ['machine off row sel', 'sdot off', 'off']]);
+      [['machine ok row', 'sdot ok', 'live'], ['machine off row sel', 'sdot off', 'stopped']]);   // 'off' is a connection turned off (#215)
     assert.equal(await p.eval(`document.querySelector('#main .hero h1 .sdot').className`), 'sdot off');
     assert.equal(await p.eval(`!!document.querySelector('#main .spill')`), false, 'no "reconnecting" pill');
     assert.deepEqual(p.errors, []);

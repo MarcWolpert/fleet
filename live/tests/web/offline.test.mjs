@@ -138,7 +138,7 @@ const DOWN = {title: 'lab-linux isn’t answering', text: 'Nothing came back fro
 const AUTH = {title: 'lab-linux didn’t accept the login', text: 'The machine answered, but turned down the user or key Fleet used for admin@nas.',
   steps: ['Check the user in Settings (it looks like user@host).', 'Authorize your SSH key there: ssh-copy-id admin@nas for Linux; on Windows add it to the user’s .ssh\\authorized_keys, or administrators_authorized_keys for admin accounts.', RETRY]};
 const CASES = [
-  ['turned off (a VM its host reports as not running): no Retry', {status: 'off', error: ''}, {pill: [['off'], 'off'], kind: ['off'], title: 'lab-linux is turned off',
+  ['turned off (a VM its host reports as not running): no Retry', {status: 'off', error: ''}, {pill: [['off'], 'stopped'], kind: ['off'], title: 'lab-linux is stopped',
     text: 'Its host reports this VM as not running. Start it there and Fleet picks it up within a few seconds.', steps: [], actions: ['Open Settings'], raw: null}],
   ['connecting, before the first reading', {status: 'connecting', error: ''}, {pill: [['wait'], 'connecting'], kind: ['wait'], title: 'Connecting to lab-linux…',
     text: 'Waiting for its first reading.', steps: [], actions: ACT, raw: null}],
@@ -197,7 +197,7 @@ test('a VM’s offline card names its host as text, and a live machine’s hero 
   try {
     await p.waitFor(`document.querySelector('.state')`);
     assert.deepEqual(await p.eval(`[document.querySelector('.hero h1').firstChild.nodeValue, [...document.querySelectorAll('.hero .facts span')].map(s => s.textContent), document.querySelector('.state h2').textContent]`),
-      ['db <u>vm</u> ', ['Linux', 'VM on ' + NASTY], 'db <u>vm</u> is turned off']);
+      ['db <u>vm</u> ', ['Linux', 'VM on ' + NASTY], 'db <u>vm</u> is stopped']);
     await p.eval(`(select('lx'), true)`);
     await p.waitFor(`!document.querySelector('.state') && document.querySelector('.hero h1')`);
     assert.deepEqual(await p.eval(`[document.querySelector('.hero h1').firstChild.nodeValue, document.querySelectorAll('.hero h1 b, .hero h1 u').length]`), [NASTY + ' ', 0]);
