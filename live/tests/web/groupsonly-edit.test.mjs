@@ -87,17 +87,24 @@ for (const [where, opts] of [['Groups only', {groupsOnly: true}], ['a pinned gro
   });
 }
 
-// A redraw while the box is open (a poll that brings a new container) takes the box away and keeps what was typed,
-// as a click elsewhere does; the tree then shows that name, not the old one (#297)
-test('a redraw of the tree while a group is being renamed keeps the typed name, and the tree shows it', async () => {
+// A redraw while the box is open (a poll that brings a new container) leaves the box, what was typed and the focus
+// as they are (#293), and saves nothing yet; when the edit ends, as a click elsewhere ends it, what was typed is
+// saved and the tree shows that name, not the old one (#297)
+test('a redraw of the tree while a group is being renamed keeps the box and the typed name, and the tree then shows it', async () => {
   const f = fx(); const p = await open(f);
   try {
     await menu(p, 'div:gC'); await pick(p, 'Rename');
     await p.waitFor(`document.activeElement && document.activeElement.classList.contains('tg-name')`);
     await p.eval(`(() => { document.activeElement.value = 'Web ti'; renderTree(); return true; })()`);
+    await sleep(300);
+    assert.deepEqual(await p.eval(`(() => { const i = document.querySelector('#tree input.tg-name'); return [!!i && document.activeElement === i, i && i.value]; })()`), [true, 'Web ti']);
+    assert.equal(saved(f), null, 'nothing saved while the name is still being typed');
+    await p.eval(`(() => { document.activeElement.blur(); return true; })()`);
     await p.waitFor(`!document.querySelector('#tree input.tg-name')`);
     await sleep(300);
     assert.equal(saved(f)['machines|lx/containers'][0].name, 'Web ti');
+    assert.equal(await p.eval(`document.querySelector('#tree .row[data-select="div:gC"] .nm').textContent`), 'Web ti');
+    await sleep(2500);   // a poll later, the tree still says the new name
     assert.equal(await p.eval(`document.querySelector('#tree .row[data-select="div:gC"] .nm').textContent`), 'Web ti');
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
