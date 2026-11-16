@@ -298,6 +298,7 @@ function renderSpaces(){
     + (p.pinned ? `<button type="button" class="unpin" data-unpin="${esc(p.key)}" aria-label="Unpin ${esc(p.name)}" title="Unpin">${icon('x', 2.4)}</button>` : '') + `</div>`).join('')
     + `<button type="button" class="addpin" data-addpin="1" aria-haspopup="dialog" aria-expanded="${PICK.open}" aria-label="Pin a grouping to the space bar" title="Pin a grouping">${icon('plus', 2)}</button>`;
   watchDragRegions();
+  spacesFade();
 }
 
 /* ---------- + picker: pin any grouping ---------- */
@@ -1603,7 +1604,17 @@ async function setPins(pins){
   renderSpaces(); renderPickerList();
 }
 function togglePin(id){ setPins(PINS.includes(id) ? PINS.filter(x => x !== id) : PINS.concat([id])); }
-function goSpace(id){ S.space = id; S.sel = id; if (S.tree === 'network') S.tree = 'machines'; save(); renderAll(); $('main').scrollTop = 0; refreshNow(); }
+function goSpace(id){ S.space = id; S.sel = id; if (S.tree === 'network') S.tree = 'machines'; save(); renderAll(); $('main').scrollTop = 0; refreshNow(); spaceIntoView(); }
+// Many spaces (#383): the bar scrolls sideways (a wheel scrolls it too), the space you go to comes into view, and a
+// fade at an edge says there's more that way
+function spaceIntoView(){ const a = document.querySelector('#spaces .space.active'); if (a) a.scrollIntoView({block:'nearest', inline:'nearest', behavior:'smooth'}); setTimeout(spacesFade, 400); }
+function spacesFade(){ const b = $('spaces'); if (!b) return; b.classList.toggle('more-l', b.scrollLeft > 2); b.classList.toggle('more-r', b.scrollLeft + b.clientWidth < b.scrollWidth - 2); }
+document.addEventListener('wheel', e => {
+  const b = e.target.closest && e.target.closest('#spaces'); if (!b || b.scrollWidth <= b.clientWidth || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
+  e.preventDefault(); b.scrollLeft += e.deltaY; spacesFade();
+}, {passive:false});
+document.addEventListener('scroll', e => { if (e.target && e.target.id === 'spaces') spacesFade(); }, true);
+addEventListener('resize', () => spacesFade());
 function select(id){
   if (id === 'fleet') return goSpace('fleet');
   const n = nodes[id]; if (!n) return;
