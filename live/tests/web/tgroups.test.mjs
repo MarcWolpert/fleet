@@ -118,3 +118,25 @@ test('the network tree groups its machines the same way', async () => {
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
 });
+
+test('one click folds a group to its header; another brings it back exactly as it was (#53)', async () => {
+  const fx = fixture();
+  fx.fleet.prefs = {tgroups: {'machines|root': [{id: 'g1', name: 'Lab', ids: ['lx', 'lx2']}]}};
+  const p = await open({sel: 'fleet', open: Object.assign({}, CLOSED, {lx: true})}, fx);
+  const ROWS = `[...document.querySelectorAll('#tree .tgroup[data-tgroup="g1"] .row')].map(r => r.dataset.select)`;
+  try {
+    await p.waitFor(`document.querySelector('.tgroup[data-tgroup="g1"] [data-tgfold]')`);
+    const before = await p.eval(ROWS);
+    assert.deepEqual(before.slice(0, 2), ['lx', 'lx/base']);
+    await p.eval(`(() => { document.querySelector('.tgroup[data-tgroup="g1"] [data-tgfold]').click(); return true; })()`);
+    await p.waitFor(`${ROWS}.length === 0`);
+    assert.equal(await p.eval(`document.querySelector('.tgroup[data-tgroup="g1"] [data-tgfold]').getAttribute('aria-expanded')`), 'false');
+    assert.match(await p.eval(`document.querySelector('.tgroup[data-tgroup="g1"] .tg-h').textContent`), /2/);
+    assert.deepEqual(await p.eval(`[...document.querySelectorAll('#tree .row')].map(r => r.dataset.select)`), ['mac', 'win']);   // the rest of the tree as it was
+    assert.equal(await p.eval(`S.sel`), 'fleet');
+    await p.eval(`(() => { document.querySelector('.tgroup[data-tgroup="g1"] [data-tgfold]').click(); return true; })()`);
+    await p.waitFor(`${ROWS}.length > 0`);
+    assert.deepEqual(await p.eval(ROWS), before);
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});

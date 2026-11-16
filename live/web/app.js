@@ -1228,6 +1228,8 @@ function select(id){
 }
 document.addEventListener('click', e => {
   if (e.target === $('tree')){ selectNone(); return; }
+  // a group's chevron folds it to its header, or unfolds it as it was
+  const tf = e.target.closest('[data-tgfold]'); if (tf){ S.gfold = Object.assign({}, S.gfold, {[tf.dataset.tgfold]:!(S.gfold && S.gfold[tf.dataset.tgfold])}); save(); renderTree(); const b = document.querySelector(`[data-tgfold="${CSS.escape(tf.dataset.tgfold)}"]`); if (b) b.focus(); return; }
   // a group's header selects the group: its own all-up view (a fleet's is All machines for its members)
   const tgh = e.target.closest('#tree .tg-h');
   if (tgh && !e.target.closest('input') && S.tree !== 'network'){ const id = 'div:' + tgh.closest('.tgroup').dataset.tgroup; buildDivisions(); if (nodes[id]) select(id); return; }   // empty space in a tree: nothing selected, everything shown
@@ -2262,15 +2264,18 @@ function groupedWalk(roots, kidsOf, openFn, shownFn, scope){
       const gx = gs.find(x => x.members.includes(n));
       if (!gx) return one(n);
       gx.members.forEach(m => placed.add(m.id));
-      out.push({open:gx.g, key, d, kind:groupKind(gx.members)}); gx.members.forEach(one); out.push({close:true});
+      // a folded group is just its header; its members keep their own open state for when it unfolds
+      const folded = !!(S.gfold && S.gfold[gx.g.id]);
+      out.push({open:gx.g, key, d, kind:groupKind(gx.members), folded, count:gx.members.length}); if (!folded) gx.members.forEach(one); out.push({close:true});
     });
   })(roots, 0, 'root');
   return out;
 }
-function tgroupOpen({open:g, key, d, kind}){
+function tgroupOpen({open:g, key, d, kind, folded, count}){
   const label = GKIND[kind][1], dup = g.name.toLowerCase().startsWith(label);
+  const fold = `<button type="button" class="tg-fold${folded ? '' : ' open'}" data-tgfold="${esc(g.id)}" aria-expanded="${!folded}" aria-label="${folded ? 'Unfold' : 'Fold'} ${esc(g.name)}">${icon('chev', 2.4)}</button>`;
   return `<div class="tgroup${S.tree !== 'network' && S.sel === 'div:' + g.id ? ' sel' : ''}" data-tgroup="${esc(g.id)}" data-tgkey="${esc(key)}" data-kind="${kind}" role="group" aria-label="${esc(g.name)}, ${label}" style="--gc:var(--g-${kind});--d:${d}">`
-    + `<div class="tg-h" title="Click to see this group; double-click to rename; right-click for more"><i></i><span class="tg-n">${esc(g.name)}</span>${dup ? '' : `<span class="tg-k">${label}</span>`}</div>`;
+    + `<div class="tg-h" title="Click to see this group; double-click to rename; right-click for more">${fold}<i></i><span class="tg-n">${esc(g.name)}</span>${dup ? '' : `<span class="tg-k">${label}</span>`}${folded ? `<span class="count">${count}</span>` : ''}</div>`;
 }
 function updGroup(key, id, f){
   const all = Object.assign({}, PREFS.tgroups || {});
