@@ -48,6 +48,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         if !serverAnswers() { startServer() }
         let cfg = WKWebViewConfiguration()
         cfg.websiteDataStore = .default()
+        cfg.preferences.javaScriptCanOpenWindowsAutomatically = false  // macOS lets script open windows without a click by default
         cfg.userContentController.add(self, name: "fleet")
         web = FleetWebView(frame: .zero, configuration: cfg)
         web.navigationDelegate = self
@@ -194,10 +195,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         while p.isRunning && Date() < deadline { usleep(50_000) }
     }
 
-    // Links that want a new window open in the default browser.
+    // Links that want a new window open in the default browser, web links only: handed a file: URL or an app's
+    // own scheme, NSWorkspace would launch a program, and Fleet's page never needs that (#191).
     func webView(_ w: WKWebView, createWebViewWith c: WKWebViewConfiguration, for a: WKNavigationAction,
                  windowFeatures f: WKWindowFeatures) -> WKWebView? {
-        if let u = a.request.url { NSWorkspace.shared.open(u) }
+        if let u = a.request.url, opensInBrowser(u) { NSWorkspace.shared.open(u) }
         return nil
     }
 
@@ -306,6 +308,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         NSApp.helpMenu = help
         NSApp.windowsMenu = win
     }
+}
+
+/// Only web links leave the app for the default browser.
+func opensInBrowser(_ u: URL) -> Bool {
+    ["http", "https"].contains(u.scheme?.lowercased() ?? "") && !(u.host ?? "").isEmpty
 }
 
 /// The last `lines` lines of a log that have anything on them.

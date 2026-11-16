@@ -13,8 +13,9 @@ SWIFTC = shutil.which("swiftc") if sys.platform == "darwin" else None
 
 
 def func(name):
-    """The Swift source of one func of the app, to the brace that closes it."""
-    m = re.search(r"func %s\(" % re.escape(name), SWIFT)
+    """The Swift source of one func of the app, to the brace that closes it: func("zoom"), or for one of
+    several of a name, func("webView(_ w: WKWebView, didFinish")."""
+    m = re.search(r"func %s" % re.escape(name if "(" in name else name + "("), SWIFT)
     if not m:
         return ""
     depth, i = 0, SWIFT.index("{", m.end())
@@ -89,6 +90,25 @@ class Compiled(unittest.TestCase):
         out = swift_run(["logTail"], "print(logTail(%s, lines: 3))\nprint(logTail(\"\", lines: 3).isEmpty)" % swift_str(log))
         self.assertEqual(out, "  File \"fleet_live.py\", line 2004, in main\n    cfg = tomllib.load(f)\n"
                               "tomllib.TOMLDecodeError: Expected '=' after a key in a key/value pair (at line 3, column 5)\ntrue\n")
+
+    def test_only_web_links_leave_for_the_browser(self):
+        # #191: a page that opens a window hands its URL to the app; file: and apps' own schemes would launch a program
+        urls = ["https://example.org/fleet", "http://127.0.0.1:4518/", "HTTPS://example.org/a?b=c",
+                "file:///Users/Shared/run.command", "FILE:///private/tmp/x.app", "javascript:alert(1)", "data:text/html,hi",
+                "ssh://nas", "vnc://win-desktop", "x-apple.systempreferences:com.apple.preference.security", "mailto:someone@example.org",
+                "http:no-host", "about:blank"]
+        out = swift_run(["opensInBrowser"], "for s in [%s] { print(opensInBrowser(URL(string: s)!), s) }" % ", ".join(swift_str(u) for u in urls))
+        self.assertEqual(out.splitlines(), ["true " + u for u in urls[:3]] + ["false " + u for u in urls[3:]])
+
+
+class NewWindows(unittest.TestCase):
+    def test_a_window_the_page_opens_goes_to_the_browser_only_for_a_web_link(self):
+        # #191
+        self.assertIn("if let u = a.request.url, opensInBrowser(u) { NSWorkspace.shared.open(u) }", func("webView(_ w: WKWebView, createWebViewWith"))
+        self.assertEqual(SWIFT.count("NSWorkspace.shared.open("), 1)
+
+    def test_script_cant_open_windows_on_its_own(self):
+        self.assertIn("cfg.preferences.javaScriptCanOpenWindowsAutomatically = false", func("applicationDidFinishLaunching"))
 
 
 def swift_str(s):
