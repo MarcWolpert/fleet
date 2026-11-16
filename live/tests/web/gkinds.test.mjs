@@ -25,7 +25,7 @@ test('the kind comes from the members', async () => {
     assert.deepEqual(await p.eval(`[groupKind([{kind: 'machine'}, {kind: 'machine'}]), groupKind([{kind: 'machine', parent: {}}, {kind: 'machine', parent: {}}]), groupKind([{kind: 'container'}]),
       groupKind([{kind: 'cron'}, {kind: 'cron'}]), groupKind([{kind: 'project'}, {kind: 'service'}]), groupKind([{kind: 'machine'}, {kind: 'container'}]),
       groupKind([{kind: 'machine'}, {kind: 'machine', parent: {}}]), groupKind([{kind: 'base'}, {kind: 'group'}]), groupKind([{kind: 'nmachine'}]), groupKind([{kind: 'ncontainer'}]), groupKind([{kind: 'if'}])]`),
-      ['fleet', 'flotilla', 'division', 'section', 'squadron', 'taskforce', 'taskforce', 'taskforce', 'fleet', 'division', 'taskforce']);
+      ['fleet', 'flotilla', 'division', 'section', 'squadron', 'taskforce', 'taskforce', 'taskforce', 'fleet', 'division', 'response']);
   } finally { await p.close(); }
 });
 
