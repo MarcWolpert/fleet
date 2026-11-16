@@ -68,7 +68,7 @@ if (S.tree === 'pins'){ S.tree = 'machines'; S.pinsOnly = true; }  // pins-only 
 function save(){ try { const {hover, mx, my, ...keep} = S; localStorage.setItem('fleet-live-ui', JSON.stringify(keep)); } catch (e) {} }
 
 /* ---------- model ---------- */
-let DATA = null, PINS = [], WINDOW = 180, INTERVAL = 3, NET = null;
+let DATA = null, PINS = [], WINDOW = 180, INTERVAL = 3, PROCS = {machine:null, list:[]}, NET = null;
 const nodes = {}, roots = [];
 const zero = () => new Array(H).fill(0);
 function mk(id, p){ const n = Object.assign({id, children:[], parent:null}, p); nodes[id] = n; return n; }
@@ -303,8 +303,10 @@ function renderToolbar(){
     crumbs = `<button type="button" data-space="fleet">All machines</button>` + path.map((n, i) => `<span class="sep" aria-hidden="true">/</span>` + (i === path.length - 1 ? `<span class="cur">${esc(n.name)}</span>` : `<button type="button" data-select="${esc(n.id)}">${esc(n.name)}</button>`)).join('');
   }
   $('crumbs').innerHTML = crumbs;
-  $('metrics').innerHTML = METRICS.map(m => `<button type="button" data-metric="${m.id}" aria-pressed="${S.view === 'overview' && S.metric===m.id}">${m.label}</button>`).join('');
+  $('metrics').innerHTML = METRICS.map(m => `<button type="button" data-metric="${m.id}" aria-pressed="${S.view === 'overview' && S.metric===m.id}">${m.label}</button>`).join('')
+    + `<span class="sep-pill" aria-hidden="true"></span><button type="button" data-details="1" aria-pressed="${S.view === 'details'}">Details</button>`;
   document.querySelectorAll('[data-tree]').forEach(b => b.setAttribute('aria-pressed', String(S.tree === b.dataset.tree)));
+  renderFilterBar();
 }
 
 /* ---------- machine tree ---------- */
@@ -622,6 +624,136 @@ function cronView(n){
     + graphCard(mlabel(S.metric), 'spikes are runs', series, graphMax(0, series, S.metric), S.metric) + `</div>`;
 }
 
+/* ---------- Details: sortable process list ---------- */
+function procMachineFor(n){
+  const m = n.kind === 'machine' ? n : machineOf(n);
+  if (!m) return null;
+  if (m.status === 'ok') return m.id;
+  return m.parent ? hostOf(m).id : m.id;
+}
+function cpuGroupNames(mid){
+  const m = nodes[mid], map = {};
+  (m && m.groups || []).forEach(g => g.cpus.forEach(c => { map[c] = g.name; }));
+  return map;
+}
+const STATE = {R:'running', S:'sleeping', D:'disk wait', Z:'zombie', T:'stopped', t:'traced', I:'idle', U:'waiting', X:'dead'};
+function stateLabel(s){ return s ? (STATE[s[0]] || s) : ''; }
+function selectionFilters(m, all, gpuProcs){
+  if (!m) return [];
+  const os = (m.os || 'This OS').replace(/^Microsoft /, '').split(' ')[0], out = [];
+  return out;
+}
+// The node whose processes a Details view shows right now (full or docked), or null.
+function shownDetails(){
+  const n = S.sel === 'fleet' ? null : nodes[S.sel];
+  if (S.view === 'details') return n || roots[0] || null;
+  return null;
+}
+// Left of the view pills: what Details is filtered to, each part with its own ×, plus Clear all; and a
+// dot on the CPU, GPU and Disk I/O pills while their selection filters Details.
+let lastBarHTML = null;
+function renderFilterBar(){
+  const bar = $('dfbar'); if (!bar) return;
+  const n = shownDetails(), mid = n && procMachineFor(n), m = mid && nodes[mid];
+  const fs = m ? selectionFilters(m, PROCS.machine === mid ? PROCS.list : null, PROCS.machine === mid ? PROCS.gpuProcs : undefined) : [];
+  const html = fs.length ? `<span class="dflabel">Filter</span>` + fs.map(f => `<span class="fchip${f.apply ? '' : ' na'}" data-barchip="${f.kind}" title="${esc(f.apply ? m.name + ': ' + f.tip : f.why)}"><span>${esc(f.short)}</span><button type="button" data-dfclear="${f.kind}" aria-label="Clear the ${esc(f.short)} filter">${icon('x', 2.4)}</button></span>`).join('')
+    + (fs.length > 1 ? `<button type="button" class="dfall" data-dfclear="all">Clear all</button>` : '') : '';
+  if (html !== lastBarHTML){ bar.innerHTML = html; lastBarHTML = html; }
+  bar.hidden = !fs.length;
+  ['cpu', 'gpu', 'disk', 'net'].forEach(k => {
+    const b = document.querySelector(`#metrics [data-metric="${k}"]`), f = fs.find(x => x.kind === k); if (!b) return;
+    b.classList.toggle('filtered', !!f);
+    if (f) b.title = 'Details is filtered: ' + f.chip; else b.removeAttribute('title');
+  });
+}
+function filterChips(fs){
+  if (!fs.length) return '';
+  const chips = fs.map(f => `<span class="fchip${f.apply ? '' : ' na'}" data-fchip="${f.kind}" title="${esc(f.apply ? f.tip : f.why)}"><span>${esc(f.chip)}</span><button type="button" data-dfclear="${f.kind}" aria-label="Clear the filter: ${esc(f.chip)}">${icon('x', 2.4)}</button></span>`).join('');
+  return `<div class="dfchips" role="group" aria-label="Details is filtered">${chips}</div>` + fs.filter(f => !f.apply).map(f => noteHTML(esc(f.why))).join('');
+}
+// Details groups are collapsed unless opened; open ones are kept per Group-by mode.
+function groupOpen(mode, g){ return !!(S.groupOpen && S.groupOpen[mode] && S.groupOpen[mode].includes(String(g))); }
+function setGroupsOpen(mode, names){ S.groupOpen = Object.assign({}, S.groupOpen, {[mode]:names}); save(); renderMain(); }
+function detailsView(n, docked){
+  const mid = procMachineFor(n);
+  const m = nodes[mid];
+  const ncpu = m ? (m.ncpu || capOf(m, 'cpu')) : 1;
+  const gnames = cpuGroupNames(mid);
+  const all = PROCS.machine === mid ? PROCS.list : null;
+  const scopeAll = n.id === mid;
+  let list = all ? (scopeAll ? all : all.filter(p => nodes[p[10]] && within(nodes[p[10]], n.id))) : [];
+  const FS = selectionFilters(m, all, PROCS.machine === mid ? PROCS.gpuProcs : undefined);
+  FS.forEach(f => { if (f.apply) list = list.filter(f.apply); });
+  const q = S.filter.trim().toLowerCase();
+  if (q) list = list.filter(p => String(p[0]) === q || (p[1] || '').toLowerCase().includes(q) || (p[9] || '').toLowerCase().includes(q) || (p[2] || '').toLowerCase().includes(q));
+  const ownerName = id => nodes[id] ? nodes[id].name : '';
+  const groupOf = p => p[12] >= 0 ? (gnames[p[12]] || 'CPU ' + p[12]) : 'not reported by this OS';
+  const COLS = [
+    {k:'name', label:'Name', l:true, get:p => (p[1] || '').toLowerCase(), show:p => esc(p[1])},
+    {k:'pid', label:'PID', get:p => p[0], show:p => p[0]},
+    {k:'owner', label:'Runs in', l:true, get:p => ownerName(p[10]).toLowerCase(), show:p => `<button type="button" class="namebtn" data-select="${esc(p[10])}" style="font-weight:400">${esc(ownerName(p[10]))}</button>`},
+    {k:'user', label:'User', l:true, get:p => p[2] || '', show:p => esc(p[2] || '—')},
+    {k:'state', label:'Status', l:true, get:p => stateLabel(p[3]), show:p => esc(stateLabel(p[3]) || '—')},
+    {k:'cpu', label:'CPU', get:p => p[4], show:p => pct(p[4] / ncpu * 100)},
+    {k:'mem', label:'Memory', get:p => p[5], show:p => memText(p[5])},
+    {k:'disk', label:'Disk', get:p => p[6], show:p => rateText(p[6])},
+    {k:'gpu', label:'GPU', get:p => p[7], show:p => p[7] ? pct(p[7]) : '—'},
+    {k:'net', label:'Network', get:p => p[16] || 0, show:p => p[16] > 0 ? rateText(p[16]) : p[16] === 0 ? '0' : '—'},
+    {k:'threads', label:'Threads', get:p => p[8], show:p => p[8] || '—'},
+    {k:'cpugroup', label:'CPU group', l:true, get:p => groupOf(p), show:p => esc(p[12] >= 0 ? groupOf(p) + ' · cpu' + p[12] : '—')},
+    {k:'cmd', label:'Command line', l:true, cls:'cmd', get:p => p[9] || '', show:p => `<span title="${esc(p[9])}">${esc(p[9])}</span>`},
+    {k:'ppid', label:'Parent PID', get:p => p[11] || 0, show:p => p[11] || '—'},
+    {k:'lastcpu', label:'Last CPU', get:p => p[12], show:p => p[12] >= 0 ? 'cpu' + p[12] : '—'},
+    {k:'gpus', label:'Which GPU', l:true, get:p => (p[13] || []).join(','), show:p => (p[13] || []).length ? 'GPU' + p[13].join('+') : '—'},
+    {k:'disks', label:'Disks used', l:true, get:p => (p[14] || []).join(','), show:p => esc((p[14] || []).join(', ') || '—')},
+    {k:'ifaces', label:'Interfaces', l:true, get:p => (p[15] || []).join(','), show:p => esc((p[15] || []).join(', ') || '—')}
+  ];
+  const ALLCOLS = COLS.splice(0), SORT = detailSort();
+  colLayout().forEach(k => { const c = ALLCOLS.find(x => x.k === k); if (c) COLS.push(c); });
+  if (!COLS.length) COLS.push(ALLCOLS[0]);
+  const col = ALLCOLS.find(c => c.k === SORT.k) || COLS[0];
+  const dir = SORT.dir;
+  list = list.slice().sort((a, b) => { const x = col.get(a), y = col.get(b); return (x < y ? -1 : x > y ? 1 : 0) * dir || b[4] - a[4]; });
+  const groupBy = {none:null, cpugroup:groupOf, owner:p => ownerName(p[10]) || '—', user:p => p[2] || '—', state:p => stateLabel(p[3]) || '—'}[S.group];
+  const LIMIT = 400;
+  let body = '', shown = 0, more = '';
+  const rowHTML = p => `<tr data-pid="${p[0]}">${COLS.map(c => `<td class="${c.l ? 'l' : ''} ${c.cls || ''}">${c.show(p)}</td>`).join('')}</tr>`;  // data-pid: columns can move or hide
+  if (groupBy){
+    // Groups start collapsed, each header a summary; open ones are remembered per Group-by mode (S.groupOpen)
+    // and share the row limit.
+    const groups = new Map();
+    list.forEach(p => { const g = groupBy(p); if (!groups.has(g)) groups.set(g, []); groups.get(g).push(p); });
+    const ordered = [...groups.entries()].sort((a, b) => b[1].reduce((s, p) => s + p[4], 0) - a[1].reduce((s, p) => s + p[4], 0));
+    const isOpen = g => groupOpen(S.group, g);
+    const nOpen = ordered.filter(([g]) => isOpen(g)).length;
+    const per = nOpen ? Math.max(10, Math.floor(LIMIT / nOpen)) : 0;
+    let closedN = 0, closedG = 0, cut = 0;
+    ordered.forEach(([g, ps]) => {
+      const c = ps.reduce((s, p) => s + p[4], 0), mem = ps.reduce((s, p) => s + p[5], 0), open = isOpen(g);
+      const dk = ps.reduce((s, p) => s + (p[6] || 0), 0), nt = ps.reduce((s, p) => s + Math.max(0, p[16] || 0), 0);
+      body += `<tr class="gh"><td colspan="${COLS.length}"><button type="button" class="ghbtn" data-gtoggle="${esc(g)}" aria-expanded="${open}" aria-label="${open ? 'Collapse' : 'Expand'} ${esc(g)}">${icon('chev', 2.4)}${esc(g)}<span>${ps.length} process${ps.length === 1 ? '' : 'es'} · CPU ${pct(c / ncpu * 100)} · ${memText(mem)}${dk > 0 ? ' · disk ' + rateText(dk) : ''}${nt > 0 ? ' · net ' + rateText(nt) : ''}</span></button></td></tr>`;
+      if (!open){ closedN += ps.length; closedG++; return; }
+      ps.slice(0, per).forEach(p => { body += rowHTML(p); shown++; });
+      cut += Math.max(0, ps.length - per);
+    });
+    if (shown < list.length)
+      more = `Showing ${shown} of ${list.length} processes.`
+        + (closedG ? ` ${closedN} ${closedN === 1 ? 'is' : 'are'} in ${closedG} collapsed group${closedG === 1 ? '; open it' : 's; open a group'} to see ${closedN === 1 ? 'it' : 'them'}.` : '')
+        + (cut ? ` Open groups show their first ${per}; sort or filter to see others.` : '');
+  } else {
+    list.slice(0, LIMIT).forEach(p => { body += rowHTML(p); shown++; });
+    if (list.length > shown) more = `Showing ${shown} of ${list.length}. Sort or filter to see others.`;
+  }
+  const hasGroups = (m && m.groups || []).length > 1;
+  const groupNote = Object.keys(gnames).length && all && !all.some(p => p[12] >= 0) && S.group === 'cpugroup' && !FS.some(f => f.kind === 'cpu') ? noteHTML('This OS doesn’t report which processor a process last ran on, so CPU groups can’t be assigned per process here.') : '';
+  const head = `<div class="hero"><span class="tile" style="background:var(--track);color:var(--ink-2)">${icon('chip')}</span><div><h1>Details · ${esc(n.name)}${FS.length ? ' · ' + esc(FS.map(f => f.label).join(' · ')) : ''}</h1><div class="facts"><span>${all ? list.length + ' processes' : 'loading…'}</span><span>on ${esc(m ? m.name : '')}</span>${hasGroups ? `<span>CPU groups: ${esc(m.groups.map(g => g.name).join(', '))}</span>` : ''}</div></div></div>`;
+  const tools = `<div class="dtools"><input type="search" id="pfilter" placeholder="Filter by name, PID, user or command" value="${esc(S.filter)}" aria-label="Filter processes"><label>Group by <select id="pgroup"><option value="none"${S.group==='none'?' selected':''}>Nothing</option><option value="cpugroup"${S.group==='cpugroup'?' selected':''}>CPU group (CCD, P-/E-cores)</option><option value="owner"${S.group==='owner'?' selected':''}>Where it runs (tree node)</option><option value="user"${S.group==='user'?' selected':''}>User</option><option value="state"${S.group==='state'?' selected':''}>Status</option></select></label>${groupBy ? `<span class="gall"><button type="button" class="btn" data-gall="open">Expand all</button><button type="button" class="btn" data-gall="close">Collapse all</button></span>` : ''}</div>`;
+  const thead = `<tr>${COLS.map(c => `<th class="${c.l ? 'l' : ''}" data-colk="${c.k}" ${c.k === SORT.k ? `aria-sort="${dir < 0 ? 'descending' : 'ascending'}"` : ''}><button type="button" data-sort="${c.k}" title="Sort; right-click to choose and arrange columns">${c.label}${c.k === SORT.k ? (dir < 0 ? ' ↓' : ' ↑') : ''}</button></th>`).join('')}</tr>`;
+  const applied = FS.filter(f => f.apply);
+  if (applied.length && all && !list.length) body = `<tr class="empty"><td colspan="${COLS.length}" class="l" style="padding:18px 10px;color:var(--ink-3)">No process matches ${esc(applied.map(f => f.short).concat(q ? ['“' + S.filter.trim() + '”'] : []).join(' + '))} right now.</td></tr>`;
+  return head + groupNote + `<section class="card">${tools}${filterChips(FS)}<div class="pscroll"><table class="ptbl"><thead>${thead}</thead><tbody>${body}</tbody></table>${more ? `<div class="more">${more}</div>` : ''}</div></section>`;
+}
+
 /* ---------- network detail ---------- */
 function netView(){
   buildNet();
@@ -642,18 +774,20 @@ function netView(){
 /* ---------- main ---------- */
 let lastMainHTML = '';
 function renderMain(){
+  renderFilterBar();
   const main = $('main');
   const a = document.activeElement;
   let refocus = null, selStart = null;
   if (a && main.contains(a)){
     if (a.id) { refocus = '#' + a.id; selStart = a.selectionStart; }
-    else if (a.dataset) for (const k of ['select', 'mode', 'pin', 'netsel']) if (a.dataset[k] != null){ refocus = `[data-${k}="${CSS.escape(a.dataset[k])}"]`; break; }
+    else if (a.dataset) for (const k of ['select', 'mode', 'sort', 'pin', 'netsel', 'gtoggle', 'gall']) if (a.dataset[k] != null){ refocus = `[data-${k}="${CSS.escape(a.dataset[k])}"]`; break; }
   }
   let html;
-  if (S.tree === 'network') html = netView();
+  if (S.tree === 'network' && S.view !== 'details') html = netView();
   else {
     const n = S.sel === 'fleet' ? null : nodes[S.sel];
-    html = !n ? fleetView() : n.kind === 'machine' ? machineView(n) : n.kind === 'cronfolder' ? cronFolderView(n) : n.kind === 'cron' ? cronView(n) : n.hist ? leafView(n) : groupView(n);
+    if (S.view === 'details') html = detailsView(n || (roots[0] || {id:'', name:'—'}));
+    else html = !n ? fleetView() : n.kind === 'machine' ? machineView(n) : n.kind === 'cronfolder' ? cronFolderView(n) : n.kind === 'cron' ? cronView(n) : n.hist ? leafView(n) : groupView(n);
   }
   const full = `<div class="wrap">${html}</div>`;
   if (full === lastMainHTML) return;
@@ -763,14 +897,24 @@ document.addEventListener('click', e => {
   const sp = e.target.closest('[data-space]'); if (sp){ goSpace(sp.dataset.space); return; }
   const se = e.target.closest('[data-select]'); if (se){ select(se.dataset.select); return; }
   const me = e.target.closest('[data-metric]'); if (me){ S.metric = me.dataset.metric; S.view = 'overview'; save(); renderAll(); refreshNow(); return; }
+  const de = e.target.closest('[data-details]'); if (de){ S.view = 'details'; if (S.tree === 'network') S.tree = 'machines'; save(); renderAll(); refreshNow(); return; }
+  const gt = e.target.closest('[data-gtoggle]');
+  if (gt){ const g = gt.dataset.gtoggle, cur = (S.groupOpen && S.groupOpen[S.group]) || []; setGroupsOpen(S.group, cur.includes(g) ? cur.filter(x => x !== g) : cur.concat([g])); return; }
+  const ga = e.target.closest('[data-gall]');
+  if (ga){ setGroupsOpen(S.group, ga.dataset.gall === 'open' ? [...document.querySelectorAll('[data-gtoggle]')].map(b => b.dataset.gtoggle) : []); return; }
+  const so = e.target.closest('[data-sort]'); if (so){ const k = so.dataset.sort, cur0 = detailSort(); S.sorts = Object.assign({}, S.sorts, {[S.metric]:{k, dir:cur0.k === k ? -cur0.dir : (['name','owner','user','state','cpugroup','cmd','gpus','disks','ifaces'].includes(k) ? 1 : -1)}}); save(); lastMainHTML = ''; renderMain(); return; }
   const mo = e.target.closest('[data-mode]'); if (mo){ S.mode = mo.dataset.mode; save(); renderMain(); return; }
 });
 document.addEventListener('input', e => {
+  if (e.target.id === 'pfilter'){ S.filter = e.target.value; save(); renderMain(); }
   if (e.target.id === 'pickq'){ PICK.q = e.target.value; renderPickerList(); }
 });
 $('picker').addEventListener('keydown', e => {
   if (e.key === 'Escape'){ e.preventDefault(); closePicker(true); }
   if (e.key === 'Enter' && e.target.id === 'pickq'){ const first = $('picklist').querySelector('[data-pin]'); if (first){ e.preventDefault(); togglePin(first.dataset.pin); } }
+});
+document.addEventListener('change', e => {
+  if (e.target.id === 'pgroup'){ S.group = e.target.value; save(); renderMain(); }
 });
 document.addEventListener('toggle', e => { if (e.target.classList && e.target.classList.contains('state-raw')){ S.rawOpen = e.target.open; } }, true);
 
@@ -785,7 +929,9 @@ async function refreshNow(){
     INTERVAL = DATA.interval || 3; WINDOW = DATA.window_s || INTERVAL * H; PINS = DATA.pins || [];
     build(DATA);
     if (S.sel !== 'fleet' && !nodes[S.sel]) { /* keep selection; it may come back */ }
+    const n = S.sel === 'fleet' ? null : nodes[S.sel];
     const jobs = [];
+    if (S.view === 'details' && (n || roots[0])){ const mid = procMachineFor(n || roots[0]); if (mid) jobs.push(fetch('/api/procs?machine=' + encodeURIComponent(mid), {cache:'no-store'}).then(r => r.json()).then(d => { PROCS = {machine:mid, list:d.procs || [], gpuProcs:!!d.gpu_procs}; })); }
     if (S.tree === 'network') jobs.push(fetch('/api/net', {cache:'no-store'}).then(r => r.json()).then(d => { NET = d; }));
     await Promise.all(jobs.map(p => p.catch(() => null)));
     fails = 0; $('conn').hidden = true; $('live').hidden = false;
@@ -808,7 +954,7 @@ setInterval(refreshNow, 2000);
     try {
       const hs = await Promise.all(['/', '/app.js'].map(u => fetch(u, {method:'HEAD', cache:'no-store'}).then(r => (r.headers.get('last-modified') || '') + (r.headers.get('content-length') || ''))));
       const s = hs.join('|');
-      if (sig !== null && s !== sig && !PICK.open && !SET.open){ save(); location.reload(); return; }
+      if (sig !== null && s !== sig && !PICK.open && !SET.open && !(document.activeElement && document.activeElement.id === 'pfilter')){ save(); location.reload(); return; }
       sig = s;
     } catch (e) {}
   }
@@ -922,3 +1068,19 @@ function setField(t){
 $('sheet').addEventListener('input', e => setField(e.target));
 $('sheet').addEventListener('change', e => { setField(e.target); });
 $('sheet').addEventListener('keydown', e => { if (e.key === 'Escape'){ e.preventDefault(); closeSettings(); } });
+
+
+/* ---------- Details columns: a layout per detail type ---------- */
+const COL_LABELS = {name:'Name', pid:'PID', owner:'Runs in', user:'User', state:'Status', cpu:'CPU', mem:'Memory', disk:'Disk', gpu:'GPU', net:'Network',
+  threads:'Threads', cpugroup:'CPU group', cmd:'Command line', ppid:'Parent PID', lastcpu:'Last CPU', gpus:'Which GPU', disks:'Disks used', ifaces:'Interfaces'};
+const COL_DEFAULTS = {
+  cpu:['name', 'pid', 'owner', 'user', 'state', 'cpu', 'mem', 'threads', 'cpugroup', 'cmd'],
+  mem:['name', 'pid', 'owner', 'user', 'mem', 'cpu', 'threads', 'cmd'],
+  gpu:['name', 'pid', 'owner', 'gpu', 'gpus', 'cpu', 'mem', 'cmd'],
+  disk:['name', 'pid', 'owner', 'disk', 'disks', 'cpu', 'mem', 'cmd'],
+  net:['name', 'pid', 'owner', 'net', 'ifaces', 'cpu', 'mem', 'cmd']
+};
+function colType(){ return COL_DEFAULTS[S.metric] ? S.metric : 'cpu'; }
+function colLayout(){ return COL_DEFAULTS[colType()]; }
+// A header click sorts that detail type; until then every type keeps the usual default (CPU, highest first).
+function detailSort(){ const s0 = (S.sorts || {})[colType()]; return s0 && COL_LABELS[s0.k] ? s0 : (S.sort && COL_LABELS[S.sort.k] ? S.sort : {k:'cpu', dir:-1}); }

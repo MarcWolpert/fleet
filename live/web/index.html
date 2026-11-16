@@ -242,12 +242,49 @@ main{flex:1;min-width:0;overflow:auto;background:var(--win)}
 .side-tabs button[aria-pressed="true"]{background:var(--press);color:var(--ink)}
 .row.offline .nm,.row.off .nm{color:var(--ink-3)}
 .val.dim{color:var(--ink-3)}
+.seg .sep-pill{width:1px;background:var(--line-2);margin:4px 2px}
 .btn{display:inline-flex;align-items:center;gap:6px;padding:6px 11px;border-radius:8px;border:1px solid var(--line-2);font-size:12.5px;color:var(--ink-2);font-weight:500}
 .btn:hover{background:var(--hover);color:var(--ink)}
 .btn svg{width:13px;height:13px}
 .btn.on{color:var(--accent);border-color:color-mix(in srgb, var(--accent) 40%, transparent)}
 .warn{display:flex;gap:10px;align-items:flex-start;padding:12px 14px;border-radius:10px;background:color-mix(in srgb, var(--warn) 9%, transparent);border:1px solid color-mix(in srgb, var(--warn) 33%, transparent);font-size:13px;color:var(--ink-2)}
 .warn b{color:var(--ink)}
+.dtools{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-bottom:12px}
+.dtools input[type=search]{flex:1 1 220px;min-width:0;background:var(--side);border:1px solid var(--line-2);border-radius:8px;padding:7px 10px;color:var(--ink);font:13px var(--sans)}
+.dtools label{font-size:12.5px;color:var(--ink-3);display:inline-flex;align-items:center;gap:6px}
+.dtools select{background:var(--side);border:1px solid var(--line-2);border-radius:8px;padding:6px 8px;color:var(--ink);font:13px var(--sans)}
+.ptbl{width:100%;border-collapse:collapse;font-size:12.5px}
+.ptbl th{position:sticky;top:0;background:var(--card);text-align:right;font-weight:500;font-size:11px;color:var(--ink-3);text-transform:uppercase;letter-spacing:.05em;padding:0;border-bottom:1px solid var(--line);white-space:nowrap;z-index:1}
+.ptbl th button{width:100%;padding:7px 8px;text-align:inherit;color:inherit;font:inherit;letter-spacing:inherit;text-transform:inherit}
+.ptbl th button:hover{color:var(--ink)}
+.ptbl th.l,.ptbl td.l{text-align:left}
+.ptbl th[aria-sort] button{color:var(--ink)}
+.ptbl td{padding:5px 8px;border-bottom:1px solid color-mix(in srgb, var(--ink) 4%, transparent);text-align:right;font-family:var(--mono);font-size:12px;color:var(--ink-2);white-space:nowrap}
+.ptbl td.l{font-family:var(--sans);font-size:12.5px}
+.ptbl td.cmd{max-width:460px;overflow:hidden;text-overflow:ellipsis;font-family:var(--mono);font-size:11.5px;color:var(--ink-3);text-align:left}
+.ptbl tr.gh td{background:color-mix(in srgb, var(--ink) 3%, transparent);color:var(--ink);font-family:var(--sans);font-weight:600;text-align:left;padding:0}
+.ptbl tr.gh td span{color:var(--ink-3);font-weight:400;margin-left:10px;font-family:var(--mono);font-size:11.5px}
+.ghbtn{display:flex;align-items:center;gap:7px;width:100%;padding:8px;color:var(--ink);font:600 12.5px/1.3 var(--sans);text-align:left}
+.ghbtn:hover{background:color-mix(in srgb, var(--ink) 3%, transparent)}
+.ghbtn svg{width:12px;height:12px;flex:none;color:var(--ink-3);transition:transform .12s}
+.ghbtn[aria-expanded="true"] svg{transform:rotate(90deg)}
+.ghbtn:focus-visible{outline-offset:-2px}
+.dtools .gall{display:inline-flex;gap:6px;margin-left:auto}
+.dfchips{display:flex;flex-wrap:wrap;gap:6px;margin:-4px 0 12px}
+.fchip{display:inline-flex;align-items:center;gap:4px;height:26px;padding:0 4px 0 10px;border-radius:999px;background:color-mix(in srgb, var(--accent-bg) 14%, transparent);border:1px solid color-mix(in srgb, var(--accent) 40%, transparent);color:var(--ink);font-size:12.5px;font-weight:500;white-space:nowrap}
+.fchip button{width:20px;height:20px;border-radius:50%;display:grid;place-items:center;color:var(--ink-2)}
+.fchip button:hover{background:color-mix(in srgb, var(--ink) 10%, transparent);color:var(--ink)}
+.fchip button svg{width:11px;height:11px}
+.fchip.na{background:color-mix(in srgb, var(--ink) 4%, transparent);border-color:var(--line-2);color:var(--ink-3)}
+.dfbar{display:inline-flex;align-items:center;flex-wrap:wrap;gap:6px}
+.dfbar[hidden]{display:none}
+.dfbar .dflabel{font-size:12px;font-weight:500;color:var(--ink-3);margin-right:2px}
+.dfall{font-size:12px;font-weight:500;color:var(--accent);padding:4px 7px;border-radius:7px}
+.dfall:hover{background:var(--hover)}
+.seg button.filtered::after{content:"";display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--accent);margin-left:6px;vertical-align:2px}
+.ptbl tr:hover td{background:color-mix(in srgb, var(--ink) 2%, transparent)}
+.heat{display:inline-block;min-width:44px}
+.pscroll{overflow:auto;max-height:calc(100vh - 230px);border:1px solid var(--line);border-radius:10px}
 .more{padding:10px;font-size:12.5px;color:var(--ink-3)}
 .conn{font:500 11px/1 var(--mono);color:var(--warn)}
 .side-note svg{width:12px;height:12px;vertical-align:-2px;display:inline-block}
@@ -387,6 +424,7 @@ main{flex:1;min-width:0;overflow:auto;background:var(--win)}
   </header>
   <div class="toolbar">
     <nav class="crumbs" id="crumbs" aria-label="Path"></nav>
+    <div class="dfbar" id="dfbar" role="group" aria-label="Details is filtered to" hidden></div>
     <div class="seg" id="metrics" role="group" aria-label="View"></div>
     <span class="conn" id="conn" hidden>reconnecting…</span>
     <span class="badge" id="live"><i></i>live</span>
