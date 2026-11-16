@@ -1913,13 +1913,14 @@ def inspect_mac(pid):
 # ---------------------------------------------------------------- Macs over SSH (#181)
 # A remote Mac runs exactly the reader this Mac runs: its source, with the helpers it calls, streamed to
 # `python3 -` (the system Python 3.9 of a Mac with the Command Line Tools is enough).
-MAC_HELPERS = ["run", "size_bytes", "docker_pct", "parse_cputime", "fmt_secs", "human_cron", "job_name", "mac_gpu_stats"]
+MAC_HELPERS = ["run", "size_bytes", "docker_pct", "parse_cputime", "fmt_secs", "human_cron", "JOB_GUARDS", "JOB_WRAPPERS", "JOB_ARGS", "job_name",
+               "mac_gpu_stats"]
 MAC_IMPORTS = "import base64, collections, ctypes, ctypes.util, glob, json, os, platform, plistlib, re, shlex, shutil, subprocess, sys, tempfile, threading, time, zlib\n"  # the server's own imports but tomllib (3.11+)
 
 
 def own_source(*names):
-    """The source of this file's top-level functions and classes by name, cut from the file itself (works
-    however the module was loaded, unlike inspect.getsource)."""
+    """The source of this file's top-level functions, classes and constants (NAME = ...) by name, cut from the
+    file itself (works however the module was loaded, unlike inspect.getsource)."""
     import ast
     text = open(os.path.abspath(__file__), encoding="utf-8").read()
     lines, found = text.splitlines(True), {}
@@ -1927,6 +1928,8 @@ def own_source(*names):
         if isinstance(node, (ast.FunctionDef, ast.ClassDef)) and node.name in names:
             start = min([node.lineno] + [d.lineno for d in node.decorator_list])
             found[node.name] = "".join(lines[start - 1:node.end_lineno])
+        elif isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and node.targets[0].id in names:
+            found[node.targets[0].id] = "".join(lines[node.lineno - 1:node.end_lineno])
     return [found[n] for n in names]
 
 

@@ -2,7 +2,7 @@
 """Macs over SSH (#181): the server streams the same Mac reader it uses for this Mac, built from its own source,
 and summarises its readings the same way. These tests run that streamed script through `python3 -` on this Mac
 (the way sshd runs it there), also with the system Python 3.9 a fresh Mac has after xcode-select --install."""
-import base64, importlib.util, json, os, subprocess, sys, unittest, zlib
+import ast, base64, builtins, importlib.util, json, os, subprocess, sys, unittest, zlib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 LIVE = os.path.dirname(HERE)
@@ -42,6 +42,35 @@ class StreamedMacCollector(unittest.TestCase):
                 d = json.loads(r.stdout.decode().strip().splitlines()[-1])
                 self.assertEqual(d["pid"], os.getpid())
                 self.assertIn("python", d["cmdline"].lower())
+
+
+class StreamedSource(unittest.TestCase):
+    """The streamed reader is cut out of fleet_live.py (own_source); what it cuts must be all the reader uses."""
+
+    def test_every_name_the_reader_uses_is_in_it(self):
+        tree = ast.parse(fl.mac_collector_script(3))
+        have = set(dir(builtins)) | {"ONCE"}   # ONCE: set by whoever runs it (the tests), else False
+        for n in ast.walk(tree):
+            if isinstance(n, (ast.FunctionDef, ast.ClassDef)):
+                have.add(n.name)
+            elif isinstance(n, (ast.Import, ast.ImportFrom)):
+                have.update((a.asname or a.name).split(".")[0] for a in n.names)
+            elif isinstance(n, ast.Name) and not isinstance(n.ctx, ast.Load):
+                have.add(n.id)
+            elif isinstance(n, ast.arg):
+                have.add(n.arg)
+            elif isinstance(n, ast.ExceptHandler) and n.name:
+                have.add(n.name)
+        used = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
+        self.assertEqual(sorted(used - have), [])
+
+    def test_its_cron_job_names_are_the_servers(self):
+        ns = {}
+        exec(fl.MAC_IMPORTS + "".join(s + "\n\n" for s in fl.own_source(*fl.MAC_HELPERS)), ns)
+        for cmd in ("test -x /usr/sbin/anacron || ( cd / && run-parts --report /etc/cron.daily )",
+                    "flock -n /tmp/x.lock /usr/local/bin/a.sh", "nice -n 19 /home/me/backup.sh", "/usr/local/bin/sync.py --all"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(ns["job_name"](cmd), fl.job_name(cmd))
 
 
 class Config(unittest.TestCase):
