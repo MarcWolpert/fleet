@@ -72,6 +72,13 @@ class Packages(unittest.TestCase):
             self.assertEqual((r.returncode, [l for l in r.stderr.splitlines() if "error" in l.lower()]), (0, []), "--check")
             r = subprocess.run(["sh", build, "--arch", "arm64"], capture_output=True, text=True, timeout=600, env=env)
             self.assertEqual(r.returncode, 0, r.stderr)
+            # the zip opens to a folder: the app, its README and the script that installs it (#361)
+            zips = [f for f in os.listdir(os.path.join(live, "dist")) if f.endswith("-macos-arm64.zip")]
+            names = subprocess.run(["zipinfo", "-1", os.path.join(live, "dist", zips[0])], capture_output=True, text=True).stdout.splitlines()
+            top = names[0].split("/")[0]
+            for want in ("Fleet.app/Contents/MacOS/Fleet", "README.txt", "Install Fleet.command"):
+                self.assertIn(top + "/" + want, names)
+            self.assertTrue(top.startswith("Fleet-"), top)
             app = os.path.join(live, "dist", "Fleet.app", "Contents", "MacOS", "Fleet")
             self.assertEqual(subprocess.run(["lipo", "-archs", app], capture_output=True, text=True).stdout.split(), ["arm64"])
             self.assertEqual(sorted(os.listdir(os.path.join(live, "dist"))), ["Fleet-%s-macos-arm64.zip" % version(), "Fleet.app"])

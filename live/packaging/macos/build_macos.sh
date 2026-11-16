@@ -55,5 +55,32 @@ if [ -f "$APP/Contents/Resources/FLEET_BUNDLE" ]; then   # the build checks itse
   codesign --verify --deep --strict "$APP" || { echo "build_macos: the signature doesn't verify" >&2; exit 1; }
 fi
 ZIP="Fleet-$VERSION-macos$ZIPSUFFIX.zip"
-( cd "$DIST" && rm -f "$ZIP" && ditto -c -k --keepParent Fleet.app "$ZIP" )
+# the zip opens to a folder: Fleet.app, how to install it, and a script that does (#361)
+STAGE="$WORK/stage/Fleet-$VERSION" && rm -rf "$WORK/stage" && mkdir -p "$STAGE"
+ditto "$APP" "$STAGE/Fleet.app"
+cp "$HERE/install.command" "$STAGE/Install Fleet.command" && chmod 755 "$STAGE/Install Fleet.command"
+if [ -f "$APP/Contents/Resources/FLEET_BUNDLE" ]; then NEEDS="Everything Fleet runs is inside the app: its own Python, ttyd and tmux. It reaches your
+machines with the Mac's own ssh."; else NEEDS="This build needs Python 3.11 or newer (brew install python), and ttyd and tmux for the
+terminals below the page (brew install ttyd tmux)."; fi
+cat > "$STAGE/README.txt" <<EOT
+Fleet $VERSION for macOS$( [ "$ARCHS" = arm64 ] && echo " (Apple silicon)" ): every machine you manage, live, in one tree.
+
+Install it:
+  Double-click "Install Fleet.command". It copies Fleet.app into Applications
+  and opens it. If macOS says it can't check the script, right-click it, choose
+  Open, then Open again (or run it in Terminal: sh "Install Fleet.command").
+
+Or by hand: drag Fleet.app into Applications. Fleet isn't notarized by Apple
+yet, so the first time, right-click Fleet.app and choose Open (or open System
+Settings > Privacy & Security and choose Open Anyway).
+
+$NEEDS
+
+Then use + Add a machine at the bottom of the tree. Fleet reads each machine
+over SSH, read-only, and installs nothing on it. The Tutorial pill at the top
+explains the rest.
+
+To remove it: drag Fleet.app to the Bin. Your settings in ~/.config/fleet stay.
+EOT
+( cd "$WORK/stage" && rm -f "$DIST/$ZIP" && ditto -c -k --keepParent "Fleet-$VERSION" "$DIST/$ZIP" )
 echo "built $APP ($(lipo -archs "$APP/Contents/MacOS/Fleet")) and $DIST/$ZIP"
