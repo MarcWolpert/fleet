@@ -337,7 +337,7 @@ class Http(unittest.TestCase):
         # foreign Origin and X-Fleet: 1, which a cross-site page can't send without a preflight (#287).
         own = "http://127.0.0.1:%d" % self.port
         looks, fleet = [], types.SimpleNamespace(machines={"nas": types.SimpleNamespace(id="nas", cfg={"kind": "ssh", "ssh": "nas"})},
-                                                 api_procs=lambda mid: {"procs": []})
+                                                 api_procs=lambda mid, scope=None, docker=True: {"procs": []})   # as Fleet.api_procs (#312)
         with mock.patch.object(fleet_live.Handler, "fleet", fleet), \
                 mock.patch.object(fleet_live, "inspect_process", side_effect=lambda m, pid: looks.append((m.id, pid)) or {"pid": pid}), \
                 mock.patch.object(fleet_live, "inspect_docker_vm", side_effect=lambda m, cid, pid, via: looks.append((m.id, cid, pid, via)) or {"pid": pid}):
