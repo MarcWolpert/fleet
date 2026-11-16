@@ -3089,7 +3089,9 @@ function groupedWalk(roots, kidsOf, openFn, shownFn, scope){
       // a folded group is just its header; its members keep their own open state for when it unfolds. While find in
       // the tree filters, it shows what in it matches, as a collapsed row opens on the way to a match (#295)
       const folded = !TF.q && !!(S.gfold && S.gfold[gx.g.id]);
-      out.push({open:gx.g, key, d, kind:groupKind(gx.members), folded, count:gx.members.length}); if (!folded) gx.members.forEach(one); out.push({close:true});
+      // its kind from all its members, not only the ones find in the tree shows
+      const all = gx.g.ids.map(id => nodes[id] || netNodes[id]).filter(Boolean);
+      out.push({open:gx.g, key, d, kind:groupKind(all.length ? all : gx.members), folded, count:gx.members.length}); if (!folded) gx.members.forEach(one); out.push({close:true});
     });
   })(roots, 0, 'root');
   return out;
@@ -3103,6 +3105,23 @@ function tgroupOpen({open:g, key, d, kind, folded, count}){
 function updGroup(key, id, f){
   const all = Object.assign({}, PREFS.tgroups || {});
   all[key] = (all[key] || []).map(g => g.id === id ? (f ? f(g) : null) : g).filter(Boolean);
+  setTGroups(all, f ? id : null);
+}
+// Groups saved. In the network tree a group's kind can change with another group (a response made or disbanded inside a
+// machine turns a fleet into a cutter and back, #407), so a name Fleet gave it for its old kind (Fleet 1) is renewed;
+// `named`, a group just renamed, keeps the name it was given.
+function setTGroups(all, named){
+  PREFS = Object.assign({}, PREFS, {tgroups:all});
+  const auto = new RegExp('^(' + Object.values(GKIND).map(v => v[0]).join('|') + ') \\d+$');
+  for (const key of Object.keys(all).filter(k => k.startsWith('network|'))){
+    const list = all[key].slice();
+    list.forEach((g, i) => {
+      const ms = g.ids.map(id => netNodes[id]).filter(Boolean);
+      if (g.id === named || !auto.test(g.name) || !ms.length || g.name.startsWith(GKIND[groupKind(ms)][0] + ' ')) return;
+      list[i] = Object.assign({}, g, {name:newGroupName(list.filter(x => x !== g), g.ids)});
+    });
+    all[key] = list;
+  }
   PREFS = Object.assign({}, PREFS, {tgroups:all}); divisionsChanged(); savePrefs('the groups');
 }
 // a group's key in prefs.tgroups ('<scope>|<parent>'), from its id
@@ -3159,7 +3178,7 @@ function finishMarquee(hits){
   const list = (all[key] || []).map(g => Object.assign({}, g, {ids:g.ids.filter(id => !ids.includes(id))})).filter(g => g.ids.length);
   list.push({id:'g' + Date.now().toString(36), name:newGroupName(list, ids), ids});
   all[key] = list;
-  PREFS = Object.assign({}, PREFS, {tgroups:all}); divisionsChanged(); savePrefs('the groups');
+  setTGroups(all);
 }
 
 // Moving items between groups: by the drag handle on every row, or from the row's menu (issue #22).
@@ -3175,7 +3194,7 @@ function moveToGroup(key, id, gid, withId){
     list.push({id:'g' + Date.now().toString(36), name:newGroupName(list, [withId, id]), ids:[withId, id]});
   }
   all[key] = list;
-  PREFS = Object.assign({}, PREFS, {tgroups:all}); divisionsChanged(); savePrefs('the groups');
+  setTGroups(all);
 }
 function groupMoveItems(id, pk){
   const key = treeScope() + '|' + pk, gs = (PREFS.tgroups || {})[key] || [], mine = gs.find(g => g.ids.includes(id));
@@ -3247,7 +3266,12 @@ function divisionsChanged(){ buildDivisions(); renderSpaces(); renderTree(); if 
 // network tree, networks make a response, and machines whose networks are grouped into responses make a cutter (#407).
 const GKIND = {fleet:['Fleet', 'fleet'], flotilla:['Flotilla', 'flotilla'], division:['Division', 'division'], section:['Section', 'section'],
   squadron:['Squadron', 'squadron'], taskforce:['Task force', 'task force'], response:['Response', 'response'], cutter:['Cutter', 'cutter']};
-const hasResponse = n => ((PREFS.tgroups || {})['network|' + n.id] || []).some(g => g.ids.length && g.ids.every(id => id.startsWith('net:if:')));
+// a machine has a response when a group of its networks (under it, or a bridge's ports under the bridge) has one that's there
+function hasResponse(n){
+  const mid = n.mid || String(n.id || '').slice(6), pre = 'net:if:' + mid + ':';
+  return !!mid && Object.entries(PREFS.tgroups || {}).some(([k, gs]) => k.startsWith('network|')
+    && (gs || []).some(g => g.ids.length && g.ids.every(id => id.startsWith(pre)) && g.ids.some(id => netNodes[id])));
+}
 function groupKind(ms){
   const k = n => n.kind === 'machine' ? (n.parent ? 'flotilla' : 'fleet') : n.kind === 'container' || n.kind === 'ncontainer' ? 'division'
     : n.kind === 'cron' || n.kind === 'cronfolder' ? 'section' : n.kind === 'project' || n.kind === 'service' ? 'squadron' : n.kind === 'nmachine' ? 'fleet'
