@@ -252,7 +252,7 @@ function iconOf(n){
 function sparkPts(data, w, h){ const max = Math.max(...data) * 1.15 || 1; return data.map((v, i) => `${(i/(H-1)*w).toFixed(2)},${(h - v/max*h).toFixed(2)}`).join(' '); }
 function sparkSVG(data, color, w, h){ return `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-hidden="true"><polyline points="${sparkPts(data, w, h)}" fill="none" stroke="${color}" stroke-width="1.6" vector-effect="non-scaling-stroke" stroke-linejoin="round"/></svg>`; }
 function legendHTML(withFree){ return `<div class="legend">${TYPES.map(t => `<span><i class="sw" style="background:${TCOL[t.id]}"></i>${t.label}</span>`).join('')}${withFree ? '<span><i class="sw free"></i>Free</span>' : ''}</div>`; }
-function modeSeg(){ return `<div class="seg" role="group" aria-label="Show percentages of"><button type="button" data-mode="cap" aria-pressed="${S.mode==='cap'}">of capacity</button><button type="button" data-mode="used" aria-pressed="${S.mode==='used'}">of what’s in use</button></div>`; }
+function modeSeg(){ return `<div class="seg foldhide" role="group" aria-label="Show percentages of"><button type="button" data-mode="cap" aria-pressed="${S.mode==='cap'}">of capacity</button><button type="button" data-mode="used" aria-pressed="${S.mode==='used'}">of what’s in use</button></div>`; }
 function noteHTML(html, cls){ return `<div class="${cls || 'note'}">${icon('info')}<div>${html}</div></div>`; }
 function heroStats(list){ return `<div class="hero-stats">${list.map(s => `<div class="hs"><div class="k">${s.k}</div><div class="v">${s.v}</div><div class="s">${s.s}</div></div>`).join('')}</div>`; }
 // A machine with data keeps showing it while it reconnects ("stale"); only a machine that never
@@ -620,6 +620,21 @@ function updateNetTree(){
 function netRates(){ document.querySelectorAll('#tree [data-nrate]').forEach(e => { const n = netNodes[e.dataset.nrate]; if (n) e.innerHTML = `<span>↓ ${rateText(n.rx)}</span><span>↑ ${rateText(n.tx)}</span>`; }); }
 
 /* ---------- cards ---------- */
+// Every card on a page folds to its title line (#353), from the chevron at the start of its header, a click on the
+// header's empty area, or the keyboard. Kept per kind of card (where the usage goes, the chart, Inside …), not per
+// page, in ui.json (PREFS.foldedCards). A folded card hides its body, and the header controls that only shape it
+// (class foldhide: the "of capacity / of what's in use" toggle, Sort); the ones that change what the card is stay.
+function cardFolded(kind){ return (PREFS.foldedCards || []).includes(kind); }
+// a card's opening: its section and header, with the chevron; the caller adds the title and closes the header
+function cardTop(kind, title){
+  const f = cardFolded(kind), name = String(title).replace(/<[^>]*>/g, '');
+  return `<section class="card${f ? ' folded' : ''}" data-card="${kind}"><div class="card-h"><button type="button" class="chev cfold${f ? '' : ' open'}" data-cardfold="${kind}" aria-expanded="${!f}" aria-label="${f ? 'Unfold' : 'Fold'} ${name}">${icon('chev', 2.4)}</button>`;
+}
+function foldCard(kind){
+  const was = PREFS.foldedCards || [];
+  PREFS = Object.assign({}, PREFS, {foldedCards:was.includes(kind) ? was.filter(k => k !== kind) : was.concat([kind])});
+  lastMainHTML = ''; renderMain(); savePrefs('the folded cards');
+}
 function whereRows(key){
   const c = ctxOf(key), rows = [];
   METRICS.forEach(m => {
@@ -648,11 +663,11 @@ function whereCard(key, title){
     const capNote = m === 'disk' ? ' (peak seen)' : m === 'net' ? ' (link speed)' : '';
     return `<div class="res">${lab}<div class="sbar" role="img" aria-label="${esc(r.label)}: ${live.map(t => t.label + ' ' + pct(bt[t.id]/den*100)).join(', ') || 'idle'}">${segs}</div><div class="tot">${pct(used/cap*100)} used<small>${fmt(used, m)} of ${capText(cap, m)}${capNote}</small></div><div class="kvs">${kv}</div></div>`;
   }).join('');
-  return `<section class="card"><div class="card-h"><h2>${title}</h2><span class="grow"></span>${modeSeg()}</div>${legendHTML(S.mode === 'cap')}${rows}</section>`;
+  return `${cardTop('where', title)}<h2>${title}</h2><span class="grow"></span>${modeSeg()}</div>${legendHTML(S.mode === 'cap')}${rows}</section>`;
 }
 
 let lastGraph = null;
-function graphCard(title, sub, series, yMax, metric, extraHead){
+function graphCard(title, sub, series, yMax, metric, extraHead, kind = 'graph'){
   lastGraph = {series, metric};
   const W = 600, GH = 190, x = i => i/(H-1)*W, y = v => GH - Math.min(v, yMax)/yMax*GH;
   let cum = zero(), paths = '';
@@ -665,7 +680,7 @@ function graphCard(title, sub, series, yMax, metric, extraHead){
   const grid = [1, .75, .5, .25].map(f => `<div class="gl" style="top:${(1-f)*100}%"><span>${metric === 'gpu' ? num(yMax*f) + '%' : num(yMax*f) + (f === 1 ? ' ' + UNIT[metric] : '')}</span></div>`).join('') + `<div class="gl" style="top:100%"><span>0</span></div>`;
   const cx = S.hover && S.hover.k === 'graph' ? S.hover.idx : null;
   const legend = series.length > 1 ? `<div class="legend">${series.map(s => `<span><i class="sw" style="background:${s.color}"></i>${esc(s.label)}</span>`).join('')}</div>` : '';
-  return `<section class="card"><div class="card-h"><h2>${title}</h2><span class="sub">${sub}</span><span class="grow"></span>${extraHead || ''}</div>${legend}<div class="graph" data-graph="1" role="img" aria-label="${esc(title)}">${grid}<svg viewBox="0 0 ${W} ${GH}" preserveAspectRatio="none" aria-hidden="true">${paths}</svg><div class="cross" style="${cx != null ? `display:block;left:${cx/(H-1)*100}%` : ''}"></div></div><div class="gx"><span>${ago(WINDOW)}</span><span>now</span></div></section>`;
+  return `${cardTop(kind, title)}<h2>${title}</h2><span class="sub">${sub}</span><span class="grow"></span>${extraHead || ''}</div>${legend}<div class="graph" data-graph="1" role="img" aria-label="${esc(title)}">${grid}<svg viewBox="0 0 ${W} ${GH}" preserveAspectRatio="none" aria-hidden="true">${paths}</svg><div class="cross" style="${cx != null ? `display:block;left:${cx/(H-1)*100}%` : ''}"></div></div><div class="gx"><span>${ago(WINDOW)}</span><span>now</span></div></section>`;
 }
 function graphMax(capVal, series, metric){
   if (capVal && (metric === 'cpu' || metric === 'mem' || metric === 'gpu')) return capVal;
@@ -680,12 +695,12 @@ function tableCard(title, sub, list){
       + METRICS.map(m => `<td>${m.id === 'gpu' ? gpuCell(n) : fmt(cur(n, m.id), m.id)}</td>`).join('')
       + `<td><span class="share" data-tip="child|${esc(n.id)}|${S.metric}"><span class="b"><i style="width:${w}%;background:${TCOL[n.type] || 'var(--accent-bg)'}"></i></span>${pct(share)}</span></td></tr>`;
   }).join('');
-  return `<section class="card"><div class="card-h"><h2>${title}</h2><span class="sub">${sub}</span></div><div class="scroll-x"><table class="tbl"><thead><tr><th>Name</th>${METRICS.map(m => `<th>${m.label}</th>`).join('')}<th>Share of host · ${mlabel(S.metric)}</th></tr></thead><tbody>${rows}</tbody></table></div></section>`;
+  return `${cardTop('inside', title)}<h2>${title}</h2><span class="sub">${sub}</span></div><div class="scroll-x"><table class="tbl"><thead><tr><th>Name</th>${METRICS.map(m => `<th>${m.label}</th>`).join('')}<th>Share of host · ${mlabel(S.metric)}</th></tr></thead><tbody>${rows}</tbody></table></div></section>`;
 }
 function cronTableCard(folder, title){
   const rows = orderedKids(folder).map(n => `<tr data-row="${esc(n.id)}"><td><button type="button" class="namebtn" data-select="${esc(n.id)}"><span class="ico" style="color:var(--ink-3)">${icon('clock')}</span>${esc(n.name)}</button></td><td class="l"><code>${esc(n.job.sched)}</code>${n.job.human && n.job.human !== n.job.sched ? ' · ' + esc(n.job.human) : ''}</td><td class="l"><span class="pill${n.running?' on':''}"><i></i>${n.running ? 'running' : esc(n.job.state || 'idle')}</span></td>`
     + METRICS.map(m => `<td>${!n.running ? '—' : m.id === 'gpu' ? gpuCell(n) : fmt(cur(n, m.id), m.id)}</td>`).join('') + `<td class="l">${esc(n.job.last || '')}</td></tr>`).join('');
-  return `<section class="card"><div class="card-h"><h2>${title}</h2><span class="sub">usage shows while a job runs</span></div><div class="scroll-x"><table class="tbl"><thead><tr><th>Job</th><th style="text-align:left">Schedule</th><th style="text-align:left">Status</th>${METRICS.map(m => `<th>${m.label}</th>`).join('')}<th style="text-align:left">Last / next</th></tr></thead><tbody>${rows}</tbody></table></div></section>`;
+  return `${cardTop('jobs', title)}<h2>${title}</h2><span class="sub">usage shows while a job runs</span></div><div class="scroll-x"><table class="tbl"><thead><tr><th>Job</th><th style="text-align:left">Schedule</th><th style="text-align:left">Status</th>${METRICS.map(m => `<th>${m.label}</th>`).join('')}<th style="text-align:left">Last / next</th></tr></thead><tbody>${rows}</tbody></table></div></section>`;
 }
 function gpuCard(m){
   if (!m.gpus.length) return '';
@@ -694,7 +709,8 @@ function gpuCard(m){
     const rows = cons.length ? cons.slice(0, 12).map(c => `<button type="button" class="namebtn" data-select="${esc(c.n.id)}"><span class="ico" style="color:${colOf(c.n)}">${icon(iconOf(c.n))}</span>${esc(c.n.name)}</button><div class="track"><div class="bar" style="width:${Math.min(100, c.v).toFixed(2)}%;background:${colOf(c.n)}" data-tip="gpu|${esc(m.id)}|${g.key}|${esc(c.n.id)}"></div></div><div class="tot">${pct(c.v)}</div>`).join('') : `<div class="sub">nothing is using it</div>`;
     return `<div class="gpu"><div class="gpu-h"><div><div class="k">GPU ${gi}</div><div class="gn">${esc(g.name)}</div><div class="s">${esc(g.mem || '')}${g.host ? ' · on host ' + esc(g.host.replace('gpu', 'GPU ')) : ''}</div></div><div class="v">${pct(total)}</div></div><div class="rank gpu-rank">${rows}</div></div>`;
   }).join('');
-  return `<section class="card"><div class="card-h"><h2>${m.gpus.length > 1 ? 'GPUs: what runs on which' : 'GPU: what runs on it'}</h2><span class="sub">% of each GPU</span></div><div class="gpus">${blocks}</div></section>`;
+  const title = m.gpus.length > 1 ? 'GPUs: what runs on which' : 'GPU: what runs on it';
+  return `${cardTop('gpus', title)}<h2>${title}</h2><span class="sub">% of each GPU</span></div><div class="gpus">${blocks}</div></section>`;
 }
 
 /* ---------- logical processors ---------- */
@@ -707,7 +723,7 @@ function cpuRanges(ns){
 function cpuSelCard(m){
   const d = CPUS[m.id], sel = cpuSel(m);
   if (!d || !d.cpus) return '';
-  if (!sel.length) return `<p class="lhint">Click a processor or a group name to see it on its own; ⌘/Ctrl- or Shift-click to add more.</p>`;
+  if (!sel.length) return `<p class="lhint">${cpuViewOf(m) === 'groups' ? `Click a ${CPU_GROUPINGS[cpuGrouping(m)][1]}` : 'Click a processor or a group name'} to see it on its own; ⌘/Ctrl- or Shift-click to add more.</p>`;
   const cs = d.cpus.filter(c => sel.includes(c.n));
   if (!cs.length) return '';
   const group = (d.groups || []).find(g => g.cpus.length === sel.length && g.cpus.every(n => sel.includes(n)));
@@ -730,7 +746,7 @@ function cpuSelCard(m){
     const ncpu = m.ncpu || capOf(m, 'cpu');
     procs = on.length ? `<div class="scroll-x"><table class="tbl"><thead><tr><th>Process</th><th>PID</th><th style="text-align:left">Runs in</th><th>CPU (machine)</th><th>Memory</th><th>Last ran on</th></tr></thead><tbody>${on.slice(0, 15).map(p => `<tr data-row="pid:${esc(p[0])}"><td>${esc(p[1])}</td><td>${esc(p[0])}</td><td class="l"><button type="button" class="namebtn" data-select="${esc(p[10])}" style="font-weight:400">${esc(nodes[p[10]] ? nodes[p[10]].name : '')}</button></td><td>${pct(p[4] / ncpu * 100)}</td><td>${memText(p[5])}</td><td>CPU ${esc(p[12])}</td></tr>`).join('')}</tbody></table></div>${on.length > 15 ? `<div class="more">${on.length - 15} more on these processors.</div>` : ''}` : `<div class="sub">Nothing ran on these processors in the last reading.</div>`;
   }
-  return `<section class="card"><div class="card-h"><h2>${esc(title)}</h2><span class="sub">${cs.length} of ${d.cpus.length} processors</span><span class="grow"></span><button type="button" class="btn" data-cpuclear="1">${icon('x', 2.2)}Clear selection</button></div>`
+  return `${cardTop('cpupick', esc(title))}<h2>${esc(title)}</h2><span class="sub">${cs.length} of ${d.cpus.length} processors</span><span class="grow"></span><button type="button" class="btn" data-cpuclear="1">${icon('x', 2.2)}Clear selection</button></div>`
     + `<div class="cpustats">${heroStats([{k:'Now', v:pct(now), s:'average'}, {k:'Peak', v:pct(peak), s:'any one, last ' + ago(WINDOW).replace(' ago', '')}].concat(mhz ? [{k:'Clock', v:(mhz / 1000).toFixed(2) + ' GHz', s:'average'}] : []))}</div>`
     + `<div class="graph" role="img" aria-label="Utilization of ${esc(title)}">${grid}<svg viewBox="0 0 ${W} ${GH}" preserveAspectRatio="none" aria-hidden="true">${lines}${area}</svg></div><div class="gx"><span>${ago(WINDOW)}</span><span>now</span></div>`
     + `<h3 class="cpuproc">On these processors</h3>${procs}</section>`;
@@ -745,8 +761,8 @@ function speedText(sp){
 }
 function ifEachCard(m){
   const D = IFS[m.id], sel = ifSel(m);
-  const head = `<div class="card-h"><h2>Each interface</h2><span class="sub">${D ? D.ifs.length + ' interfaces · click one to see what uses it' : 'loading…'}</span><span class="grow"></span>${sortMenu('net')}${ifToggle()}</div>`;
-  if (!D) return `<section class="card">${head}</section>`;
+  const head = `${cardTop('eachif', 'Each interface')}<h2>Each interface</h2><span class="sub">${D ? D.ifs.length + ' interfaces · click one to see what uses it' : 'loading…'}</span><span class="grow"></span>${sortMenu('net')}${ifToggle()}</div>`;
+  if (!D) return `${head}</section>`;
   const order = {physical:0, bridge:1, virtual:2};
   const tiles = D.ifs.slice().sort((a, b) => pinFirst('net', m.id, x => x.name)(a, b) || bySort('net')(a, b)).map(x => {
     const on = sel.includes(x.name), tot = x.hrx.map((v, i) => v + x.htx[i]), max = Math.max(0.001, ...tot) * 1.15;
@@ -757,7 +773,7 @@ function ifEachCard(m){
       + `<span class="km">${esc(ifKind(x))}</span><span class="ks">${esc((x.addrs || []).slice(0, 2).join(' · ') || (x.master ? 'in ' + x.master : ''))}</span>`
       + `<span class="kr"><i class="rd">↓ ${rateText(x.rx)}</i><i class="wr">↑ ${rateText(x.tx)}</i></span><svg viewBox="0 0 100 64" preserveAspectRatio="none" aria-hidden="true"><path d="M0,64L${pts(tot).split(' ').join('L')}L100,64Z" fill="var(--t-container)" fill-opacity=".25"/><polyline points="${pts(x.hrx)}" fill="none" stroke="var(--t-compose)" stroke-width="1.5" vector-effect="non-scaling-stroke"/><polyline points="${pts(x.htx)}" fill="none" stroke="var(--t-vm)" stroke-width="1.5" vector-effect="non-scaling-stroke"/></svg></div>`;
   }).join('');
-  return `<section class="card">${head}<div class="kgrid">${tiles}</div></section>`;
+  return `${head}<div class="kgrid">${tiles}</div></section>`;
 }
 function ifSelCard(m){
   const D = IFS[m.id], sel = ifSel(m);
@@ -767,7 +783,7 @@ function ifSelCard(m){
   if (!xs.length) return '';
   const rx = Array.from({length:H}, (_, i) => xs.reduce((a, x) => a + x.hrx[i], 0)), tx = Array.from({length:H}, (_, i) => xs.reduce((a, x) => a + x.htx[i], 0));
   const title = xs.length === 1 ? `${xs[0].name} · ${ifKind(xs[0])}` : `${xs.length} interfaces: ${xs.map(x => x.name).join(', ')}`;
-  const card = graphCard(esc(title), '↓ in and ↑ out, stacked', [{label:'in', color:'var(--t-compose)', data:rx}, {label:'out', color:'var(--t-vm)', data:tx}], graphMax(0, [{data:rx}, {data:tx}], 'net'), 'net', `<button type="button" class="btn" data-ifclear="1">${icon('x', 2.2)}Clear</button>`);
+  const card = graphCard(esc(title), '↓ in and ↑ out, stacked', [{label:'in', color:'var(--t-compose)', data:rx}, {label:'out', color:'var(--t-vm)', data:tx}], graphMax(0, [{data:rx}, {data:tx}], 'net'), 'net', `<button type="button" class="btn" data-ifclear="1">${icon('x', 2.2)}Clear</button>`, 'ifpick');
   const P = PROCS.machine === m.id ? PROCS.list : null;
   let list;
   if (!P) list = `<div class="sub">Loading processes…</div>`;
@@ -788,7 +804,7 @@ const TILE_SORTS = {
   cpu:[['number', 'Number'], ['usage', 'Usage'], ['clock', 'Clock']]
 };
 function tileSort(kind){ const v = (S.tileSort || {})[kind]; return TILE_SORTS[kind].some(o => o[0] === v) ? v : TILE_SORTS[kind][0][0]; }
-function sortMenu(kind){ const v = tileSort(kind); return `<label class="sortsel">Sort <select data-tilesort="${kind}" aria-label="Sort tiles by">${TILE_SORTS[kind].map(([k, l]) => `<option value="${k}"${k === v ? ' selected' : ''}>${l}</option>`).join('')}</select></label>`; }
+function sortMenu(kind){ const v = tileSort(kind); return `<label class="sortsel foldhide">Sort <select data-tilesort="${kind}" aria-label="Sort tiles by">${TILE_SORTS[kind].map(([k, l]) => `<option value="${k}"${k === v ? ' selected' : ''}>${l}</option>`).join('')}</select></label>`; }
 function bySort(kind){
   const by = tileSort(kind), num = x => +x || 0, name = (a, b) => COLL.compare(String(a.name), String(b.name));
   const order = {physical:0, bridge:1, virtual:2};
@@ -818,8 +834,8 @@ function bytesText(b){ return b >= 1e12 ? (b / 1e12).toFixed(b >= 1e13 ? 0 : 1) 
 function diskLabel(d){ return [d.role, d.model].filter(Boolean).join(' · ') || d.name; }
 function diskEachCard(m){
   const D = DISKS[m.id], sel = diskSel(m);
-  const head = `<div class="card-h"><h2>Each disk</h2><span class="sub">${D ? D.disks.length + ' disks · click one to see what uses it' : 'loading…'}</span><span class="grow"></span>${sortMenu('disk')}${diskToggle()}</div>`;
-  if (!D) return `<section class="card">${head}</section>`;
+  const head = `${cardTop('eachdisk', 'Each disk')}<h2>Each disk</h2><span class="sub">${D ? D.disks.length + ' disks · click one to see what uses it' : 'loading…'}</span><span class="grow"></span>${sortMenu('disk')}${diskToggle()}</div>`;
+  if (!D) return `${head}</section>`;
   const tiles = D.disks.slice().sort((a, b) => pinFirst('disk', m.id, x => x.name)(a, b) || bySort('disk')(a, b)).map(d => {
     const on = sel.includes(d.name), tot = d.hr.map((v, i) => v + d.hw[i]), max = Math.max(1, ...tot) * 1.15;
     const pts = a => a.map((v, i) => `${(i/(H-1)*100).toFixed(1)},${(64 - v/max*58).toFixed(1)}`).join(' ');
@@ -828,7 +844,7 @@ function diskEachCard(m){
       + `<span class="km">${esc(diskLabel(d))}</span><span class="ks">${[bytesText(d.size), d.rot ? 'HDD' : 'SSD'].concat(d.mounts.slice(0, 2)).filter(Boolean).map(esc).join(' · ')}</span>`
       + `<span class="kr"><i class="rd">↓ ${rateText(d.read)}</i><i class="wr">↑ ${rateText(d.write)}</i></span><svg viewBox="0 0 100 64" preserveAspectRatio="none" aria-hidden="true"><path d="M0,64L${pts(tot).split(' ').join('L')}L100,64Z" fill="var(--t-compose)" fill-opacity=".28"/><polyline points="${pts(d.hr)}" fill="none" stroke="var(--t-compose)" stroke-width="1.5" vector-effect="non-scaling-stroke"/><polyline points="${pts(d.hw)}" fill="none" stroke="var(--t-vm)" stroke-width="1.5" vector-effect="non-scaling-stroke"/></svg></div>`;
   }).join('');
-  return `<section class="card">${head}<div class="kgrid">${tiles}</div></section>`;
+  return `${head}<div class="kgrid">${tiles}</div></section>`;
 }
 function diskSelCard(m){
   const D = DISKS[m.id], sel = diskSel(m);
@@ -838,7 +854,7 @@ function diskSelCard(m){
   if (!ds.length) return '';
   const r = Array.from({length:H}, (_, i) => ds.reduce((s, d) => s + d.hr[i], 0)), w = Array.from({length:H}, (_, i) => ds.reduce((s, d) => s + d.hw[i], 0));
   const title = ds.length === 1 ? `${ds[0].name} · ${diskLabel(ds[0])}` : `${ds.length} disks: ${ds.map(d => d.name).join(', ')}`;
-  const card = graphCard(esc(title), '↓ read and ↑ write, stacked', [{label:'read', color:'var(--t-compose)', data:r}, {label:'write', color:'var(--t-vm)', data:w}], graphMax(0, [{data:r}, {data:w}], 'disk'), 'disk', `<button type="button" class="btn" data-diskclear="1">${icon('x', 2.2)}Clear</button>`);
+  const card = graphCard(esc(title), '↓ read and ↑ write, stacked', [{label:'read', color:'var(--t-compose)', data:r}, {label:'write', color:'var(--t-vm)', data:w}], graphMax(0, [{data:r}, {data:w}], 'disk'), 'disk', `<button type="button" class="btn" data-diskclear="1">${icon('x', 2.2)}Clear</button>`, 'diskpick');
   const P = PROCS.machine === m.id ? PROCS.list : null;
   let list;
   if (!D.per_process) list = noteHTML(`${esc((m.os || 'This OS').split(' ')[0])} doesn’t report which disk each process uses, so Fleet can’t list processes per disk here.`);
@@ -888,7 +904,7 @@ function gpuEachCard(m){
     const pt = /passed through/.test(g.mem || '') ? `<p class="lhint">Its use shows inside that VM, not on this host.</p>` : '';
     return `<div class="ggroup${on ? ' sel' : ''}" data-gpu="${esc(g.key)}"><div class="lgh"><button type="button" class="lgbtn${on ? ' sel' : ''}" data-gsel="${esc(g.key)}" aria-pressed="${on}" title="See what runs on this GPU">GPU ${gi} · ${esc(g.name)}</button>${tpinBtn('gpu', m.id, g.key, 'GPU ' + gi)}<span>${esc(g.mem || '')}${g.host ? ' · on host ' + esc(g.host.replace('gpu', 'GPU ')) : ''}</span><span>now ${pct(util[H-1])}</span></div>${pt}<div class="lgrid">${tiles}</div></div>`;
   }).join('');
-  return `<section class="card"><div class="card-h"><h2>Each GPU</h2><span class="sub">${m.gpus.length} GPU${m.gpus.length > 1 ? 's' : ''} · click one to see what runs on it</span><span class="grow"></span>${m.gpus.length > 1 ? sortMenu('gpu') : ''}${gpuToggle()}</div><div class="lgroups ggroups">${groups}</div></section>`;
+  return `${cardTop('eachgpu', 'Each GPU')}<h2>Each GPU</h2><span class="sub">${m.gpus.length} GPU${m.gpus.length > 1 ? 's' : ''} · click one to see what runs on it</span><span class="grow"></span>${m.gpus.length > 1 ? sortMenu('gpu') : ''}${gpuToggle()}</div><div class="lgroups ggroups">${groups}</div></section>`;
 }
 function gpuSelCard(m){
   if (!m.gpus.length) return '';
@@ -903,32 +919,90 @@ function gpuSelCard(m){
     const rest = h.map((v, i) => Math.max(0, v - series.reduce((s, x) => s + x.data[i], 0)));
     if (rest.some(v => v > 0.05)) series.push({label:'everything else', color:'var(--t-base)', data:rest});
     const peak = Math.max(...h);
-    const card = graphCard(`GPU ${gi} · ${esc(g.name)}`, `${esc(g.mem || '')}${g.mem ? ' · ' : ''}now ${pct(h[H-1])} · peak ${pct(peak)}`, series.length ? series : [{label:g.name, color:'var(--accent)', data:h}], 100, 'gpu', `<button type="button" class="btn" data-gpuclear="1">${icon('x', 2.2)}Clear</button>`);
+    const card = graphCard(`GPU ${gi} · ${esc(g.name)}`, `${esc(g.mem || '')}${g.mem ? ' · ' : ''}now ${pct(h[H-1])} · peak ${pct(peak)}`, series.length ? series : [{label:g.name, color:'var(--accent)', data:h}], 100, 'gpu', `<button type="button" class="btn" data-gpuclear="1">${icon('x', 2.2)}Clear</button>`, 'gpupick');
     const list = cons.length ? `<div class="rank gpu-rank" style="margin-top:12px">${cons.slice(0, 12).map(c => `<button type="button" class="namebtn" data-select="${esc(c.n.id)}"><span class="ico" style="color:${colOf(c.n)}">${icon(iconOf(c.n))}</span>${esc(c.n.name)}</button><div class="track"><div class="bar" style="width:${Math.min(100, c.v).toFixed(2)}%;background:${colOf(c.n)}"></div></div><div class="tot">${pct(c.v)}</div>`).join('')}</div>` : `<div class="sub" style="margin-top:10px">${h[H-1] > 0.05 ? 'Nothing in the tree is counted on this GPU, though it’s busy. <b>Details</b> lists the processes using it.' : 'Nothing is using this GPU.'}</div>`;
     return card.replace(/<\/section>$/, list + '</section>');
   }).join('');
 }
-function cpuToggle(){ return `<div class="seg" role="group" aria-label="CPU graph"><button type="button" data-cpuview="type" aria-pressed="${S.cpuView==='type'}">By type</button><button type="button" data-cpuview="logical" aria-pressed="${S.cpuView==='logical'}">Logical processors</button></div>`; }
+// How a machine's CPUs are grouped (#356), from its groups' names: by CCD, by core type (P- and E-cores, Apple's
+// Performance and Efficiency cores), by Apple core cluster, by socket; null when they aren't (one group, or none).
+// [the whole-group view's name, one group, several]
+const CPU_GROUPINGS = {ccd:['Each CCD', 'CCD', 'CCDs'], type:['Each core type', 'core type', 'core types'], cluster:['Each cluster', 'cluster', 'clusters'],
+  socket:['Each socket', 'socket', 'sockets'], group:['Each group', 'group', 'groups']};
+function cpuGrouping(m){
+  const ns = (m && m.groups || []).map(g => String(g.name));
+  if (ns.length < 2) return null;
+  if (ns.some(n => /\bcluster\b/i.test(n))) return 'cluster';
+  if (ns.some(n => /\bCCD\b/.test(n))) return 'ccd';
+  if (ns.some(n => /\b[PE]-cores\b|\b(Performance|Efficiency) cores\b/i.test(n))) return 'type';
+  if (ns.every(n => /^Socket\b/.test(n))) return 'socket';
+  return 'group';
+}
+// the CPU view a machine shows: the whole-group one only on a machine whose CPUs are grouped, Logical processors on
+// any other (S.cpuView stays, for the next grouped machine)
+function cpuViewOf(m){ return S.cpuView === 'groups' ? (cpuGrouping(m) ? 'groups' : 'logical') : S.cpuView === 'logical' ? 'logical' : 'type'; }
+function cpuToggle(m){
+  const v = cpuViewOf(m), g = cpuGrouping(m);
+  return `<div class="seg" role="group" aria-label="CPU graph"><button type="button" data-cpuview="type" aria-pressed="${v === 'type'}">By type</button><button type="button" data-cpuview="logical" aria-pressed="${v === 'logical'}">Logical processors</button>`
+    + (g ? `<button type="button" data-cpuview="groups" aria-pressed="${v === 'groups'}">${CPU_GROUPINGS[g][0]}</button>` : '') + `</div>`;
+}
+// A group in Logical processors folds to its header line (#356), kept per machine and group in ui.json
+// (PREFS.foldedCpuGroups: {machine: [group name]}).
+function cpuGroupFolded(mid, name){ return ((PREFS.foldedCpuGroups || {})[mid] || []).includes(name); }
+function foldCpuGroup(mid, name){
+  const all = Object.assign({}, PREFS.foldedCpuGroups), was = all[mid] || [];
+  all[mid] = was.includes(name) ? was.filter(x => x !== name) : was.concat([name]);
+  if (!all[mid].length) delete all[mid];
+  PREFS = Object.assign({}, PREFS, {foldedCpuGroups:all});
+  lastMainHTML = ''; renderMain(); savePrefs('the folded CPU groups');
+}
 function logicalCard(m){
   const d = CPUS[m.id];
-  const head = `<div class="card-h"><h2>Logical processors</h2><span class="sub">${esc(m.cpu_model || '')}${d && d.cpus ? ' · ' + d.cpus.length + ' processors' : ''}</span><span class="grow"></span>${sortMenu('cpu')}${cpuToggle()}</div>`;
+  const head = `${cardTop('logical', 'Logical processors')}<h2>Logical processors</h2><span class="sub">${esc(m.cpu_model || '')}${d && d.cpus ? ' · ' + d.cpus.length + ' processors' : ''}</span><span class="grow"></span>${sortMenu('cpu')}${cpuToggle(m)}</div>`;
   // The server answers {} for a machine it doesn't read itself (a VM seen only from its host).
-  if (!d || !d.cpus) return `<section class="card">${head}<div class="sub">${d ? `No per-processor readings for ${esc(m.name)}.` : 'Loading…'}</div></section>`;
+  if (!d || !d.cpus) return `${head}<div class="sub">${d ? `No per-processor readings for ${esc(m.name)}.` : 'Loading…'}</div></section>`;
   const byN = {}; d.cpus.forEach(c => { byN[c.n] = c; });
   const sel = cpuSel(m);
   const groups = (d.groups && d.groups.length ? d.groups : [{name:'All processors', cpus:d.cpus.map(c => c.n)}]).map((g, i) => [g, i]).sort((a, b) => pinFirst('cpugroup', m.id, x => x[0].name)(a, b) || a[1] - b[1]).map(x => x[0]);
   const html = groups.map(g => {
     const cs = g.cpus.map(n => byN[n]).filter(Boolean);
-    const avg = cs.reduce((s, c) => s + c.pct, 0) / (cs.length || 1);
-    const cells = cs.slice().sort((a, b) => pinFirst('cpu', m.id, c => c.n)(a, b) || bySort('cpu')(a, b)).map(c => {
+    const avg = cs.reduce((s, c) => s + c.pct, 0) / (cs.length || 1), folded = cpuGroupFolded(m.id, g.name);
+    const cells = folded ? '' : cs.slice().sort((a, b) => pinFirst('cpu', m.id, c => c.n)(a, b) || bySort('cpu')(a, b)).map(c => {
       const max = 100, pts = c.h.map((v, i) => `${(i/(H-1)*100).toFixed(1)},${(56 - Math.min(v, max)/max*52).toFixed(1)}`);
       const on = sel.includes(c.n);
       return `<div class="lcell${on ? ' sel' : ''}${tpinned('cpu', m.id, c.n) ? ' pinned' : ''}"><button type="button" class="tsel" data-lcpu="${c.n}" aria-pressed="${on}" aria-label="CPU ${c.n}, ${Math.round(c.pct)}%" data-tip="lcpu|${esc(m.id)}|${c.n}"></button><span class="trow"><span class="lt">CPU ${c.n}${tpinBtn('cpu', m.id, c.n, 'CPU ' + c.n)}</span><span class="lv">${Math.round(c.pct)}%</span></span><span class="lm">${c.mhz ? (c.mhz/1000).toFixed(2) + ' GHz' : '&nbsp;'}</span><svg viewBox="0 0 100 56" preserveAspectRatio="none" aria-hidden="true"><path d="M0,56L${pts.join('L')}L100,56Z" fill="var(--accent-bg)" fill-opacity=".35"/><polyline points="${pts.join(' ')}" fill="none" stroke="var(--accent)" stroke-width="1.4" vector-effect="non-scaling-stroke"/></svg></div>`;
     }).join('');
     const gsel = cs.length && cs.every(c => sel.includes(c.n));
-    return `<div><div class="lgh"><button type="button" class="lgbtn${gsel ? ' sel' : ''}" data-lgroup="${esc(g.cpus.join(','))}" aria-pressed="${gsel}" title="Show this group on its own">${esc(g.name)}</button>${tpinBtn('cpugroup', m.id, g.name)}<span>${cs.length} processors</span><span>average ${pct(avg)}</span></div><div class="lgrid">${cells}</div></div>`;
+    const chev = `<button type="button" class="chev lgfold${folded ? '' : ' open'}" data-lgfold="${esc(g.name)}" aria-expanded="${!folded}" aria-label="${folded ? 'Unfold' : 'Fold'} ${esc(g.name)}">${icon('chev', 2.4)}</button>`;
+    return `<div class="cgroup${folded ? ' folded' : ''}" data-cgroup="${esc(g.name)}"><div class="lgh">${chev}<button type="button" class="lgbtn${gsel ? ' sel' : ''}" data-lgroup="${esc(g.cpus.join(','))}" aria-pressed="${gsel}" title="Show this group on its own">${esc(g.name)}</button>${tpinBtn('cpugroup', m.id, g.name)}<span>${cs.length} processors</span><span>average ${pct(avg)}</span></div>${folded ? '' : `<div class="lgrid">${cells}</div>`}</div>`;
   }).join('');
-  return `<section class="card">${head}<div class="lgroups">${html}</div></section>`;
+  return `${head}<div class="lgroups">${html}</div></section>`;
+}
+// Each CCD (or core type, or cluster) (#356): one graph per group, its processors' average over time; its number now
+// is the average its header shows in Logical processors. A click picks the group, as its name does there, and the
+// group's pin is the same one.
+function cpuGroupsCard(m){
+  const d = CPUS[m.id], [title, one, many] = CPU_GROUPINGS[cpuGrouping(m)];
+  const gs = d && d.cpus ? (d.groups && d.groups.length ? d.groups : m.groups) : [];
+  const sub = [m.cpu_model ? esc(m.cpu_model) : '', gs.length ? `${d.cpus.length} processors in ${gs.length} ${gs.length === 1 ? one : many}` : ''].filter(Boolean).join(' · ');
+  const head = `${cardTop('cpugroups', title)}<h2>${title}</h2><span class="sub">${sub}</span><span class="grow"></span>${cpuToggle(m)}</div>`;
+  if (!d || !d.cpus) return `${head}<div class="sub">${d ? `No per-processor readings for ${esc(m.name)}.` : 'Loading…'}</div></section>`;
+  const byN = {}; d.cpus.forEach(c => { byN[c.n] = c; });
+  const sel = cpuSel(m);
+  const tiles = gs.map((g, i) => [g, i]).sort((a, b) => pinFirst('cpugroup', m.id, x => x[0].name)(a, b) || a[1] - b[1]).map(([g]) => {
+    const cs = g.cpus.map(n => byN[n]).filter(Boolean);
+    if (!cs.length) return '';
+    const now = cs.reduce((s, c) => s + c.pct, 0) / cs.length;
+    const avg = Array.from({length:H}, (_, i) => cs.reduce((s, c) => s + (c.h[i] || 0), 0) / cs.length);
+    const withMhz = cs.filter(c => c.mhz), mhz = withMhz.length ? withMhz.reduce((s, c) => s + c.mhz, 0) / withMhz.length : 0;
+    const on = cs.every(c => sel.includes(c.n));
+    const pts = avg.map((v, i) => `${(i/(H-1)*100).toFixed(1)},${(64 - Math.min(v, 100)/100*58).toFixed(1)}`);
+    return `<div class="kcell cgtile${on ? ' sel' : ''}${tpinned('cpugroup', m.id, g.name) ? ' pinned' : ''}" data-cgroup="${esc(g.name)}"><button type="button" class="tsel" data-lgroup="${esc(g.cpus.join(','))}" aria-pressed="${on}" aria-label="${esc(g.name)}, average ${pct(now)}"></button>`
+      + `<span class="trow"><span class="kn">${esc(g.name)}${tpinBtn('cpugroup', m.id, g.name)}</span><span class="kb">${pct(now)}</span></span>`
+      + `<span class="km">${cs.length} processors · CPUs ${cpuRanges(g.cpus)}</span><span class="ks">${mhz ? 'average ' + (mhz / 1000).toFixed(2) + ' GHz' : '&nbsp;'}</span>`
+      + `<svg viewBox="0 0 100 64" preserveAspectRatio="none" aria-hidden="true"><path d="M0,64L${pts.join('L')}L100,64Z" fill="var(--accent-bg)" fill-opacity=".35"/><polyline points="${pts.join(' ')}" fill="none" stroke="var(--accent)" stroke-width="1.5" vector-effect="non-scaling-stroke"/></svg></div>`;
+  }).join('');
+  return `${head}<div class="kgrid cgrid">${tiles}</div></section>`;
 }
 
 /* ---------- views ---------- */
@@ -952,7 +1026,7 @@ function fleetView(dv){
   const tile = dv ? `<span class="tile" style="background:color-mix(in srgb, ${dv.color} 22%, transparent);color:${dv.color}">${icon(dv.id === 'pins' ? 'pin' : iconOf(dv))}</span>` : `<span class="tile fleet">${icon('fleet')}</span>`;
   return `<div class="hero">${tile}<div><h1>${dv ? esc(dv.name) : 'All machines'}</h1><div class="facts">${dv ? `<span>${dv.id === 'pins' ? 'your pins' : esc(kindLabel(dv))}</span>` : ''}<span>${live} of ${list.length} machines live</span><span>${nVm} VMs</span><span>${cronCount({children:list})} scheduled jobs</span><span>${c.cap('cpu')} cores</span><span>${Math.round(c.cap('mem'))} GB RAM</span></div></div>${heroStats([stat('cpu'), stat('mem'), stat('gpu')])}</div>`
     + `<div class="grid2">${whereCard(key, dv ? `Where ${esc(dv.name)}’s usage goes` : 'Where your fleet’s usage goes')}${graphCard(`${dv ? esc(dv.name) : 'Fleet'} ${mlabel(S.metric)}`, 'live machines, by type', series, graphMax(c.cap(S.metric), series, S.metric), S.metric)}</div>`
-    + `<section class="card"><div class="card-h"><h2>By machine · ${mlabel(S.metric)}</h2><span class="sub">each bar is that machine’s own ${S.mode === 'cap' ? 'capacity' : 'usage'}</span><span class="grow"></span>${modeSeg()}</div>${legendHTML(S.mode === 'cap')}${mrows}</section>`;
+    + `${cardTop('bymachine', 'By machine · ' + mlabel(S.metric))}<h2>By machine · ${mlabel(S.metric)}</h2><span class="sub">each bar is that machine’s own ${S.mode === 'cap' ? 'capacity' : 'usage'}</span><span class="grow"></span>${modeSeg()}</div>${legendHTML(S.mode === 'cap')}${mrows}</section>`;
 }
 
 function machineView(m){
@@ -972,9 +1046,9 @@ function machineView(m){
   let out = head;
   if (m.status === 'hostonly') out += noteHTML(`<b>Seen from its host.</b> ${esc(m.name)} can’t be reached directly, so this is what ${esc(host ? host.name : 'its host')} sees of it. <button type="button" class="linkbtn" data-retry="${esc(m.id)}">Retry</button>`);
   if (m.note) out += noteHTML(`<b>${esc(m.note.label)}</b> ${esc(m.note.text)}`);
-  const cpuHead = S.metric === 'cpu' ? cpuToggle() : S.metric === 'gpu' && m.gpus.length ? gpuToggle() : S.metric === 'disk' ? diskToggle() : S.metric === 'net' ? ifToggle() : '';
-  const graph = (S.metric === 'cpu' && S.cpuView === 'logical') || (S.metric === 'gpu' && S.gpuView === 'each' && m.gpus.length) || (S.metric === 'disk' && S.diskView === 'each') || (S.metric === 'net' && S.ifView === 'each') ? '' : graphCard(mlabel(S.metric), S.metric === 'gpu' && m.gpus.length > 1 ? `all ${m.gpus.length} GPUs, by type` : 'by type, stacked', series, graphMax(capOf(m, S.metric), series, S.metric), S.metric, cpuHead);
-  const alt = S.metric === 'gpu' ? gpuEachCard(m) : S.metric === 'disk' ? diskEachCard(m) : S.metric === 'net' ? ifEachCard(m) : logicalCard(m);
+  const cv = cpuViewOf(m), cpuHead = S.metric === 'cpu' ? cpuToggle(m) : S.metric === 'gpu' && m.gpus.length ? gpuToggle() : S.metric === 'disk' ? diskToggle() : S.metric === 'net' ? ifToggle() : '';
+  const graph = (S.metric === 'cpu' && cv !== 'type') || (S.metric === 'gpu' && S.gpuView === 'each' && m.gpus.length) || (S.metric === 'disk' && S.diskView === 'each') || (S.metric === 'net' && S.ifView === 'each') ? '' : graphCard(mlabel(S.metric), S.metric === 'gpu' && m.gpus.length > 1 ? `all ${m.gpus.length} GPUs, by type` : 'by type, stacked', series, graphMax(capOf(m, S.metric), series, S.metric), S.metric, cpuHead);
+  const alt = S.metric === 'gpu' ? gpuEachCard(m) : S.metric === 'disk' ? diskEachCard(m) : S.metric === 'net' ? ifEachCard(m) : cv === 'groups' ? cpuGroupsCard(m) : logicalCard(m);
   out += `<div class="grid2">${whereCard(m.id, m.parent ? 'Where this VM’s usage goes' : 'Where this machine’s usage goes')}${graph || alt}</div>`;
   if (!graph) out += S.metric === 'gpu' ? gpuSelCard(m) : S.metric === 'disk' ? diskSelCard(m) : S.metric === 'net' ? ifSelCard(m) : cpuSelCard(m);
   if (graph === '' ) {} // logical shown inline
@@ -1040,7 +1114,7 @@ function groupView(n){
   const facts = [kindLabel, `on ${host.name}`].concat(n.meta && n.meta.file ? [n.meta.file] : []).concat([`${cronCount(n)} scheduled jobs`]);
   const pinned = PINS.includes(n.id);
   return `<div class="hero"><span class="tile" style="background:color-mix(in srgb, ${TCOL[n.type]} 22%, transparent);color:${TCOL[n.type]}">${icon(iconOf(n))}</span><div><h1>${esc(n.name)}</h1><div class="facts">${facts.map(f => `<span>${esc(f)}</span>`).join('')}</div></div>${heroStats(['cpu','mem','gpu'].map(k => ({k:mlabel(k) + ' of host', v:pct(shareOfHost(n, k)), s:fmt(cur(n, k), k)})))}<button type="button" class="btn${pinned ? ' on' : ''}" data-pin="${esc(n.id)}" aria-pressed="${pinned}">${icon('pin')}${pinned ? 'Pinned' : 'Pin as space'}</button></div>`
-    + `<div class="grid2"><section class="card"><div class="card-h"><h2>Where ${esc(n.name)}’s ${mlabel(S.metric)} goes</h2><span class="sub">% of host${kids.length > 40 ? ' · top 40' : ''}</span></div><div class="rank">${ranks}</div></section>${graphCard(mlabel(S.metric), esc(n.name), series, graphMax(0, series, S.metric), S.metric)}</div>`
+    + `<div class="grid2">${cardTop('where', `Where ${esc(n.name)}’s ${mlabel(S.metric)} goes`)}<h2>Where ${esc(n.name)}’s ${mlabel(S.metric)} goes</h2><span class="sub">% of host${kids.length > 40 ? ' · top 40' : ''}</span></div><div class="rank">${ranks}</div></section>${graphCard(mlabel(S.metric), esc(n.name), series, graphMax(0, series, S.metric), S.metric)}</div>`
     + tableCard('Inside ' + esc(n.name), 'live', list);
 }
 
@@ -1050,7 +1124,7 @@ function leafView(n){
   const tiles = METRICS.map(m => { const v = cur(n, m.id); return `<div class="st" data-tip="child|${esc(n.id)}|${m.id}"><div class="k">${m.label}</div><div class="v">${fmt(v, m.id)}</div><div class="s">${m.id === 'gpu' ? gpuSub(n) : `${pct(v/capOf(host, m.id)*100)} of host · ${pct(v/(cur(ref, m.id)||1)*100)} of ${refName}`}</div>${sparkSVG(n.series[m.id], colOf(n), 120, 34)}</div>`; }).join('');
   const detail = n.kind === 'base'
     ? noteHTML('<b>Base system</b> is everything on the host that isn’t a Compose service, a container, a VM or a scheduled job: the OS, daemons and your apps. Open <b>Details</b> to see its processes.')
-    : `<section class="card"><div class="card-h"><h2>Details</h2></div><dl class="dl"><dt>Image</dt><dd><code>${esc(n.meta.image)}</code></dd>${n.meta.project ? `<dt>Compose project</dt><dd>${esc(n.meta.project)}</dd>` : ''}${n.meta.status ? `<dt>Status</dt><dd>${esc(n.meta.status)}</dd>` : ''}<dt>Host</dt><dd>${esc(host.name)}</dd><dt>GPU</dt><dd>${host.gpus.length ? (esc(whichGpuLong(n)) || 'none in use') : 'host has no GPU'}</dd></dl></section>`;
+    : `${cardTop('details', 'Details')}<h2>Details</h2></div><dl class="dl"><dt>Image</dt><dd><code>${esc(n.meta.image)}</code></dd>${n.meta.project ? `<dt>Compose project</dt><dd>${esc(n.meta.project)}</dd>` : ''}${n.meta.status ? `<dt>Status</dt><dd>${esc(n.meta.status)}</dd>` : ''}<dt>Host</dt><dd>${esc(host.name)}</dd><dt>GPU</dt><dd>${host.gpus.length ? (esc(whichGpuLong(n)) || 'none in use') : 'host has no GPU'}</dd></dl></section>`;
   const series = [{label:n.name, color:colOf(n), data:n.series[S.metric]}];
   const pinned = PINS.includes(n.id);
   return `<div class="hero"><span class="tile" style="background:color-mix(in srgb, ${colOf(n)} 22%, transparent);color:${colOf(n)}">${icon(iconOf(n))}</span><div><h1>${esc(n.name)}${n.kind !== 'base' ? termBtn(n) : ''}</h1><div class="facts"><span>${n.kind === 'base' ? 'Base system' : n.kind === 'service' ? 'Compose service' : 'Container'}</span><span>on ${esc(host.name)}</span>${cronF ? `<span>${cronF.children.length} ${esc(cronF.name.toLowerCase())}</span>` : ''}</div></div>${n.kind !== 'base' ? `<button type="button" class="btn${pinned ? ' on' : ''}" data-pin="${esc(n.id)}" aria-pressed="${pinned}" style="margin-left:auto">${icon('pin')}${pinned ? 'Pinned' : 'Pin as space'}</button>` : ''}</div>`
@@ -1072,7 +1146,7 @@ function cronView(n){
   const series = [{label:n.name, color:colOf(owner), data:n.series[S.metric]}];
   return `<div class="hero"><span class="tile" style="background:var(--track);color:var(--ink-2)">${icon('clock')}</span><div><h1>${esc(n.name)}</h1><div class="facts"><span>${n.parent.name === 'Scheduled tasks' ? 'scheduled task' : 'scheduled job'}</span><span>in ${esc(owner.name)}</span><span>on ${esc(host.name)}</span></div></div><div class="hero-stats"><span class="pill${n.running?' on':''}"><i></i>${n.running ? 'running now' : esc(j.state || 'idle')}</span></div></div>`
     + `<div class="tiles">${tiles}</div>`
-    + `<div class="grid2"><section class="card"><div class="card-h"><h2>Schedule</h2></div><dl class="dl"><dt>Schedule</dt><dd><code>${esc(j.sched)}</code>${j.human && j.human !== j.sched ? ' · ' + esc(j.human) : ''}</dd><dt>Command</dt><dd><code>${esc(j.cmd)}</code></dd><dt>Source</dt><dd><code>${esc(j.src || '')}</code></dd><dt>Runs inside</dt><dd>${esc(owner.name)} on ${esc(host.name)}</dd><dt>Last / next</dt><dd>${esc(j.last || '—')}</dd></dl></section>`
+    + `<div class="grid2">${cardTop('schedule', 'Schedule')}<h2>Schedule</h2></div><dl class="dl"><dt>Schedule</dt><dd><code>${esc(j.sched)}</code>${j.human && j.human !== j.sched ? ' · ' + esc(j.human) : ''}</dd><dt>Command</dt><dd><code>${esc(j.cmd)}</code></dd><dt>Source</dt><dd><code>${esc(j.src || '')}</code></dd><dt>Runs inside</dt><dd>${esc(owner.name)} on ${esc(host.name)}</dd><dt>Last / next</dt><dd>${esc(j.last || '—')}</dd></dl></section>`
     + graphCard(mlabel(S.metric), 'spikes are runs', series, graphMax(0, series, S.metric), S.metric) + `</div>`;
 }
 
@@ -1284,7 +1358,7 @@ function netView(){
   return `<div class="hero"><span class="tile fleet">${icon(n.kind === 'tailnet' ? 'net' : n.kind === 'if' ? (n.ifkind === 'bridge' ? 'bridge' : 'nic') : 'desktop')}</span><div><h1>${esc(n.name)}</h1><div class="facts">${facts.filter(Boolean).map(f => `<span>${esc(f)}</span>`).join('')}</div></div>${heroStats([{k:'In', v:rateText(n.rx), s:'received'}, {k:'Out', v:rateText(n.tx), s:'sent'}])}</div>`
     + (n.error ? noteHTML(`<b>${esc(statusText({status:n.status}))}.</b> ${esc(n.error)}`, 'warn') : '')
     + graph
-    + (rows ? `<section class="card"><div class="card-h"><h2>${n.kind === 'tailnet' ? 'Machines' : n.kind === 'nmachine' ? 'Interfaces' : 'Attached'}</h2></div><div class="scroll-x"><table class="tbl"><thead><tr><th>Name</th><th style="text-align:left">Kind</th><th style="text-align:left">Address</th><th>In</th><th>Out</th></tr></thead><tbody>${rows}</tbody></table></div></section>` : '');
+    + (rows ? `${cardTop('netlist', n.kind === 'tailnet' ? 'Machines' : n.kind === 'nmachine' ? 'Interfaces' : 'Attached')}<h2>${n.kind === 'tailnet' ? 'Machines' : n.kind === 'nmachine' ? 'Interfaces' : 'Attached'}</h2></div><div class="scroll-x"><table class="tbl"><thead><tr><th>Name</th><th style="text-align:left">Kind</th><th style="text-align:left">Address</th><th>In</th><th>Out</th></tr></thead><tbody>${rows}</tbody></table></div></section>` : '');
 }
 
 /* ---------- main ---------- */
@@ -1330,7 +1404,7 @@ function renderMain(){
   let refocus = null, refocusAt = 0, selStart = null, selStop = null, selDir;   // selStop: not selEnd, the selection helper above
   if (a && main.contains(a)){
     if (a.id) { refocus = '#' + a.id; selStart = a.selectionStart; selStop = a.selectionEnd; selDir = a.selectionDirection; }
-    else if (a.dataset) for (const k of ['select', 'mode', 'sort', 'pin', 'cpuview', 'netsel', 'gtoggle', 'gall', 'tilesort', 'lcpu', 'lgroup', 'tpin']) if (a.dataset[k] != null){ refocus = `[data-${k}="${CSS.escape(a.dataset[k])}"]`; break; }
+    else if (a.dataset) for (const k of ['select', 'mode', 'sort', 'pin', 'cpuview', 'netsel', 'gtoggle', 'gall', 'tilesort', 'lcpu', 'lgroup', 'tpin', 'cardfold', 'lgfold']) if (a.dataset[k] != null){ refocus = `[data-${k}="${CSS.escape(a.dataset[k])}"]`; break; }
     if (refocus) refocusAt = Math.max(0, [...main.querySelectorAll(refocus)].indexOf(a));   // a view can draw the same button twice (a card and a table)
   }
   let html;
@@ -1515,6 +1589,14 @@ document.addEventListener('click', e => {
     const k = prow.dataset.pid;   // a process in Docker Desktop's VM is keyed d:<container>:<pid>
     toggleInspect(prow.closest('.ptbl').dataset.mid, isVmKey(k) ? k : +k, prow); return;
   }
+  // a card's chevron, or its header's empty area (its title too, not the controls in it), folds it or unfolds it (#353)
+  const cf = e.target.closest('[data-cardfold]'); if (cf){ foldCard(cf.dataset.cardfold); return; }
+  const chd = e.target.closest('#main section.card[data-card] > .card-h');
+  if (chd && !e.target.closest('button, a, input, select, label, .seg, [data-tip]') && getSelection().isCollapsed){ foldCard(chd.parentElement.dataset.card); return; }
+  // a CPU group's chevron, or its header's empty area, folds the group to that line or unfolds it (#356)
+  const lf = e.target.closest('[data-lgfold]'); if (lf){ const m = nodes[S.sel]; if (m) foldCpuGroup(m.id, lf.dataset.lgfold); return; }
+  const lgh = e.target.closest('#main .cgroup > .lgh');
+  if (lgh && !e.target.closest('button, a, input, select, label') && getSelection().isCollapsed){ const m = nodes[S.sel]; if (m) foldCpuGroup(m.id, lgh.parentElement.dataset.cgroup); return; }
   const tp = e.target.closest('[data-tpin]'); if (tp){ e.stopPropagation(); toggleTilePin(tp.dataset.tpin); return; }
   const ap = e.target.closest('[data-addpin]'); if (ap){ PICK.open ? closePicker(false) : openPicker(); return; }
   const st = e.target.closest('[data-settings]'); if (st){ openSettings(); return; }
@@ -1641,8 +1723,8 @@ async function refreshNow(){
     const jobs = [];
     const shown = shownDetails();
     if (shown){ const mid = procMachineFor(shown); if (mid) jobs.push(fetch('/api/procs?machine=' + encodeURIComponent(mid) + procsScope(shown, mid), {cache:'no-store'}).then(r => r.json()).then(d => takeProcs(mid, d))); }
-    if (S.view !== 'details' && !S.detailsDocked && n && n.kind === 'machine' && S.metric === 'cpu' && S.cpuView === 'logical' && cpuSel(n).length && n.status === 'ok') jobs.push(fetch('/api/procs?machine=' + encodeURIComponent(n.id) + '&docker=0', {cache:'no-store'}).then(r => r.json()).then(d => takeProcs(n.id, d)));
-    if (S.view !== 'details' && n && n.kind === 'machine' && S.metric === 'cpu' && S.cpuView === 'logical') jobs.push(fetch('/api/cpus?machine=' + encodeURIComponent(n.id), {cache:'no-store'}).then(r => r.json()).then(d => { CPUS[n.id] = d; }));
+    if (S.view !== 'details' && !S.detailsDocked && n && n.kind === 'machine' && S.metric === 'cpu' && cpuViewOf(n) !== 'type' && cpuSel(n).length && n.status === 'ok') jobs.push(fetch('/api/procs?machine=' + encodeURIComponent(n.id) + '&docker=0', {cache:'no-store'}).then(r => r.json()).then(d => takeProcs(n.id, d)));
+    if (S.view !== 'details' && n && n.kind === 'machine' && S.metric === 'cpu' && cpuViewOf(n) !== 'type') jobs.push(fetch('/api/cpus?machine=' + encodeURIComponent(n.id), {cache:'no-store'}).then(r => r.json()).then(d => { CPUS[n.id] = d; }));
     const nm = n && n.kind === 'machine' ? n : null;
     // Each interface / Each disk shows nm's; Details filtered by a disk or interface pick needs its machine's to tell whether that's still there.
     const dn = shownDetails(), dmid = dn && procMachineFor(dn), lists = (shown, pick) => [...new Set([shown && nm ? nm.id : null, pick && pick.mid === dmid && pick.names.length ? dmid : null].filter(Boolean))];
@@ -2485,7 +2567,7 @@ function closeTreeFind(){ TF.open = false; TF.q = ''; const q = $('tfq'); if (q)
 
 // The page: rows and cards that contain the text, highlighted; Enter steps through them
 function findScope(){ const m = $('main'); return m.querySelector(':scope > .split > .wrap') || m; }
-function findTargets(){ return [...findScope().querySelectorAll('tbody tr, [data-select], [data-lcpu], [data-gsel], [data-dsel], [data-isel], .mcard-h')].filter(e => !e.closest('.dpanel') && !(e.matches('[data-select]') && e.closest('tbody tr'))); }
+function findTargets(){ return [...findScope().querySelectorAll('tbody tr, [data-select], [data-lcpu], [data-gsel], [data-dsel], [data-isel], .mcard-h')].filter(e => !e.closest('.dpanel, .card.folded > :not(.card-h)') && !(e.matches('[data-select]') && e.closest('tbody tr'))); }
 function applyFind(scroll){
   findScope().querySelectorAll('.fmatch, .fcur').forEach(e => e.classList.remove('fmatch', 'fcur'));
   const q = FIND.q.trim().toLowerCase(), cnt = $('mfcount');
@@ -2626,6 +2708,8 @@ function ctxFor(t){
   }
   const gh = t.closest('.ggroup .lgh');
   if (gh){ const g = gh.closest('.ggroup'), m = nodes[S.sel], gi = m ? m.gpus.findIndex(x => x.key === g.dataset.gpu) : -1; return {title:`GPU ${gi}`, items:[...selItems(gh.querySelector('[data-gsel]'), 'GPU ' + gi), pinItem(gh, 'GPU ' + gi)]}; }
+  const cgt = t.closest('.cgtile');
+  if (cgt){ const name = cgt.dataset.cgroup; return {title:name, items:[...selItems(cgt.querySelector('[data-lgroup]'), name), pinItem(cgt, name)]}; }
   const lg = t.closest('.lgh');
   if (lg && lg.querySelector('[data-lgroup]')){ const name = lg.querySelector('[data-lgroup]').textContent.trim(); return {title:name, items:[...selItems(lg.querySelector('[data-lgroup]'), name), pinItem(lg, name)]}; }
   for (const [attr, what] of [['lcpu', v => 'CPU ' + v], ['gsel', v => 'GPU ' + v.replace('gpu', '')], ['dsel', v => v], ['isel', v => v]]){
@@ -2901,7 +2985,7 @@ function mixView(d){
   return `<div class="hero"><span class="tile" style="background:color-mix(in srgb, ${d.color} 22%, transparent);color:${d.color}">${icon(iconOf(d))}</span><div><h1>${esc(d.name)}</h1>`
     + `<div class="facts"><span>${esc(kindLabel(d))}</span><span>${d.children.length} members on ${hosts.length} machine${hosts.length === 1 ? '' : 's'}</span><span>${hosts.map(h => esc(h.name)).join(', ')}</span></div></div>${heroStats(['cpu', 'mem', 'gpu'].map(stat))}</div>`
     + `<div class="grid2">${whereCard(d.id, `Where ${esc(d.name)}’s usage goes`)}${graphCard(mlabel(S.metric), 'its members, by type', series, graphMax(c.cap(S.metric), series, S.metric), S.metric)}</div>`
-    + `<section class="card"><div class="card-h"><h2>In ${esc(d.name)} · ${mlabel(S.metric)}</h2><span class="sub">each one’s share of its host</span></div><div class="pinlist">${shareRows(d.children)}</div></section>`;
+    + `${cardTop('members', `In ${esc(d.name)} · ${mlabel(S.metric)}`)}<h2>In ${esc(d.name)} · ${mlabel(S.metric)}</h2><span class="sub">each one’s share of its host</span></div><div class="pinlist">${shareRows(d.children)}</div></section>`;
 }
 
 // Pins only, with nothing selected: an all-up view of the pins (#57). Pinned machines alone get the All machines
@@ -2915,7 +2999,7 @@ function pinsView(){
   }
   const rows = shareRows(items);
   return `<div class="hero"><span class="tile" style="background:color-mix(in srgb, var(--accent) 22%, transparent);color:var(--accent)">${icon('pin')}</span><div><h1>Pins only</h1><div class="facts"><span>${items.length} pinned</span><span>${mlabel(S.metric)}: each pin's share of its host (or of itself, for a machine)</span></div></div></div>`
-    + (items.length ? `<section class="card"><div class="card-h"><h2>Your pins · ${mlabel(S.metric)}</h2></div><div class="pinlist">${rows}</div></section>`
+    + (items.length ? `${cardTop('pins', 'Your pins · ' + mlabel(S.metric))}<h2>Your pins · ${mlabel(S.metric)}</h2></div><div class="pinlist">${rows}</div></section>`
       : noteHTML('Nothing pinned yet: pin a machine, container or group with the pin on its row, or with <b>+</b> in the top bar.'));
 }
 
