@@ -18,8 +18,7 @@ final class FleetWebView: WKWebView {
     override func mouseDown(with e: NSEvent) {
         let p = convert(e.locationInWindow, from: nil)
         let y = isFlipped ? p.y : bounds.height - p.y
-        let pt = NSPoint(x: p.x, y: y)
-        if y <= band && !regions.contains(where: { $0.insetBy(dx: -2, dy: -2).contains(pt) }) {
+        if titleBarDrags(NSPoint(x: p.x, y: y), band: band, regions: regions, zoom: pageZoom) {
             if e.clickCount == 2 {
                 switch UserDefaults.standard.string(forKey: "AppleActionOnDoubleClick") ?? "Maximize" {
                 case "Minimize": window?.performMiniaturize(nil)

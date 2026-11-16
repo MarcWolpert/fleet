@@ -11,9 +11,16 @@ APP="$DIST/Fleet.app"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/fleet-macos.XXXXXX")
 trap 'rm -rf "$WORK"' EXIT
 
+# With more than one file, swiftc takes top-level code (FleetApp's app.run()) only from a main.swift.
+cp "$HERE/FleetApp.swift" "$WORK/main.swift"
+set -- "$WORK/main.swift" "$HERE/TitleBar.swift" "$@"
+if [ "${3:-}" = "--check" ]; then   # typecheck what a build compiles, and stop (the tests use this)
+  swiftc -typecheck "$1" "$2"
+  exit 0
+fi
 rm -rf "$APP" && mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/live/web"
 for arch in arm64 x86_64; do
-  swiftc -O -target "$arch-apple-macos13" -o "$WORK/Fleet-$arch" "$HERE/FleetApp.swift" -framework Cocoa -framework WebKit
+  swiftc -O -target "$arch-apple-macos13" -o "$WORK/Fleet-$arch" "$1" "$2" -framework Cocoa -framework WebKit
 done
 lipo -create -output "$APP/Contents/MacOS/Fleet" "$WORK/Fleet-arm64" "$WORK/Fleet-x86_64"
 

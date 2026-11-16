@@ -247,7 +247,7 @@ function renderSpaces(){
     + `<span class="mini" data-mini="${esc(p.key)}" aria-hidden="true">${p.gone ? '' : miniBar(p.key)}</span><span class="pc" data-pc="${esc(p.key)}">${p.gone ? 'gone' : pillPct(p.key)}</span></button>`
     + (p.pinned ? `<button type="button" class="unpin" data-unpin="${esc(p.key)}" aria-label="Unpin ${esc(p.name)}" title="Unpin">${icon('x', 2.4)}</button>` : '') + `</div>`).join('')
     + `<button type="button" class="addpin" data-addpin="1" aria-haspopup="dialog" aria-expanded="${PICK.open}" aria-label="Pin a grouping to the space bar" title="Pin a grouping">${icon('plus', 2)}</button>`;
-  setTimeout(reportDragRegions, 0);
+  watchDragRegions();
 }
 
 /* ---------- + picker: pin any grouping ---------- */
@@ -319,6 +319,16 @@ function reportDragRegions(){
   h.postMessage({band:bar.getBoundingClientRect().bottom, regions});
 }
 addEventListener('resize', () => setTimeout(reportDragRegions, 50));
+// Pills change size on their own (a percentage that grows each poll, a font that loads), and every pill after
+// one that grew moves, + included; the Mac app hears where they are each time, not just when the bar is drawn.
+function watchDragRegions(){
+  if (typeof ResizeObserver !== 'function'){ setTimeout(reportDragRegions, 0); return; }
+  const ro = watchDragRegions.ro || (watchDragRegions.ro = new ResizeObserver(() => reportDragRegions()));
+  ro.disconnect();
+  document.querySelectorAll('.spacebar .space, .spacebar button').forEach(e => ro.observe(e));
+  const sp = $('spaces');
+  if (sp && !sp.dataset.dragwatch){ sp.dataset.dragwatch = '1'; sp.addEventListener('scroll', reportDragRegions, {passive:true}); }
+}
 function updateSpaces(){
   document.querySelectorAll('[data-mini]').forEach(e => { if (e.dataset.mini === 'fleet' || nodes[e.dataset.mini]) e.innerHTML = miniBar(e.dataset.mini); });
   document.querySelectorAll('[data-pc]').forEach(e => { if (e.dataset.pc === 'fleet' || nodes[e.dataset.pc]) e.textContent = pillPct(e.dataset.pc); });
