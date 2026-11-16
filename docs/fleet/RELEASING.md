@@ -13,4 +13,4 @@ carries and an upstream merge can bring more of. The first release is **0.0.1**.
    `live/dist/Fleet-<version>-macos-arm64.zip` (Apple silicon) and the Linux package, published as
    `fleet-<version>-linux-x64.tar.gz` and `fleet-<version>-linux-arm64.tar.gz` (Python and HTML: the same package under each name).
 4. If all is well, run it again with `--publish`: it tags `fleet-v<version>`, pushes the tag and publishes the
-   release with both packages, its notes taken from that version's changelog section.
+   release with its three packages, its notes taken from that version's changelog section.

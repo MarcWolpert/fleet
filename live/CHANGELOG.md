@@ -6,7 +6,7 @@ The section for a version becomes its GitHub release notes; see docs/fleet/RELEA
 ## Fleet 0.0.1
 
 The first release of Fleet Live: every machine you manage, live, in one tree. For macOS (Fleet.app, Apple
-silicon and Intel) and Linux (a package with a menu entry and a `fleet` command). It reads Linux, Windows and Mac
+silicon) and Linux (a package with a menu entry and a `fleet` command). It reads Linux, Windows and Mac
 machines over SSH, read-only, and installs nothing on them.
 
 - **The machine tree:** machines, their base system, Docker Compose projects and services, containers, VMs

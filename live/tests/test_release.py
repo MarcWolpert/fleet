@@ -52,5 +52,45 @@ class Packages(unittest.TestCase):
         self.assertEqual((r.returncode, [l for l in r.stderr.splitlines() if "error" in l.lower()]), (0, []))
 
 
+class ReleaseNotes(unittest.TestCase):
+    """The changelog section becomes the release notes word for word, so it promises only the Macs the release
+    builds for, and the release script and RELEASING.md count the packages it publishes."""
+    RELEASE = os.path.join(LIVE, "packaging", "release.sh")
+    RELEASING = os.path.join(os.path.dirname(LIVE), "docs", "fleet", "RELEASING.md")
+    MACS = {"arm64": "Apple silicon", "x86_64": "Intel"}
+    COUNT = {2: "two", 3: "three", 4: "four"}
+
+    def notes(self):
+        # the section release.sh passes to gh as --notes-file
+        log = open(os.path.join(LIVE, "CHANGELOG.md"), encoding="utf-8").read().splitlines()
+        start = log.index("## Fleet " + version()) + 1
+        end = next((i for i in range(start, len(log)) if log[i].startswith("## ")), len(log))
+        return " ".join(log[start:end])
+
+    def assets(self):
+        text = open(self.RELEASE, encoding="utf-8").read()
+        line = [l for l in text.splitlines() if l.strip().startswith("gh release create")][0]
+        # gh release create "$TAG" <the files> --title …
+        return [w for w in line.split()[4:] if w.startswith('"$') and not w.startswith('"$NOTES')]
+
+    def test_the_notes_name_exactly_the_macs_the_release_builds_for(self):
+        text = open(self.RELEASE, encoding="utf-8").read()
+        built = set(re.findall(r'build_macos\.sh" --arch (\w+)', text))
+        self.assertEqual(built, {"arm64"})
+        m = re.search(r"For macOS \(Fleet\.app, ([^)]*)\)", self.notes())
+        self.assertIsNotNone(m, "the notes say which Macs Fleet.app runs on")
+        self.assertEqual(set(x.strip() for x in re.split(r",| and ", m.group(1))), {self.MACS[a] for a in built})
+
+    def test_the_script_and_releasing_md_count_the_packages_a_release_publishes(self):
+        n = len(self.assets())
+        self.assertEqual(n, 3)
+        said = []
+        for path in (self.RELEASE, self.RELEASING):
+            text = open(path, encoding="utf-8").read()
+            said += [(os.path.basename(path), w.lower()) for w in re.findall(r"\b(both|two|three|four)\s+packages\b", text, re.I)]
+        self.assertTrue(said, "they say how many packages a release has")
+        self.assertEqual([w for _, w in said if w != self.COUNT[n]], [], said)
+
+
 if __name__ == "__main__":
     unittest.main()
