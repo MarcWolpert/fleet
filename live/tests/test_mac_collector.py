@@ -554,5 +554,142 @@ class Interfaces(unittest.TestCase):
         _, ifs = self.reading()
         self.assertEqual(ifs, {1: [], 100: ["en0"], 200: ["en0", "lo0"], 300: ["utun3"]})
 
+
+# vm_stat on Apple silicon (16 KiB pages). Used memory is what Activity Monitor calls Memory Used:
+# app memory (anonymous - purgeable) + wired + compressed = (350000 - 20000 + 150000 + 40000) pages.
+VM_STAT = """Mach Virtual Memory Statistics: (page size of 16384 bytes)
+Pages free:                               12345.
+Pages active:                            300000.
+Pages inactive:                          290000.
+Pages speculative:                        10000.
+Pages throttled:                              0.
+Pages wired down:                        150000.
+Pages purgeable:                          20000.
+"Translation faults":                 123456789.
+Pages copy-on-write:                    1234567.
+Pages zero filled:                     98765432.
+Pages reactivated:                        12345.
+Pages purged:                             54321.
+File-backed pages:                       250000.
+Anonymous pages:                         350000.
+Pages stored in compressor:              100000.
+Pages occupied by compressor:             40000.
+Decompressions:                          123456.
+Compressions:                            234567.
+Pageins:                                 345678.
+Pageouts:                                  4567.
+Swapins:                                      0.
+Swapouts:                                     0.
+"""
+
+CRONTAB = """# m h dom mon dow command
+MAILTO=""
+
+*/15 * * * * /Users/someone/bin/sync-notes.sh >/dev/null 2>&1
+@reboot /usr/local/bin/mount-shares
+30 3 * * 1 /usr/bin/python3 /Users/someone/bin/weekly_report.py
+"""
+
+LAUNCHCTL = "PID\tStatus\tLabel\n410\t0\tcom.example.backup\n-\t0\tcom.example.cleanup\n77\t0\tcom.apple.Finder\n"
+
+LAUNCH_AGENTS = {
+    "com.example.agent": {"Label": "com.example.agent", "Program": "/usr/local/bin/agent", "KeepAlive": True},  # not scheduled: not a job
+    "com.example.backup": {"Label": "com.example.backup", "ProgramArguments": ["/bin/sh", "/Users/someone/bin/backup.sh"], "StartInterval": 3600},
+    "com.example.cleanup": {"Label": "com.example.cleanup", "Program": "/usr/local/bin/cleanup", "StartCalendarInterval": {"Hour": 4, "Minute": 30}},
+    "com.example.every90": {"Label": "com.example.every90", "ProgramArguments": ["/usr/local/bin/poll", "--once"], "StartInterval": 90},
+    "com.example.five": {"Label": "com.example.five", "ProgramArguments": ["/usr/local/bin/tick"], "StartInterval": 300},
+}
+
+
+def procs_at(step):
+    """The processes, `step` readings in (3 s apart): CPU time goes up by 0.75, 0.75, 0, 1.5 and 1.5 s."""
+    t = [("61:01.00", "61:01.75"), ("0:01.50", "0:02.25"), ("0:10.00", "0:10.00"), ("0:00.50", "0:02.00"), ("1:00.00", "1:01.50")]
+    return ps((1, 0, "root", 131072, t[0][step], "/sbin/launchd"),
+              (100, 1, "someone", 65536, t[1][step], "/usr/bin/curl -sS https://example.com/"),
+              (200, 1, "someone", 65536, t[2][step], "/usr/bin/ssh -N backup@nas"),
+              (300, 1, "someone", 65536, t[3][step], "/usr/bin/ssh lab"),
+              (410, 1, "someone", 262144, t[4][step], "/bin/sh /Users/someone/bin/backup.sh"))
+
+
+class WholeReading(unittest.TestCase):
+    """#108: one complete Mac reading from hand-made output of every command the collector runs (Docker
+    and disks have their own tests above): memory, CPUs, interfaces, processes, crontab and launchd jobs."""
+
+    def test_the_second_reading_exactly(self):
+        mac = Mac(dict({"vm_stat": VM_STAT, NETSTAT: netstat(0), "ifconfig": IFCONFIG, LSOF_TCP: LSOF, "crontab -l": CRONTAB, "launchctl list": LAUNCHCTL},
+                       **procs_at(0)), ticks=[[100, 50, 800, 0]] * 8, docker=False)
+        c = mac.collector(self)
+        agents = os.path.join(mac.home, "Library", "LaunchAgents")
+        os.makedirs(agents)
+        for label, pl in LAUNCH_AGENTS.items():
+            with open(os.path.join(agents, label + ".plist"), "wb") as f:
+                plistlib.dump(pl, f)
+        with open(os.path.join(agents, "com.example.broken.plist"), "wb") as f:
+            f.write(b"not a plist")
+        c.snapshot()
+        mac.out.update({NETSTAT: netstat(1)}, **procs_at(1))
+        mac.libc.ticks = [[130, 70, 950, 0]] * 4 + [[150, 90, 900, 10]] * 4  # E cores 50 of 200 ticks busy, P cores 100 of 200
+        mac.now += 3
+        snap = c.snapshot()
+
+        def iface(name, kind, rx, tx, addrs, addrs6=None):
+            x = {"name": name, "kind": kind, "rx": rx, "tx": tx, "addrs": addrs, "master": "", "state": "", "speed": ""}
+            return dict(x, addrs6=addrs6) if addrs6 else x
+
+        def proc(pid, ppid, comm, user, cpu, mem, args, owner, ifs):
+            return [pid, ppid, comm, user, "Ss", cpu, mem, 0.0, 0.0, 0, args, owner, -1, [], [], ifs, 0.0]
+
+        def cron(name, sched, human, cmd):
+            return {"name": name, "sched": sched, "human": human, "cmd": cmd, "src": "crontab", "last": "", "u": [0.0] * 5, "running": False}
+
+        def launchd(label, human, cmd, u=None):
+            return {"name": label, "label": label, "sched": "launchd", "human": human, "cmd": cmd, "src": os.path.join(agents, label + ".plist"), "last": "",
+                    "u": u or [0.0] * 5, "running": bool(u)}
+
+        self.assertEqual(snap, {
+            "t": 10003.0, "os": "macOS 15.1", "arch": "arm64", "cpu_model": "Apple M1", "ncpu": 8, "uptime": 9003.0,
+            "host": [3.0, 520000 * 16384 / GB, 0.0, 0.0, 1.5],
+            "cap": [8, 16.0, 100.0, 500.0, 1250.0],
+            "gpus": [{"name": "Apple M1", "mem": "unified memory", "util": 0.0, "m": {}, "lim": {}}],
+            "lcpus": [{"n": n, "pct": 25.0 if n < 4 else 50.0, "mhz": 0} for n in range(8)],
+            "groups": [{"name": "Efficiency cores", "cpus": [0, 1, 2, 3]}, {"name": "Performance cores", "cpus": [4, 5, 6, 7]}],
+            "containers": [], "vms": [],
+            "jobs": [cron("sync-notes.sh", "*/15 * * * *", "every 15 min", "/Users/someone/bin/sync-notes.sh >/dev/null 2>&1"),
+                     cron("mount-shares", "@reboot", "reboot", "/usr/local/bin/mount-shares"),
+                     cron("weekly_report.py", "30 3 * * 1", "weekly (1) at 03:30", "/usr/bin/python3 /Users/someone/bin/weekly_report.py"),
+                     launchd("com.example.backup", "every 1 h", "/bin/sh /Users/someone/bin/backup.sh", u=[0.5, 0.25, 0.0, 0.0, 0.0]),
+                     launchd("com.example.cleanup", "at hour 4, minute 30", "/usr/local/bin/cleanup"),
+                     launchd("com.example.every90", "every 90 s", "/usr/local/bin/poll --once"),
+                     launchd("com.example.five", "every 5 min", "/usr/local/bin/tick")],
+            "procs": [proc(1, 0, "launchd", "root", 0.25, 0.125, "/sbin/launchd", "base", []),
+                      proc(100, 1, "curl", "someone", 0.25, 0.0625, "/usr/bin/curl -sS https://example.com/", "base", ["en0"]),
+                      proc(200, 1, "ssh", "someone", 0.0, 0.0625, "/usr/bin/ssh -N backup@nas", "base", ["en0", "lo0"]),
+                      proc(300, 1, "ssh", "someone", 0.5, 0.0625, "/usr/bin/ssh lab", "base", ["utun3"]),
+                      proc(410, 1, "sh", "someone", 0.5, 0.25, "/bin/sh /Users/someone/bin/backup.sh", "job:3", [])],
+            "ifs": [iface("lo0", "loopback", 0.1, 0.1, ["127.0.0.1/8"], ["::1", "fe80::1"]),
+                    iface("en0", "physical", 1.0, 0.5, ["192.0.2.20/24"], ["fe80::1c2d:3e4f:5a6b:7c8d", "2001:db8::20"]),
+                    iface("en1", "physical", 0.0, 0.0, []),
+                    iface("bridge0", "bridge", 0.0, 0.0, []),
+                    iface("utun3", "virtual", 0.01, 0.0, ["198.51.100.5/32"], ["2001:db8:100::5"]),
+                    iface("gif0*", "virtual", 0.0, 0.0, [])],
+            "dockernets": [], "cronLabel": "Cron & launchd jobs", "disks": [],
+            "note": "Docker Desktop runs containers in its own Linux VM (no GPU passthrough). They are listed here directly; that VM's overhead counts as Base system.",
+        })
+
+    def test_memory_at_the_page_size_vm_stat_names(self):
+        """An Intel Mac's pages are 4 KiB."""
+        snap = Mac({"vm_stat": VM_STAT.replace("page size of 16384", "page size of 4096")}, docker=False).collector(self).snapshot()
+        self.assertEqual(snap["host"][1], 520000 * 4096 / GB)
+
+
+class Helpers(unittest.TestCase):
+    def test_parse_cputime(self):
+        self.assertEqual({s: fl.parse_cputime(s) for s in ("0:01.50", "61:01.00", "1:02:03.50", "2-03:04:05")},
+                         {"0:01.50": 1.5, "61:01.00": 3661.0, "1:02:03.50": 3723.5, "2-03:04:05": 183845.0})
+
+    def test_fmt_secs(self):
+        self.assertEqual({s: fl.fmt_secs(s) for s in (45, 60, 90, 300, 3600, 3660, 7200)},
+                         {45: "45 s", 60: "1 min", 90: "90 s", 300: "5 min", 3600: "1 h", 3660: "61 min", 7200: "2 h"})
+
 if __name__ == "__main__":
     unittest.main()
