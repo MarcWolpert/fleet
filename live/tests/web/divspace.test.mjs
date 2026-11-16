@@ -145,3 +145,58 @@ for (const [name, divs, sel, full, fullPids, docked] of [
       assert.deepEqual(p.errors, []);
     } finally { await p.close(); }
   });
+
+// A Pins only group of things on several machines (#295): clicking its name, or pinning it from its menu, opens its
+// own all-up view: its share of the machines its members run on, where that goes, and each member with its share of
+// its own host, to open it (as Pins only lists a mix of pins). modelFleet: host/containers/web 0.3 cores and 1 GB
+// of host's 16 and 64; nog/containers/web 0.2 and 1 of nog's 8 and 32; neither uses a GPU (host has 2, nog none).
+const WEBS = {'pins|root': [{id: 'gw', name: 'Webs', ids: ['host/containers/web', 'nog/containers/web']}]};
+const MIXVIEW = `(() => { const m = document.getElementById('main'), h = m.querySelector('.hero'); if (!h) return null; return {
+  h1: h.querySelector('h1').textContent, facts: [...h.querySelectorAll('.facts span')].map(s => s.textContent),
+  stats: [...h.querySelectorAll('.hs')].map(s => [s.querySelector('.k').textContent, s.querySelector('.v').textContent, s.querySelector('.s').textContent]),
+  cards: [...m.querySelectorAll('section.card h2')].map(x => x.textContent),
+  members: [...m.querySelectorAll('.pinlist .prow2')].map(r => [r.querySelector('[data-select]').dataset.select, r.querySelector('.pw').textContent, r.querySelector('.pv').textContent]),
+  nan: /NaN|undefined/.test(m.textContent)}; })()`;
+const WEBSVIEW = {h1: 'Webs', facts: ['division', '2 members on 2 machines', 'lab-host, lab-nogpu'],
+  stats: [['CPU of its machines', '2.1%', '0.50 cores of 24 cores'], ['Memory of its machines', '2.1%', '2.0 GB of 96 GB'], ['GPU of its machines', '0%', '0% of 2 GPUs']],
+  cards: ['Where Webs’s usage goes', 'CPU', 'In Webs · CPU'],
+  members: [['host/containers/web', 'lab-host', '1.9%'], ['nog/containers/web', 'lab-nogpu', '2.5%']], nan: false};
+test('a Pins only group of containers on two machines: its name opens its own view, which survives a reload, and its menu pins it', async () => {
+  const fx = {fleet: modelFleet(), procs: {}, cpus: {}}; fx.fleet.prefs = {tgroups: WEBS}; fx.fleet.pins = ['host/containers/web', 'nog/containers/web'];
+  const p = await browser.page(fx, {ui: ui({sel: 'fleet', pinsOnly: true})});
+  try {
+    await p.waitFor(`document.querySelector('#tree .tgroup[data-tgroup="gw"] .tg-n')`);
+    await p.click('#tree .tgroup[data-tgroup="gw"] .tg-n');
+    await p.waitFor(`S.sel === 'div:gw'`);
+    await p.waitFor(`(document.querySelector('#main .hero h1') || {}).textContent === 'Webs'`).catch(() => null);
+    assert.deepEqual(p.errors, []);
+    assert.deepEqual(await p.eval(MIXVIEW), WEBSVIEW);
+    await p.reload();
+    await p.waitFor(`(document.querySelector('#main .hero h1') || {}).textContent === 'Webs'`).catch(() => null);
+    assert.deepEqual(await p.eval(MIXVIEW), WEBSVIEW);
+    await p.eval(`(() => { const h = document.querySelector('#tree .tgroup[data-tgroup="gw"] .tg-h'), r = h.getBoundingClientRect(); h.dispatchEvent(new MouseEvent('contextmenu', {bubbles: true, cancelable: true, clientX: r.left + 10, clientY: r.top + 5})); return true; })()`);
+    await p.eval(`(() => { [...document.querySelectorAll('#ctxmenu [role=menuitem]')].find(e => e.textContent.trim() === 'Pin as a space').click(); return true; })()`);
+    await p.waitFor(`document.querySelector('#spaces [data-space="div:gw"]') && !pinsSaves`).catch(() => null);
+    assert.deepEqual(await p.eval(`[...document.querySelectorAll('#spaces [data-space]')].map(b => [b.dataset.space, b.querySelector('[data-pc]').textContent])`),
+      [['fleet', '46%'], ['host/containers/web', '1.9%'], ['nog/containers/web', '2.5%'], ['div:gw', '2.1%']]);
+    assert.deepEqual(JSON.parse(fx.posts.filter(x => x.path === '/api/pins').pop().body), ['host/containers/web', 'nog/containers/web', 'div:gw']);
+    assert.deepEqual(await p.eval(MIXVIEW), WEBSVIEW);
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
+test('Details with a Pins only group of containers on two machines: the docked panel asks for a machine, the full view shows its first member', async () => {
+  const fx = fixture(); fx.fleet.prefs = {tgroups: {'pins|root': [{id: 'gw', name: 'Webs', ids: ['lx/containers/web', 'lx2/containers/web']}]}}; fx.fleet.pins = ['lx/containers/web', 'lx2/containers/web'];
+  const p = await browser.page(fx, {ui: ui({sel: 'div:gw', detailsDocked: true, pinsOnly: true})});
+  try {
+    await p.waitFor(`document.querySelector('.dpanel .dtitle')`).catch(() => null);
+    for (let i = 0; i < 3; i++){ await p.eval(`(() => { refreshNow(); return true; })()`); await p.waitFor(`!busy`); }
+    assert.deepEqual(await p.eval(DPANEL), ['Details', 'Select a machine or anything in it to see its processes.']);
+    await p.eval(`(() => { document.querySelector('[data-details]').click(); return true; })()`);
+    await p.waitFor(`S.view === 'details' && !S.detailsDocked`);
+    await p.waitFor(`!/loading/.test(document.querySelector('#main .hero .facts').textContent)`).catch(() => null);
+    assert.deepEqual(await p.eval(FULL), ['Details · web', ['3 processes', 'on lab-linux']]);
+    assert.deepEqual(await p.eval(PIDLIST), [101, 102, 111]);
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});

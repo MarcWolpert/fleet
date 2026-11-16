@@ -1306,7 +1306,7 @@ function renderMain(){
   else {
     const n = S.sel === 'fleet' ? null : nodes[S.sel];
     if (S.view === 'details') html = detailsView(shownDetails() || {id:'', name:'—'});
-    else html = !n ? (S.pinsOnly && S.space === 'fleet' ? pinsView() : fleetView()) : n.kind === 'division' && !n.parent ? fleetView(n) : n.kind === 'machine' ? machineView(n) : n.kind === 'cronfolder' ? cronFolderView(n) : n.kind === 'cron' ? cronView(n) : n.hist ? leafView(n) : groupView(n);
+    else html = !n ? (S.pinsOnly && S.space === 'fleet' ? pinsView() : fleetView()) : n.kind === 'division' && !n.parent ? (n.children.every(topMachine) ? fleetView(n) : mixView(n)) : n.kind === 'machine' ? machineView(n) : n.kind === 'cronfolder' ? cronFolderView(n) : n.kind === 'cron' ? cronView(n) : n.hist ? leafView(n) : groupView(n);
     if (S.detailsDocked && S.view !== 'details')
       panel = ownsMachine(n) ? detailsView(n, true) : `<div class="dhead"><div class="dtitle"><b>Details</b><span>Select a machine or anything in it to see its processes.</span></div><button type="button" class="iconbtn" data-closedock="1" aria-label="Close the Details panel">${icon('x', 2.2)}</button></div>`;
   }
@@ -2781,6 +2781,25 @@ function newGroupName(list, ids){
   return word + ' ' + k;
 }
 
+// each one with its share of its host (or of itself, for a machine), to open it: Pins only's mix, a group's members
+function shareRows(items){
+  return items.map(n => {
+    const v = rowVal(n), w = parseFloat(v) || 0, where = n.kind === 'machine' && !n.parent ? '' : n.kind === 'division' && !n.parent ? kindLabel(n) : (n.kind === 'division' ? kindLabel(n) + ' on ' : '') + hostOf(n).name;
+    return `<div class="prow2"><button type="button" class="namebtn" data-select="${esc(n.id)}"><span class="ico" style="color:${colOf(n)}">${icon(iconOf(n))}</span>${esc(n.name)}</button>`
+      + `<span class="pw">${esc(where)}</span><div class="track"><i style="width:${Math.min(100, w).toFixed(1)}%;background:${colOf(n)}"></i></div><span class="pv">${esc(v)}</span></div>`;
+  }).join('');
+}
+// A group of things on several machines (Pins only groups anything) (#295): its share of the machines they run on,
+// where that goes by type, and each member with its share of its own host, to open it, as Pins only lists a mix.
+function mixView(d){
+  const c = ctxOf(d.id), hosts = divHosts(d), series = typeSeries(i => c.bt(S.metric, i));
+  const stat = m => { const cap = c.cap(m), used = sumv(c.bt(m)); return {k:mlabel(m) + ' of its machines', v:cap ? pct(used / cap * 100) : '—', s:cap ? `${fmt(used, m)} of ${capText(cap, m)}` : `no ${mlabel(m)}`}; };
+  return `<div class="hero"><span class="tile" style="background:color-mix(in srgb, ${d.color} 22%, transparent);color:${d.color}">${icon(iconOf(d))}</span><div><h1>${esc(d.name)}</h1>`
+    + `<div class="facts"><span>${esc(kindLabel(d))}</span><span>${d.children.length} members on ${hosts.length} machine${hosts.length === 1 ? '' : 's'}</span><span>${hosts.map(h => esc(h.name)).join(', ')}</span></div></div>${heroStats(['cpu', 'mem', 'gpu'].map(stat))}</div>`
+    + `<div class="grid2">${whereCard(d.id, `Where ${esc(d.name)}’s usage goes`)}${graphCard(mlabel(S.metric), 'its members, by type', series, graphMax(c.cap(S.metric), series, S.metric), S.metric)}</div>`
+    + `<section class="card"><div class="card-h"><h2>In ${esc(d.name)} · ${mlabel(S.metric)}</h2><span class="sub">each one’s share of its host</span></div><div class="pinlist">${shareRows(d.children)}</div></section>`;
+}
+
 // Pins only, with nothing selected: an all-up view of the pins (#57). Pinned machines alone get the All machines
 // view of just them; a mix gets each pin with its share, to open it.
 function pinsView(){
@@ -2790,11 +2809,7 @@ function pinsView(){
     pv.series = sumSeries(items); pv.gseries = items.reduce((t, c) => addG(t, c.gseries), {});
     return fleetView(pv);
   }
-  const rows = items.map(n => {
-    const v = rowVal(n), w = parseFloat(v) || 0, where = n.kind === 'machine' && !n.parent ? '' : n.kind === 'division' && !n.parent ? kindLabel(n) : (n.kind === 'division' ? kindLabel(n) + ' on ' : '') + hostOf(n).name;
-    return `<div class="prow2"><button type="button" class="namebtn" data-select="${esc(n.id)}"><span class="ico" style="color:${colOf(n)}">${icon(iconOf(n))}</span>${esc(n.name)}</button>`
-      + `<span class="pw">${esc(where)}</span><div class="track"><i style="width:${Math.min(100, w).toFixed(1)}%;background:${colOf(n)}"></i></div><span class="pv">${esc(v)}</span></div>`;
-  }).join('');
+  const rows = shareRows(items);
   return `<div class="hero"><span class="tile" style="background:color-mix(in srgb, var(--accent) 22%, transparent);color:var(--accent)">${icon('pin')}</span><div><h1>Pins only</h1><div class="facts"><span>${items.length} pinned</span><span>${mlabel(S.metric)}: each pin's share of its host (or of itself, for a machine)</span></div></div></div>`
     + (items.length ? `<section class="card"><div class="card-h"><h2>Your pins · ${mlabel(S.metric)}</h2></div><div class="pinlist">${rows}</div></section>`
       : noteHTML('Nothing pinned yet: pin a machine, container or group with the pin on its row, or with <b>+</b> in the top bar.'));
