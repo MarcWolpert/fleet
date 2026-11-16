@@ -51,3 +51,19 @@ test('a selected machine keeps its selection while its status changes', async ()
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
 });
+
+test('a VM its host sees but that isn\'t running looks off, not reconnecting', async () => {
+  const fx = fixture(), lx = fx.fleet.machines.find(m => m.id === 'lx');
+  const vm = (name, status) => ({id: 'lx/vms/' + name, name, tile: 'vm', status, os: 'VM', agent: 'seen from the host', cap: [16, 64, 0, 1, 1], gpus: [],
+    cronLabel: 'Cron jobs', base: {id: 'lx/vms/' + name + '/base', g: []}, baseCron: [], compose: [], containers: [], vms: []});   // as the server sends one: no has_data
+  lx.vms = [vm('ubuntu', 'ok'), vm('win11', 'off')];
+  const p = await browser.page(fx, {ui: ui({sel: 'lx/vms/win11', open: {'lx/vms': true}})});
+  try {
+    await p.waitFor(`document.querySelector('#tree .row[data-select="lx/vms/win11"]') && document.querySelector('#main .hero h1')`);
+    assert.deepEqual(await p.eval(`['ubuntu', 'win11'].map(n => { const r = document.querySelector('#tree .row[data-select="lx/vms/' + n + '"]'), d = r.querySelector('.sdot'); return [[...r.classList].sort().join(' '), d.className, d.title]; })`),
+      [['machine ok row', 'sdot ok', 'live'], ['machine off row sel', 'sdot off', 'off']]);
+    assert.equal(await p.eval(`document.querySelector('#main .hero h1 .sdot').className`), 'sdot off');
+    assert.equal(await p.eval(`!!document.querySelector('#main .spill')`), false, 'no "reconnecting" pill');
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});

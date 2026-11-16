@@ -213,7 +213,7 @@ function heroStats(list){ return `<div class="hero-stats">${list.map(s => `<div 
 // reported gets the offline card. Status changes never swap the layout.
 function isLive(n){ return n.status === 'ok'; }
 function hasData(n){ return n.kind !== 'machine' || n.hasData || n.status === 'ok' || n.status === 'hostonly'; }
-function isStale(n){ return n.kind === 'machine' && n.status !== 'ok' && n.status !== 'hostonly' && n.hasData; }
+function isStale(n){ return n.kind === 'machine' && n.status !== 'ok' && n.status !== 'hostonly' && n.status !== 'off' && n.hasData; }   // a VM that is off isn't reconnecting
 function staleFor(n){ return n.lastOk ? Math.max(0, Date.now() / 1000 - n.lastOk) : 0; }
 function statusClass(n){ return isLive(n) ? 'ok' : n.status === 'hostonly' ? 'hostonly' : isStale(n) ? 'stale' : n.status === 'off' ? 'off' : n.status === 'connecting' ? 'connecting' : 'offline'; }
 const STATUSES = ['ok', 'hostonly', 'stale', 'off', 'connecting', 'offline'];   // every class statusClass gives
