@@ -94,7 +94,7 @@ function machineFrom(s, isVm){
   const cap = (s.cap || [1,1,0,1,1]).slice(); cap[MI.gpu] = 100 * gpus.length;
   const m = mk(s.id, {name:s.name, kind:'machine', type:isVm ? 'vm' : 'machine', cap, gpus, gmap:Object.fromEntries(gpus.map(g => [g.key, g.host || null])),
     os:s.os || '', tile:s.tile || 'vm', agent:s.agent || '', uptime:s.uptime || '', note:s.note, status:s.status || 'ok', error:s.error || '',
-    cronLabel:s.cronLabel || 'Cron jobs', cpu_model:s.cpu_model || '', ncpu:s.ncpu || cap[0], groups:s.groups || [], hostside:s.hostside,
+    cronLabel:s.cronLabel || 'Cron jobs', cpu_model:s.cpu_model || '', ncpu:s.ncpu || cap[0], groups:s.groups || [], hostside:s.hostside ? histOf(s.hostside) : null,
     ssh:s.ssh || '', hasData:s.has_data !== false || s.status === 'hostonly', lastOk:s.last_ok || 0});
   const gks = g => (g || []).filter(k => gpus.some(x => x.key === k));
   const b = attach(m, leaf(s.base.id, 'Base system', 'base', 'base', s.base.h));
@@ -137,6 +137,8 @@ function compute(n){
   }
   n.series = sumSeries(n.children);
   n.gseries = n.children.reduce((t, c) => addG(t, c.gseries, c.kind === 'machine' && c.parent ? c.gmap : null), {});
+  // A nested VM counts toward its host by what the hypervisor sees (hostside); its own tree and page, by its inside view.
+  if (n.hostside){ n.inside = {series:n.series}; n.series = n.hostside; }
 }
 function build(d){
   for (const k in nodes) delete nodes[k];
@@ -842,10 +844,10 @@ function fleetView(dv){
 function machineView(m){
   const host = m.parent ? hostOf(m) : null;
   if (!hasData(m)) return offlineView(m);
-  const ok = true;
-  const stat = k => ({k:mlabel(k), v:capOf(m, k) ? pct(cur(m, k)/capOf(m, k)*100) : '—', s:capOf(m, k) ? `${fmt(cur(m, k), k)} of ${capText(capOf(m, k), k)}` : `no ${mlabel(k)}`});
+  const ok = true, own = m.inside || m;   // a VM's own totals are its inside view
+  const stat = k => ({k:mlabel(k), v:capOf(m, k) ? pct(cur(own, k)/capOf(m, k)*100) : '—', s:capOf(m, k) ? `${fmt(cur(own, k), k)} of ${capText(capOf(m, k), k)}` : `no ${mlabel(k)}`});
   const stats = ok ? [stat('cpu'), stat('mem'), stat('gpu')] : [];
-  if (ok && m.gpus.length > 1) stats[2] = {k:'GPU', v:pct(cur(m, 'gpu') / m.gpus.length), s:m.gpus.map((g, i) => `GPU${i} ${pct(sumv(gpuBt(m, g.key)))}`).join(' · ')};
+  if (ok && m.gpus.length > 1) stats[2] = {k:'GPU', v:pct(cur(own, 'gpu') / m.gpus.length), s:m.gpus.map((g, i) => `GPU${i} ${pct(sumv(gpuBt(m, g.key)))}`).join(' · ')};
   if (host && ok) stats.push({k:'of host ' + mlabel(S.metric), v:pct(shareOfHost(m, S.metric)), s:esc(host.name)});
   const series = typeSeries(i => byType(m, S.metric, i));
   const list = [];
