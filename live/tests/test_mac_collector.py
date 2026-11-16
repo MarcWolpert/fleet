@@ -351,5 +351,32 @@ class EachDisk(unittest.TestCase):
                          [("disk0", "APPLE SSD AP1024Z", 0.0), ("disk4", "Extreme SSD", 0.0), ("disk6", "Backup HDD", 0.0), ("disk11", "Card Reader", 1.5)])
 
 
+
+class CoreGroups(unittest.TestCase):
+    """#106: each CPU cluster is named by its own perf level (ioreg's cluster-type "P" is sysctl's
+    Performance level, "E" Efficiency), also when both clusters have the same number of CPUs."""
+
+    def groups(self, ncpu, cluster_types, *levels):
+        return Mac(dict({"sysctl -n hw.logicalcpu": "%d\n" % ncpu, "ioreg -rd1 -c IOPlatformDevice -k cluster-type -a": cpus_plist(cluster_types)},
+                        **perflevels(*levels))).collector(self).groups
+
+    def test_4p_4e(self):  # M1, M2, M3
+        self.assertEqual(self.groups(8, "EEEEPPPP", ("Performance", 4, 4), ("Efficiency", 4, 4)),
+                         [{"name": "Efficiency cores", "cpus": [0, 1, 2, 3]}, {"name": "Performance cores", "cpus": [4, 5, 6, 7]}])
+
+    def test_6p_6e(self):  # the 12-core M3 Pro
+        self.assertEqual(self.groups(12, "EEEEEEPPPPPP", ("Performance", 6, 6), ("Efficiency", 6, 6)),
+                         [{"name": "Efficiency cores", "cpus": [0, 1, 2, 3, 4, 5]}, {"name": "Performance cores", "cpus": [6, 7, 8, 9, 10, 11]}])
+
+    def test_two_performance_clusters_and_one_efficiency(self):  # an M3 Max: 12P in clusters of 6, 4E
+        self.assertEqual(self.groups(16, "EEEE" + "P" * 12, ("Performance", 6, 12), ("Efficiency", 4, 4)),
+                         [{"name": "Efficiency cores", "cpus": [0, 1, 2, 3]},
+                          {"name": "Performance cores · cluster 0", "cpus": [4, 5, 6, 7, 8, 9]},
+                          {"name": "Performance cores · cluster 1", "cpus": [10, 11, 12, 13, 14, 15]}])
+
+    def test_no_clusters_in_ioreg_is_one_group(self):  # an Intel Mac
+        mac = Mac({"sysctl -n hw.logicalcpu": "4\n", "ioreg -rd1 -c IOPlatformDevice -k cluster-type -a": b"", "sysctl -n hw.nperflevels": ""})
+        self.assertEqual(mac.collector(self).groups, [{"name": "All processors", "cpus": [0, 1, 2, 3]}])
+
 if __name__ == "__main__":
     unittest.main()

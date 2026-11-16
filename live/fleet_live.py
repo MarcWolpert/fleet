@@ -912,13 +912,19 @@ class MacCollector:
             ctype = {}
         if not ctype:
             return [{"name": "All processors", "cpus": list(range(self.ncpu))}]
-        # Match cluster types to perf levels by count (largest-performance level first).
+        # Match cluster types to perf levels by name ("P" is Performance, "E" Efficiency); by count only when no
+        # name matches, since counts can't tell 4P+4E apart.
         by_type = collections.OrderedDict()
         for n in sorted(ctype):
             by_type.setdefault(ctype[n], []).append(n)
         groups = []
+        used = set()
         for ct, cpus in by_type.items():
-            lvl = next((v for v in levels.values() if v[2] == len(cpus)), (ct, len(cpus), len(cpus)))
+            li = next((i for i, v in levels.items() if i not in used and ct[:1] and v[0][:1].upper() == ct[:1].upper()), None)
+            if li is None:
+                li = next((i for i, v in levels.items() if i not in used and v[2] == len(cpus)), None)
+            used.add(li)
+            lvl = levels.get(li, (ct, len(cpus), len(cpus)))
             name, per_l2 = lvl[0] or ct, lvl[1] or len(cpus)
             chunks = [cpus[i:i + per_l2] for i in range(0, len(cpus), per_l2)]
             for k, ch in enumerate(chunks):
