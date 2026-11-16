@@ -241,3 +241,57 @@ for (const [name, open] of [
       assert.deepEqual(p.errors, []);
     } finally { await p.close(); }
   });
+
+// A real double-click on a group's name renames it (#295). The first click selects the group and redraws the tree,
+// so the second lands on a new header and the browser sends no dblclick; the second click itself says it's one.
+async function realDblclick(p, selector){
+  const r = await p.eval(`(() => { const e = document.querySelector(${JSON.stringify(selector)}), b = e.getBoundingClientRect(); return {x: b.left + b.width / 2, y: b.top + b.height / 2}; })()`);
+  await p.send('Input.dispatchMouseEvent', {type: 'mouseMoved', x: r.x, y: r.y});
+  for (const clickCount of [1, 2]){
+    await p.send('Input.dispatchMouseEvent', {type: 'mousePressed', x: r.x, y: r.y, button: 'left', buttons: 1, clickCount});
+    await p.send('Input.dispatchMouseEvent', {type: 'mouseReleased', x: r.x, y: r.y, button: 'left', buttons: 0, clickCount});
+  }
+}
+for (const [name, over, key, ids, sel] of [
+  ['the machine tree', {sel: 'fleet', open: CLOSED}, 'machines|root', ['lx', 'lx2'], 'div:g1'],
+  ['Pins only', {sel: 'fleet', open: CLOSED, pinsOnly: true}, 'pins|root', ['lx', 'mac'], 'div:g1'],
+  ['the network tree (its header selects nothing)', {tree: 'network', netSel: 'net:tailnet', sel: 'lx'}, 'network|net:tailnet', ['net:m:lx', 'net:m:lx2'], 'lx']])
+  test(`a real double-click on a group's name renames it: ${name}`, async () => {
+    const fx = fixture(); fx.fleet.pins = ['lx', 'mac'];
+    const nm = (id, nme) => ({id, name: nme, status: 'ok', ts: {ip: '100.64.0.' + id.length, online: true, direct: true}, ifs: []});
+    fx.net = {tailnet: 'tailnet', machines: [nm('lx', 'lab-linux'), nm('lx2', 'lab-linux-2'), nm('mac', 'lab-mac')]};
+    fx.fleet.prefs = {tgroups: {[key]: [{id: 'g1', name: 'Lab', ids}]}};
+    const p = await open(over, fx);
+    try {
+      await p.waitFor(`document.querySelector('#tree .tgroup[data-tgroup="g1"] .tg-n')`);
+      await realDblclick(p, '#tree .tgroup[data-tgroup="g1"] .tg-n');
+      await p.waitFor(`document.activeElement && document.activeElement.classList.contains('tg-name')`).catch(() => null);
+      assert.deepEqual(await p.eval(NAMEBOX), {value: 'Lab', focused: true});
+      assert.equal(await p.eval(`S.sel`), sel);
+      await p.eval(`(document.activeElement.select(), true)`);
+      await typeKeys(p, 'Bench');
+      await p.key('Enter');
+      await p.waitFor(`!document.querySelector('#tree input.tg-name')`);
+      assert.deepEqual(await p.eval(`[...document.querySelectorAll('#tree .tgroup .tg-n')].map(x => x.textContent)`), ['Bench']);
+      assert.deepEqual(saved(fx)[key].map(g => [g.id, g.name, g.ids]), [['g1', 'Bench', ids]]);
+      assert.deepEqual(p.errors, []);
+    } finally { await p.close(); }
+  });
+
+// when the browser does send the dblclick too (nothing redrawn between the clicks), one name field opens, even where
+// the group also shows as a row of its own (a pinned group in Pins only)
+test('a double-click sent as a click and a dblclick opens one name field', async () => {
+  const fx = fixture(); fx.fleet.pins = ['lx', 'mac', 'div:g1']; fx.fleet.prefs = {tgroups: {'pins|root': [{id: 'g1', name: 'Lab', ids: ['lx', 'mac']}]}};
+  const p = await open({sel: 'fleet', open: CLOSED, pinsOnly: true}, fx);
+  try {
+    await p.waitFor(`document.querySelector('#tree .tgroup[data-tgroup="g1"] .tg-n')`);
+    await p.eval(`(() => { const t = document.querySelector('#tree .tgroup[data-tgroup="g1"] .tg-n'); t.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, detail: 2})); document.querySelector('#tree .tgroup[data-tgroup="g1"] .tg-h').dispatchEvent(new MouseEvent('dblclick', {bubbles: true, cancelable: true, detail: 2})); return true; })()`);
+    assert.equal(await p.eval(`document.querySelectorAll('#tree input.tg-name').length`), 1);
+    assert.deepEqual(await p.eval(NAMEBOX), {value: 'Lab', focused: true});
+    await p.key('Escape');
+    await p.waitFor(`!document.querySelector('#tree input.tg-name')`);
+    assert.deepEqual(await p.eval(`[...document.querySelectorAll('#tree .tgroup .tg-n')].map(x => x.textContent)`), ['Lab']);
+    assert.equal(saved(fx), undefined);
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});

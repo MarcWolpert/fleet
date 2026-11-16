@@ -1458,7 +1458,13 @@ document.addEventListener('click', e => {
   const tf = e.target.closest('[data-tgfold]'); if (tf){ S.gfold = Object.assign({}, S.gfold, {[tf.dataset.tgfold]:tf.getAttribute('aria-expanded') === 'true'}); save(); renderTree(); const b = document.querySelector(`[data-tgfold="${CSS.escape(tf.dataset.tgfold)}"]`); if (b) b.focus(); return; }
   // a group's header selects the group: its own all-up view (a fleet's is All machines for its members)
   const tgh = e.target.closest('#tree .tg-h');
-  if (tgh && !e.target.closest('input, [data-pin], [data-unpin]') && S.tree !== 'network'){ const id = 'div:' + tgh.closest('.tgroup').dataset.tgroup; buildDivisions(); if (nodes[id]) select(id); return; }   // empty space in a tree: nothing selected, everything shown
+  // The first click of a double-click selects it and redraws the tree, so the second lands on a new header and the
+  // browser sends no dblclick: that second click (detail 2) renames it, as a double-click does (#295).
+  if (tgh && !e.target.closest('input, [data-pin], [data-unpin]') && S.tree !== 'network'){
+    const box = tgh.closest('.tgroup'), id = 'div:' + box.dataset.tgroup;
+    if (e.detail >= 2){ renameGroup(box.dataset.tgkey, box.dataset.tgroup); return; }
+    buildDivisions(); if (nodes[id]) select(id); return;
+  }   // empty space in a tree: nothing selected, everything shown
   const nv = e.target.closest('[data-nav]'); if (nv){ navGo(nv.dataset.nav === 'back' ? -1 : 1); return; }
   const fs = e.target.closest('[data-mfstep]'); if (fs){ stepFind(+fs.dataset.mfstep); return; }
   if (e.target.closest('[data-mfclose]')){ closeFind(); return; }
@@ -2638,6 +2644,7 @@ function groupEditItems(n){
   return ['—', {label:'Rename', run:() => renameGroup(key, id)}, {label:'Disband ' + GKIND[n.gkind || 'taskforce'][1], run:() => updGroup(key, id, null)}];
 }
 function renameGroup(key, id){
+  if (renaming()) return;   // one name field at a time (a double-click's second click and its dblclick both ask)
   // the group's header in the tree, or its row in Groups only
   const n = document.querySelector(`#tree .tgroup[data-tgroup="${CSS.escape(id)}"] .tg-n`) || document.querySelector(`#tree .row[data-select="div:${CSS.escape(id)}"] .nm`); if (!n) return;
   const inp = document.createElement('input'); inp.className = 'tg-name'; inp.value = n.textContent; inp.setAttribute('aria-label', 'Group name');
