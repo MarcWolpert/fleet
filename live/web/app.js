@@ -980,7 +980,7 @@ function leafView(n){
   const tiles = METRICS.map(m => { const v = cur(n, m.id); return `<div class="st" data-tip="child|${esc(n.id)}|${m.id}"><div class="k">${m.label}</div><div class="v">${fmt(v, m.id)}</div><div class="s">${m.id === 'gpu' ? gpuSub(n) : `${pct(v/capOf(host, m.id)*100)} of host · ${pct(v/(cur(ref, m.id)||1)*100)} of ${refName}`}</div>${sparkSVG(n.series[m.id], colOf(n), 120, 34)}</div>`; }).join('');
   const detail = n.kind === 'base'
     ? noteHTML('<b>Base system</b> is everything on the host that isn’t a Compose service, a container, a VM or a scheduled job: the OS, daemons and your apps. Open <b>Details</b> to see its processes.')
-    : `<section class="card"><div class="card-h"><h2>Details</h2></div><dl class="dl"><dt>Image</dt><dd><code>${esc(n.meta.image)}</code></dd>${n.meta.project ? `<dt>Compose project</dt><dd>${esc(n.meta.project)}</dd>` : ''}${n.meta.status ? `<dt>Status</dt><dd>${esc(n.meta.status)}</dd>` : ''}<dt>Host</dt><dd>${esc(host.name)}</dd><dt>GPU</dt><dd>${host.gpus.length ? (whichGpuLong(n) || 'none in use') : 'host has no GPU'}</dd></dl></section>`;
+    : `<section class="card"><div class="card-h"><h2>Details</h2></div><dl class="dl"><dt>Image</dt><dd><code>${esc(n.meta.image)}</code></dd>${n.meta.project ? `<dt>Compose project</dt><dd>${esc(n.meta.project)}</dd>` : ''}${n.meta.status ? `<dt>Status</dt><dd>${esc(n.meta.status)}</dd>` : ''}<dt>Host</dt><dd>${esc(host.name)}</dd><dt>GPU</dt><dd>${host.gpus.length ? (esc(whichGpuLong(n)) || 'none in use') : 'host has no GPU'}</dd></dl></section>`;
   const series = [{label:n.name, color:colOf(n), data:n.series[S.metric]}];
   const pinned = PINS.includes(n.id);
   return `<div class="hero"><span class="tile" style="background:color-mix(in srgb, ${colOf(n)} 22%, transparent);color:${colOf(n)}">${icon(iconOf(n))}</span><div><h1>${esc(n.name)}${n.kind !== 'base' ? termBtn(n) : ''}</h1><div class="facts"><span>${n.kind === 'base' ? 'Base system' : n.kind === 'service' ? 'Compose service' : 'Container'}</span><span>on ${esc(host.name)}</span>${cronF ? `<span>${cronF.children.length} ${esc(cronF.name.toLowerCase())}</span>` : ''}</div></div>${n.kind !== 'base' ? `<button type="button" class="btn${pinned ? ' on' : ''}" data-pin="${esc(n.id)}" aria-pressed="${pinned}" style="margin-left:auto">${icon('pin')}${pinned ? 'Pinned' : 'Pin as space'}</button>` : ''}</div>`
@@ -1209,14 +1209,19 @@ function netView(){
 
 /* ---------- main ---------- */
 let lastMainHTML = '';
-function renderMain(){
+// text selected in the main pane (an image name, a cron command to copy): a rebuild would drop it
+function textSelectedIn(el){ const s = getSelection(); return !!(s && !s.isCollapsed && (el.contains(s.anchorNode) || el.contains(s.focusNode))); }
+// refresh: a poll's redraw, which waits while text is selected in the pane; anything you do redraws at once
+function renderMain(refresh){
+  if (refresh && textSelectedIn($('main'))) return;
   renderFilterBar();
   const main = $('main');
   const a = document.activeElement;
-  let refocus = null, selStart = null;
+  let refocus = null, refocusAt = 0, selStart = null;
   if (a && main.contains(a)){
     if (a.id) { refocus = '#' + a.id; selStart = a.selectionStart; }
     else if (a.dataset) for (const k of ['select', 'mode', 'sort', 'pin', 'cpuview', 'netsel', 'gtoggle', 'gall']) if (a.dataset[k] != null){ refocus = `[data-${k}="${CSS.escape(a.dataset[k])}"]`; break; }
+    if (refocus) refocusAt = Math.max(0, [...main.querySelectorAll(refocus)].indexOf(a));   // a view can draw the same button twice (a card and a table)
   }
   let html;
   let panel = '';
@@ -1240,9 +1245,9 @@ function renderMain(){
   const now = [...main.querySelectorAll(SCROLLERS)];
   if (now.length === scrolled.length) now.forEach((e, i) => { if (scrolled[i][0]) e.scrollTop = scrolled[i][0]; if (scrolled[i][1]) e.scrollLeft = scrolled[i][1]; });
   markPanel(); if (FIND.q) applyFind(false);
-  if (refocus){ const e = main.querySelector(refocus); if (e){ e.focus({preventScroll:true}); if (selStart != null && e.setSelectionRange) try { e.setSelectionRange(selStart, selStart); } catch (x) {} } }
+  if (refocus){ const all = main.querySelectorAll(refocus), e = all[refocusAt] || all[0]; if (e){ e.focus({preventScroll:true}); if (selStart != null && e.setSelectionRange) try { e.setSelectionRange(selStart, selStart); } catch (x) {} } }
 }
-function renderAll(){ renderSpaces(); renderToolbar(); renderTree(); renderMain(); refreshTip(); }
+function renderAll(refresh){ renderSpaces(); renderToolbar(); renderTree(); renderMain(refresh); refreshTip(); }
 
 /* ---------- tooltips ---------- */
 const tip = $('tip');
@@ -1471,8 +1476,8 @@ async function refreshNow(){
     await Promise.all(jobs.map(p => p.catch(() => null)));
     fails = 0; $('conn').hidden = true; $('live').hidden = false;
     const sig = sigOf();
-    if (sig !== lastSig){ lastSig = sig; renderAll(); }
-    else { updateSpaces(); updateTree(); renderMain(); refreshTip(); }
+    if (sig !== lastSig){ lastSig = sig; renderAll(true); }
+    else { updateSpaces(); updateTree(); renderMain(true); refreshTip(); }
   } catch (e) {
     fails++;
     if (fails >= 3){ $('conn').hidden = false; $('live').hidden = true; }  // a restart takes a second or two: don't flash
