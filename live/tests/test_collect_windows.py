@@ -143,9 +143,13 @@ def adapter(luid, util, used_mib):
     return {"luid": luid, "util": util, "dedicated": used_mib * MIB, "shared": 0, "eng": {}}
 
 
+# DXGI's adapter list, which a reading carries since #125: each LUID's name and VRAM size (the A2000 drives the displays)
+DXGI = [{"luid": HI, "name": A2000, "vram": 12288.0 * MIB}, {"luid": LO, "name": RTX3090, "vram": 24576.0 * MIB}]
+
+
 class GpusKeepTheirPlace(unittest.TestCase):
-    """#119: adapters are numbered by LUID, not by VRAM in use, and each nvidia-smi row goes to the adapter whose
-    dedicated usage it reports (WDDM gives nvidia-smi's memory.used and the GPU Adapter Memory counter one number)."""
+    """#119: an adapter's number doesn't follow the VRAM it has in use, and its name and nvidia-smi row are its own,
+    whichever adapter the collector lists first (since #125 DXGI's adapter list names each LUID; GPUs go by VRAM size)."""
 
     def gpus(self, r):
         gpus, by_pid = fl.Machine({"id": "w", "name": "w", "os": "windows"}, 3).windows_gpus(dict({"videoNames": [], "gproc": []}, **r))
@@ -153,16 +157,16 @@ class GpusKeepTheirPlace(unittest.TestCase):
 
     def test_the_card_with_more_vram_in_use_is_not_gpu0(self):
         # the collector lists the busier adapter first; nvidia-smi says GPU0 is the A2000 (on HI), GPU1 the 3090 (on LO)
-        got = self.gpus({"gpus": [adapter(HI, 90.0, 9000), adapter(LO, 13.0, 1654)],
+        got = self.gpus({"gpus": [adapter(HI, 90.0, 9000), adapter(LO, 13.0, 1654)], "adapters": DXGI,
                          "nvidia": [ROWA2000 % (0, 9000), ROW3090 % (1, 1654)], "videoNames": [RTX3090, A2000],
                          "gproc": [[10, HI, 80.0], [11, LO, 5.0], [12, LO, 1.0], [12, HI, 2.0]]})
         self.assertEqual(got, ([(RTX3090, m3090(13.0, 1654), LIM3090), (A2000, ma2000(90.0, 9000), LIMA2000)],
                                {10: {1: 80.0}, 11: {0: 5.0}, 12: {0: 1.0, 1: 2.0}}))
 
     def test_usage_crossing_over_does_not_swap_the_cards(self):
-        before = self.gpus({"gpus": [adapter(LO, 13.0, 9000), adapter(HI, 90.0, 1654)],
+        before = self.gpus({"gpus": [adapter(LO, 13.0, 9000), adapter(HI, 90.0, 1654)], "adapters": DXGI,
                             "nvidia": [ROW3090 % (0, 9000), ROWA2000 % (1, 1654)], "gproc": [[10, HI, 80.0]]})
-        after = self.gpus({"gpus": [adapter(HI, 90.0, 11000), adapter(LO, 13.0, 1654)],
+        after = self.gpus({"gpus": [adapter(HI, 90.0, 11000), adapter(LO, 13.0, 1654)], "adapters": DXGI,
                            "nvidia": [ROW3090 % (0, 1654), ROWA2000 % (1, 11000)], "gproc": [[10, HI, 80.0]]})
         self.assertEqual(before, ([(RTX3090, m3090(13.0, 9000), LIM3090), (A2000, ma2000(90.0, 1654), LIMA2000)], {10: {1: 80.0}}))
         self.assertEqual(after, ([(RTX3090, m3090(13.0, 1654), LIM3090), (A2000, ma2000(90.0, 11000), LIMA2000)], {10: {1: 80.0}}))
@@ -170,8 +174,10 @@ class GpusKeepTheirPlace(unittest.TestCase):
     def test_an_igpu_using_more_vram_than_the_idle_nvidia_card_keeps_its_own_name(self):
         intel, nvidia = "Intel(R) UHD Graphics 770", "NVIDIA GeForce RTX 4060 Laptop GPU"
         got = self.gpus({"gpus": [adapter(HI, 4.0, 128), adapter(LO, 0.0, 50)],
+                         "adapters": [{"luid": HI, "name": intel, "vram": 128.0 * MIB}, {"luid": LO, "name": nvidia, "vram": 8188.0 * MIB}],
                          "nvidia": ["0, NVIDIA GeForce RTX 4060 Laptop GPU, 0, 50, 8188"], "videoNames": [intel, nvidia]})
-        self.assertEqual(got, ([(nvidia, ma2000(0.0, 50), {"vram": 8188 * MIB}), (intel, ma2000(4.0, 128), {})], {}))
+        # the iGPU's VRAM size is DXGI's: its BIOS-reserved 128 MiB
+        self.assertEqual(got, ([(nvidia, ma2000(0.0, 50), {"vram": 8188 * MIB}), (intel, ma2000(4.0, 128), {"vram": 128 * MIB})], {}))
 
     def test_one_adapter_and_no_nvidia_smi(self):
         got = self.gpus({"gpus": [adapter(LO, 7.0, 512)], "nvidia": [], "videoNames": ["AMD Radeon RX 6600"]})
