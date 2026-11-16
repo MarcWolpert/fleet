@@ -46,7 +46,7 @@ plus an app window.
 | ✅ | Logical processors: one live graph per CPU, grouped by CCD, P/E cores or Apple core clusters |
 | ✅ | Network tree: tailnet → machines → interfaces and bridges → VMs and containers, with traffic on each |
 | ✅ | Pinned spaces: pin any machine, VM, project or container from the tree; **All machines** is always there |
-| ✅ | Divisions: drag a box over items at the same level in either tree (or drag a row by its handle) to group them into a division, with a coloured outline and a name (right-click to rename, recolour or disband); pin a division as a space from **+** (a division of machines gets its own All machines view); Pins only keeps its own; click empty space for the all-up view |
+| ✅ | Groups in the trees: drag a box over items at the same level (or drag a row by its handle). A group is named and coloured by what's in it: a **fleet** of machines, a **flotilla** of VMs, a **division** of containers, a **section** of cron jobs, a **squadron** of Docker Compose, a **task force** when mixed; each kind has its own colour from the theme. Right-click to rename, pin or disband; pin any group as a space from **+**; Pins only keeps its own; click empty space for the all-up view |
 | ✅ | Offline machines explain why in plain language, with the steps to fix it and Retry; reconnecting machines keep their last reading |
 | ✅ | Settings: add and edit machines, test a connection, pick the terminal app and refresh rate |
 | ✅ | Open terminal: ssh to any machine, or a shell inside any container, in your preferred terminal |
@@ -154,7 +154,7 @@ tile = "desktop"
 
 Fleet keeps what you arrange in the app beside it, so it survives restarts:
 `pins.json` (pinned spaces), `tilepins.json` (pinned tiles and CPU groups) and
-`ui.json` (Details column layouts, the theme, imported themes, divisions).
+`ui.json` (Details column layouts, the theme, imported themes, tree groups).
 
 ## Keyboard shortcuts
 
