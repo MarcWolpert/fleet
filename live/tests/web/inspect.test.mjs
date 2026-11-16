@@ -162,3 +162,31 @@ test('a Windows process: affinity reads as CPUs and handles are called handles (
     assert.ok(text.includes('620'));
   } finally { await p.close(); }
 });
+
+test('cache misses add up over a lookback you pick: 10 s, 1 min, 5 min or since it opened (#20)', async () => {
+  const fx = fixture(); const now = Date.now() / 1000;
+  // two looks 30 s apart: 30% then 10% misses, 1.5 s each, a million references a second
+  fx.proc = (mid, pid, n) => n === 1 ? look({t: now - 30, dt: 1.5, cache: {refs: 1e6, misses: 3e5, miss_pct: 0.3, ipc: 0.8, threads: 3}})
+                                     : look({t: now, dt: 1.5, cache: {refs: 1e6, misses: 1e5, miss_pct: 0.1, ipc: 1.2, threads: 3}});
+  const p = await open(fx);
+  const card = `[...document.querySelectorAll('tr.pinsp .icard')].find(c => c.querySelector('h4').textContent === 'CPU cache')`;
+  const miss = `${card}.querySelector('[data-cachemiss]').textContent.trim()`;
+  try {
+    await p.eval(`(() => { document.querySelector('tr[data-pid="103"] td:nth-child(4)').click(); return true; })()`);
+    await p.waitFor(`document.querySelector('tr.pinsp [data-wait]')`);
+    await p.eval(`(refreshNow(), true)`);
+    await p.waitFor(`${card} && ${card}.textContent.includes('2 looks')`);
+    assert.deepEqual(await p.eval(`[...${card}.querySelectorAll('[data-lookback]')].map(b => b.textContent.trim())`), ['10 s', '1 min', '5 min', 'All']);
+    assert.equal(await p.eval(`${card}.querySelector('[data-lookback][aria-pressed="true"]').textContent.trim()`), '1 min');   // the default
+    assert.equal(await p.eval(miss), '20%');
+    await p.eval(`(() => { ${card}.querySelector('[data-lookback="10"]').click(); return true; })()`);
+    await p.waitFor(`${miss} === '10%'`);
+    assert.match(await p.eval(`${card}.textContent`), /1 look/);
+    await p.waitFor(`true`);
+    for (let i = 0; i < 100 && !(fx.posts || []).some(x => x.path === '/api/prefs' && JSON.parse(x.body).cacheLookback === 10); i++) await new Promise(r => setTimeout(r, 30));
+    assert.ok((fx.posts || []).some(x => x.path === '/api/prefs' && JSON.parse(x.body).cacheLookback === 10), 'kept as a pref');
+    await p.eval(`(() => { ${card}.querySelector('[data-lookback="0"]').click(); return true; })()`);
+    await p.waitFor(`${miss} === '20%'`);
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});

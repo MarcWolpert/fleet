@@ -74,7 +74,7 @@ const NAV = {stack:[], i:-1, applying:false};
 const TF = {q:'', open:false}, FIND = {q:'', i:0, n:0};
 let PANEL = null;   // the panel you're in: 'tree', 'main' or 'details'
 // the process open in the Details drop-down (see "One process, up close")
-const INSP = {mid:null, pid:0, name:'', order:null, gorder:null, data:null, good:null, acc:{}, samples:0, secs:0, looks:0, busy:false};
+const INSP = {mid:null, pid:0, name:'', order:null, gorder:null, data:null, good:null, acc:{}, samples:0, secs:0, looks:0, busy:false, cacheLooks:[]};
 let DATA = null, PINS = [], WINDOW = 180, INTERVAL = 3, CPUS = {}, PROCS = {machine:null, list:[]}, NET = null, DISKS = {}, IFS = {};
 const nodes = {}, roots = [];
 const zero = () => new Array(H).fill(0);
@@ -1232,6 +1232,7 @@ document.addEventListener('click', e => {
   const fs = e.target.closest('[data-mfstep]'); if (fs){ stepFind(+fs.dataset.mfstep); return; }
   if (e.target.closest('[data-mfclose]')){ closeFind(); return; }
   if (e.target.closest('[data-inspclose]')){ closeInspect(); return; }
+  const lb = e.target.closest('[data-lookback]'); if (lb){ PREFS = Object.assign({}, PREFS, {cacheLookback:+lb.dataset.lookback}); lastMainHTML = ''; renderMain(); savePrefs('the cache lookback'); return; }
   const prow = e.target.closest('.ptbl tbody tr[data-pid]');
   if (prow && !e.target.closest('button, a, input, select, label')){ toggleInspect(prow.closest('.ptbl').dataset.mid, +prow.dataset.pid, prow); return; }
   const tp = e.target.closest('[data-tpin]'); if (tp){ e.stopPropagation(); toggleTilePin(tp.dataset.tpin); return; }
@@ -1911,7 +1912,7 @@ const VERDICT = {cpu:'CPU: it is running most of the time it isn’t idle', cpuw
 function toggleInspect(mid, pid, row){
   if (INSP.pid === pid && INSP.mid === mid){ closeInspect(); return; }
   const tbl = row && row.closest('.ptbl');
-  Object.assign(INSP, {mid, pid, name:'', data:null, good:null, acc:{}, samples:0, secs:0, looks:0, busy:false,
+  Object.assign(INSP, {mid, pid, name:'', data:null, good:null, acc:{}, samples:0, secs:0, looks:0, busy:false, cacheLooks:[],
     order:tbl ? [...tbl.querySelectorAll('tbody tr[data-pid]')].map(r => +r.dataset.pid) : null,
     gorder:tbl ? [...tbl.querySelectorAll('[data-gtoggle]')].map(b => b.dataset.gtoggle) : null});
   const pr = PROCS.list.find(p => p[0] === pid); INSP.name = pr ? pr[1] : '';
@@ -1936,6 +1937,7 @@ async function inspectTick(){
     if (w.cpu && q > 0){ const r = q / (run + q); w.cpuwait = (w.cpuwait || 0) + w.cpu * r; w.cpu *= 1 - r; }
     for (const [k, v] of Object.entries(w)) INSP.acc[k] = (INSP.acc[k] || 0) + v;
     INSP.samples += d.samples || 0; INSP.secs += d.dt || 0;
+    if (d.cache && d.cache.refs != null){ const dt = d.dt || 1.5, c = d.cache; INSP.cacheLooks.push({t:d.t || Date.now() / 1000, dt, refs:c.refs * dt, misses:c.misses * dt, ins:(c.instructions || 0) * dt, cyc:(c.cycles || 0) * dt, ipc:c.ipc}); }
   }
   lastMainHTML = ''; renderMain();
 }
@@ -1961,6 +1963,21 @@ function affinityText(a){
   let m = BigInt(a), i = 0, runs = [], start = -1;
   for (; m > 0n || start >= 0; i++, m >>= 1n){ const on = (m & 1n) === 1n; if (on && start < 0) start = i; if (!on && start >= 0){ runs.push(start === i - 1 ? String(start) : `${start}–${i - 1}`); start = -1; } }
   return runs.length ? 'CPUs ' + runs.join(', ') : a;
+}
+// Cache misses over a lookback (#20): the misses of every look in the window over their references, not an
+// average of rates; the window is counted back from the latest look. Kept as a UI pref.
+const LOOKBACKS = [[10, '10 s'], [60, '1 min'], [300, '5 min'], [0, 'All']];
+function cacheRows(cache){
+  const lb = PREFS.cacheLookback != null ? PREFS.cacheLookback : 60, all = INSP.cacheLooks;
+  const last = all.length ? all[all.length - 1].t : 0, ls = all.filter(x => lb === 0 || x.t >= last - lb);
+  const sum = k => ls.reduce((a, x) => a + x[k], 0), refs = sum('refs'), misses = sum('misses'), secs = sum('dt'), cyc = sum('cyc');
+  const ipc = cyc > 0 ? sum('ins') / cyc : cache.ipc;
+  const seg = `<div class="seg lbseg" role="group" aria-label="Count cache misses over">${LOOKBACKS.map(([v, l]) => `<button type="button" data-lookback="${v}" aria-pressed="${lb === v}">${l}</button>`).join('')}</div>`;
+  return [seg, kvRow('Cache misses', `<span data-cachemiss>${refs > 0 ? shareText(misses / refs) : '—'}</span>`, 'last-level cache misses, of its references, over the lookback'),
+    kvRow('Misses', perSec(secs ? misses / secs : cache.misses)),
+    ipc != null ? kvRow('Instructions per cycle', ipc.toFixed(2), 'under ~0.8 while busy usually means it waits on memory') : '',
+    kvRow('Threads counted', String(cache.threads)),
+    `<p class="insp-sub">over ${ls.length} look${ls.length === 1 ? '' : 's'} · ${Math.round(secs)} s of counting</p>`];
 }
 function sinceText(t){ const s = Date.now() / 1000 - t; return s < 90 ? Math.round(s) + ' s ago' : s < 5400 ? Math.round(s / 60) + ' min ago' : s < 172800 ? Math.round(s / 3600) + ' h ago' : Math.round(s / 86400) + ' days ago'; }
 function inspectPanel(p){
@@ -1991,9 +2008,7 @@ function inspectPanel(p){
     m.shmem ? kvRow('Shared', ibytes(m.shmem)) : '', m.private != null ? kvRow('Private', ibytes(m.private)) : '', m.swap != null ? kvRow('Swapped out', ibytes(m.swap)) : '',
     m.peak != null ? kvRow('Peak', ibytes(m.peak)) : '', m.majflt != null ? kvRow('Page faults from disk', perSec(m.majflt)) : '', m.faults != null ? kvRow('Page faults', perSec(m.faults)) : '',
     cg && cg.mem_limit ? kvRow('Its cgroup', `${ibytes(cg.mem_current)} of ${ibytes(cg.mem_limit)}`) : '', cg && cg.oom_kills ? kvRow('Out-of-memory kills', String(cg.oom_kills)) : '']]);
-  cards.push(['CPU cache', cache ? [kvRow('Cache misses', shareText(cache.miss_pct || 0), 'last-level cache misses, of its references'), kvRow('Misses', perSec(cache.misses)),
-    cache.ipc != null ? kvRow('Instructions per cycle', cache.ipc.toFixed(2), 'under ~0.8 while busy usually means it waits on memory') : '', kvRow('Threads counted', String(cache.threads))]
-    : [`<p class="insp-sub">${esc(g.cache_error || 'Not available here')}</p>`]]);
+  cards.push(['CPU cache', cache ? cacheRows(cache) : [`<p class="insp-sub">${esc(g.cache_error || 'Not available here')}</p>`]]);
   if (io) cards.push(['Disk', [kvRow('Reads', ibps(io.read)), kvRow('Writes', ibps(io.write)), io.other != null ? kvRow('Other I/O', ibps(io.other)) : '',
     io.delayacct && io.blkio_delay != null ? kvRow('Blocked on I/O', pct(io.blkio_delay * 100), 'of the time, from the kernel’s delay accounting') : '']]);
   const pr = cg && cg.pressure;

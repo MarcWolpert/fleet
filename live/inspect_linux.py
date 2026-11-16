@@ -353,7 +353,7 @@ def main():
     cache = None
     if c0 and c1:
         dd = dict((k, c1[k] - c0[k]) for k in c1)
-        cache = {"refs": dd["refs"] / dt, "misses": dd["misses"] / dt,
+        cache = {"refs": dd["refs"] / dt, "misses": dd["misses"] / dt, "instructions": dd.get("instructions", 0) / dt, "cycles": dd.get("cycles", 0) / dt,
                  "miss_pct": (dd["misses"] / dd["refs"]) if dd["refs"] > 0 else None,
                  "ipc": (dd["instructions"] / dd["cycles"]) if dd.get("cycles") else None, "threads": len(ctr.groups)}
     out = {
