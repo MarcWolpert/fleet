@@ -523,9 +523,9 @@ class Machine:
         pnet = r.get("pnet") or {}
         disks = self.linux_disks(r, t)
         gpu_by_pid = {pid: sum(v.values()) for pid, v in pid_gpu.items()}
-        cont_gk = {}
         procs = []
         cont_u, vm_u, unit_u = {}, {}, {}
+        cont_g, vm_g, unit_g = {}, {}, {}   # what each of them uses of each GPU (by position in gpus)
         r_cid = {p[0]: p[9] for p in r["procs"]}
         by_pid = {}
         for p in r["procs"]:
@@ -534,8 +534,6 @@ class Machine:
             c = self.rate("p.%d.t" % pid, ticks, t) / hz
             d = self.rate("p.%d.io" % pid, iob, t) / MB if iob >= 0 else 0.0
             g = gpu_by_pid.get(pid, 0.0)
-            if cid and pid in pid_gpu:
-                cont_gk.setdefault(cid, set()).update("gpu%d" % i for i, v in pid_gpu[pid].items() if v > 0)
             pn = pnet.get(str(pid)) or {}  # a process the collector doesn't list has moved nothing (b counts from 0)
             row = [pid, ppid, comm, user, state, c, rss / GB, d, g, threads, cmd, "", lastcpu, sorted(pid_gpu.get(pid, {})), list(pdisks.get(str(pid), [])),
                    list(pn.get("ifs", [])), self.rate("pn.%d" % pid, pn.get("b", 0), t) / MB]
@@ -543,28 +541,30 @@ class Machine:
             by_pid[pid] = row
             u = [c, rss / GB, g, d, 0.0]
             if cid:
-                acc = cont_u.setdefault(cid, [0.0] * 5)
+                acc, gacc = cont_u.setdefault(cid, [0.0] * 5), cont_g.setdefault(cid, [0.0] * len(gpus))
             elif vm:
-                acc = vm_u.setdefault(vm, [0.0] * 5)
+                acc, gacc = vm_u.setdefault(vm, [0.0] * 5), vm_g.setdefault(vm, [0.0] * len(gpus))
             elif unit:
-                acc = unit_u.setdefault(unit, [0.0] * 5)
+                acc, gacc = unit_u.setdefault(unit, [0.0] * 5), unit_g.setdefault(unit, [0.0] * len(gpus))
             else:
-                acc = None
+                acc = gacc = None
             if acc is not None:
                 for i in range(4):
                     acc[i] += u[i]
+                for i, v in pid_gpu.get(pid, {}).items():
+                    gacc[i] += v
         self.prune(t)
         containers = []
         for c in r["containers"]:
             u = cont_u.get(c["id"], [0.0] * 5)
             u[4] = self.rate("c.%s.net" % c["id"], c["rx"] + c["tx"], t) / MB
-            containers.append(dict(c, u=u))
+            containers.append(dict(c, u=u, gu=cont_g.get(c["id"], [0.0] * len(gpus))))
         vmmap = {v["name"]: v for v in r.get("vms", [])}
         vms = []
         for name, v in vmmap.items():
             u = vm_u.get(name, [0.0] * 5)
             u[4] = sum(x["rx"] + x["tx"] for x in ifs if x["name"] in [i["if"] for i in v["ifs"]])
-            vms.append({"name": name, "u": u, "running": True, "ifs": v["ifs"], "cpus": (r.get("vm_cpus") or {}).get(name, "")})
+            vms.append({"name": name, "u": u, "gu": vm_g.get(name, [0.0] * len(gpus)), "running": True, "ifs": v["ifs"], "cpus": (r.get("vm_cpus") or {}).get(name, "")})
         # Scheduled jobs: crontab lines (deduplicated) and systemd timers.
         jobs, seen = [], set()
         for c in r.get("cron", []):
@@ -573,7 +573,7 @@ class Machine:
                 continue
             seen.add(k)
             jobs.append({"name": job_name(c["cmd"]), "sched": c["sched"], "human": human_cron(c["sched"]), "cmd": c["cmd"],
-                         "src": c["src"], "last": "", "running": False, "u": [0.0] * 5})
+                         "src": c["src"], "last": "", "running": False, "u": [0.0] * 5, "gu": [0.0] * len(gpus)})
         # The host's cron; a container's own cron runs the container's jobs, which are its usage already.
         cron_daemons = {p[0] for p in r["procs"] if p[2] in ("cron", "crond") and not p[9]}
 
@@ -602,15 +602,15 @@ class Machine:
                 j["running"] = True
                 for i, v in enumerate((row[5], row[6], row[8], row[7])):
                     j["u"][(0, 1, 2, 3)[i]] += v
+                for i, v in pid_gpu.get(row[0], {}).items():
+                    j["gu"][i] += v
                 row[11] = "job:%d" % ji
         for tm in r.get("timers", []):
             u = unit_u.get(tm["unit"], [0.0] * 5)
             jobs.append({"name": tm["timer"].replace(".timer", ""), "sched": "systemd timer", "human": "timer",
                          "cmd": tm["unit"], "src": "systemd", "last": timer_last(tm["line"]),
-                         "running": tm["unit"] in unit_u, "u": u})
+                         "running": tm["unit"] in unit_u, "u": u, "gu": unit_g.get(tm["unit"], [0.0] * len(gpus))})
         gpu_total = sum(g["util"] for g in gpus)
-        for c in containers:
-            c["gkeys"] = sorted(cont_gk.get(c["id"], ()))
         active = {}  # container -> disks it read or wrote since the last reading (from its cgroup)
         for cid, acc in (r.get("cdisks") or {}).items():
             for dn, tot in acc.items():
@@ -868,7 +868,7 @@ class Machine:
                 if m:
                     speed += float(m.group(1)) * {"G": 1000, "M": 1, "K": 0.001}[m.group(2)]
         gpus, gpu_by_pid = self.windows_gpus(r)
-        procs, vm_u = [], [0.0] * 5
+        procs, vm_u, vm_g = [], [0.0] * 5, [0.0] * len(gpus)
         for p in r.get("procs", []):
             pid, ppid, name, c_secs, ws, threads, io, cmd = p
             c = self.rate("wp.%d" % pid, c_secs, tp)  # cumulative CPU seconds -> cores
@@ -880,6 +880,8 @@ class Machine:
                 row[11] = "vm:WSL"
                 for i, v in enumerate((c, ws / GB, g, io / MB)):
                     vm_u[i] += v
+                for i, v in gpu_by_pid.get(pid, {}).items():
+                    vm_g[i] += v
             procs.append(row)
         containers = []
         stats = {}
@@ -914,7 +916,7 @@ class Machine:
         running = [w["name"] for w in r.get("wsl", []) if w.get("state") == "Running"]
         vms = []
         if r.get("wsl"):
-            vms.append({"name": "WSL", "u": vm_u, "running": bool(running), "ifs": [], "distros": r.get("wsl", []), "cpus": ""})
+            vms.append({"name": "WSL", "u": vm_u, "gu": vm_g, "running": bool(running), "ifs": [], "distros": r.get("wsl", []), "cpus": ""})
         jobs = []
         for tk in r.get("tasks", []):
             trig = ", ".join(tk.get("triggers") or []) or "on demand"
@@ -1540,7 +1542,7 @@ class Fleet:
         if cfg.get("note"):
             spec["note"] = {"label": cfg["note"].get("label", "Note."), "text": cfg["note"].get("text", "")}
         host = list(view["host"])
-        dflt_g = ["gpu0"] if view["gpus"] else []
+        ng = len(view["gpus"])
         # Containers grouped by Compose project.
         proj = collections.OrderedDict()
         loose = []
@@ -1556,13 +1558,13 @@ class Fleet:
                     nid += "-" + c["id"][:6]
                 cont_ids[c["id"]] = nid
                 proj.setdefault(c["project"], {"id": pid, "name": c["project"], "file": c["file"].split(",")[0], "services": []})["services"].append(
-                    {"id": nid, "name": c["service"] or c["name"], "cname": c["name"], "image": c["image"], "status": c["status"], "g": c.get("gkeys") or (dflt_g if c["u"][2] else []),
-                     "h": self.leaf(nid, c["u"], own)})
+                    {"id": nid, "name": c["service"] or c["name"], "cname": c["name"], "image": c["image"], "status": c["status"],
+                     "h": self.leaf(nid, c["u"], own), "gh": self.gpu_leaf(nid, c.get("gu"), ng, own)})
             else:
                 nid = "%s/containers/%s" % (mid, slug(c["name"]))
                 cont_ids[c["id"]] = nid
-                loose.append({"id": nid, "name": c["name"], "cname": c["name"], "image": c["image"], "status": c["status"], "g": c.get("gkeys") or (dflt_g if c["u"][2] else []),
-                              "h": self.leaf(nid, c["u"], own)})
+                loose.append({"id": nid, "name": c["name"], "cname": c["name"], "image": c["image"], "status": c["status"],
+                              "h": self.leaf(nid, c["u"], own), "gh": self.gpu_leaf(nid, c.get("gu"), ng, own)})
         spec["compose"] = list(proj.values())
         spec["containers"] = loose
         # VMs: nested machines from config when they match by name; host-side usage otherwise.
@@ -1577,10 +1579,12 @@ class Fleet:
             if mm:
                 listed.add(v["name"])
                 sub = self.machine_spec(mm, record, vm_hostside={"u": v["u"], "cap": vm_cap(view, v)} if live else None, vm_parent=m if live else None)
-                if live:   # what the host gives it (its QEMU process), as a history
+                if live:   # what the host gives it (its QEMU process), as a history, and of each of the host's GPUs
                     sub["hostside"] = self.leaf(sub["id"] + "/hostside", v["u"], own)
+                    sub["hostside_gh"] = self.gpu_leaf(sub["id"] + "/hostside", v.get("gu"), ng, own)
                 elif record:   # not shown while the host isn't live, and kept like the host's own history
-                    HIST.touch(sub["id"] + "/hostside")
+                    for key in [sub["id"] + "/hostside"] + ["%s/hostside/__gpu/%d" % (sub["id"], i) for i in range(ng)]:
+                        HIST.touch(key)
                 vm_ids[v["name"]] = sub["id"]
                 spec["vms"].append(sub)
             else:
@@ -1590,39 +1594,31 @@ class Fleet:
                 spec["vms"].append({"id": vid, "name": v["name"], "tile": "vm", "status": ("ok" if v.get("running") else "off") if live else status,
                                     "os": facts or "VM", "agent": "seen from the host", "cap": vm_cap(view, v),
                                     "gpus": [], "cronLabel": "Cron jobs", "base": {"id": vid + "/base", "h": self.leaf(vid + "/base", v["u"], own)},
-                                    "baseCron": [], "compose": [], "containers": [], "vms": [], "procs": []})
+                                    "baseCron": [], "compose": [], "containers": [], "vms": [], "procs": [],
+                                    "hostside_gh": self.gpu_leaf(vid + "/hostside", v.get("gu"), ng, own)})
         for name, mm in nested.items():
             if name not in listed:
                 spec["vms"].append(self.machine_spec(mm, record, vm_parent=m if live else None))
-        # Which GPUs each owner's processes run on (p[13]), and how much of each GPU goes to anything but Base itself
-        # (a process on several GPUs counts evenly on each, as the web model splits it).
-        on_gpu = collections.defaultdict(set)
-        not_base = [0.0] * len(view["gpus"])
-        for p in view["procs"]:
-            gl = [i for i in (p[13] if len(p) > 13 else []) if i < len(not_base)]
-            on_gpu[p[11]].update(gl)
-            if gl and p[11] not in ("base", "dockervm"):
-                for i in gl:
-                    not_base[i] += p[8] / len(gl)
         # Scheduled jobs under Base system; their usage is a breakdown of Base.
         jsum = [0.0] * 5
         jobs = []
-        for n, (jid, j) in enumerate(zip(job_ids(mid, view["jobs"]), view["jobs"])):
+        for jid, j in zip(job_ids(mid, view["jobs"]), view["jobs"]):
             for k in range(5):
                 jsum[k] += j["u"][k]
-            on = ["gpu%d" % i for i in sorted(on_gpu["job:%d" % n] | on_gpu["unit:" + j.get("cmd", "")])] or dflt_g  # dflt_g: the host doesn't name them
             jobs.append({"id": jid, "name": j["name"], "sched": j["sched"], "human": j.get("human", ""), "cmd": j.get("cmd", ""),
                          "last": j.get("last", "") or ("next " + j["next"] if j.get("next") else ""), "running": j["running"],
-                         "state": j.get("state", ""), "src": j.get("src", ""), "g": on if j["u"][2] else [], "h": self.leaf(jid, j["u"], own)})
+                         "state": j.get("state", ""), "src": j.get("src", ""), "h": self.leaf(jid, j["u"], own), "gh": self.gpu_leaf(jid, j.get("gu"), ng, own)})
         spec["baseCron"] = jobs
         base_u = [max(0.0, host[i] - csum[i] - vsum[i] - jsum[i]) for i in range(5)]
+        # Base on each GPU: that GPU's own utilisation, less what the containers, VMs and jobs measurably use of it.
+        gsum = [0.0] * ng
+        for x in list(view["containers"]) + list(view["vms"]) + list(view["jobs"]):
+            for i, v in enumerate((x.get("gu") or [])[:ng]):
+                gsum[i] += v
+        base_g = [max(0.0, g.get("util", 0.0) - gsum[i]) for i, g in enumerate(view["gpus"])]
         if view["gpus"]:
-            base_u[2] = max(0.0, host[2] - csum[2] - vsum[2] - jsum[2])
-        # Base on each GPU: what's left there, scaled to Base's own GPU total.
-        left = [max(0.0, g.get("util", 0.0) - not_base[i]) for i, g in enumerate(view["gpus"])]
-        base_g = [base_u[2] * x / sum(left) if sum(left) else 0.0 for x in left]
-        spec["base"] = {"id": mid + "/base", "h": self.leaf(mid + "/base", base_u, own), "g": ["gpu%d" % i for i, x in enumerate(base_g) if x > 0],
-                        "gh": {"gpu%d" % i: self.leaf("%s/base/gpu%d" % (mid, i), [x], own)["cpu"] for i, x in enumerate(base_g)}}
+            base_u[2] = sum(base_g)
+        spec["base"] = {"id": mid + "/base", "h": self.leaf(mid + "/base", base_u, own), "gh": self.gpu_leaf(mid + "/base", base_g, ng, own)}
         spec["procs_owner"] = {"cont": cont_ids, "vm": vm_ids}
         if record:   # not live: still shown from its last reading, so its history is kept, not extended
             keep = HIST.push if own else lambda key, vals: HIST.touch(key)
@@ -1639,6 +1635,11 @@ class Fleet:
         if record:
             HIST.push(key, u)
         return hist_obj(key)
+
+    def gpu_leaf(self, key, gu, n, record):
+        """What a node uses of each of its machine's n GPUs, with history: {"gpu0": [...], "gpu1": [...]}."""
+        gu = list(gu or [])
+        return {"gpu%d" % i: self.leaf("%s/__gpu/%d" % (key, i), [gu[i] if i < len(gu) else 0.0], record)["cpu"] for i in range(n)}
 
     # API
     def api_fleet(self):

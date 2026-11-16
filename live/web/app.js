@@ -92,26 +92,29 @@ function leaf(id, name, type, kind, h, meta){ const n = mk(id, {name, type, kind
 function machineFrom(s, isVm){
   const gpus = (s.gpus || []).map((g, i) => Object.assign({key:'gpu' + i}, g));
   const cap = (s.cap || [1,1,0,1,1]).slice(); cap[MI.gpu] = 100 * gpus.length;
-  const m = mk(s.id, {name:s.name, kind:'machine', type:isVm ? 'vm' : 'machine', cap, gpus, gmap:Object.fromEntries(gpus.map(g => [g.key, g.host || null])),
+  const m = mk(s.id, {name:s.name, kind:'machine', type:isVm ? 'vm' : 'machine', cap, gpus,
     os:s.os || '', tile:s.tile || 'vm', agent:s.agent || '', uptime:s.uptime || '', note:s.note, status:s.status || 'ok', error:s.error || '',
     cronLabel:s.cronLabel || 'Cron jobs', cpu_model:s.cpu_model || '', ncpu:s.ncpu || cap[0], groups:s.groups || [],
     hostHist:s.hostside && !Array.isArray(s.hostside) ? histOf(s.hostside) : null,
+    hostG:Object.fromEntries(Object.entries(s.hostside_gh || {}).filter(([, a]) => a && a.length === H)),
     ssh:s.ssh || '', hasData:s.has_data !== false || s.status === 'hostonly', lastOk:s.last_ok || 0, on:s.on !== false});
+  // what a node measurably uses of each of this machine's GPUs (the server's gh: one history per GPU); without gh, the
+  // GPU keys it names (g), over which its GPU use is split
+  const ghOf = gh => gh ? Object.fromEntries(gpus.filter(g => gh[g.key] && gh[g.key].length === H).map(g => [g.key, gh[g.key]])) : null;
   const gks = g => (g || []).filter(k => gpus.some(x => x.key === k));
   const b = attach(m, leaf(s.base.id, 'Base system', 'base', 'base', s.base.h));
-  b.gk = gks(s.base.g);
-  if (s.base.gh) b.gh = Object.fromEntries(gks(Object.keys(s.base.gh)).map(k => [k, s.base.gh[k]]));   // the server's count of Base on each GPU
-  addCron(b, s.baseCron, m.cronLabel);
+  b.gk = gks(s.base.g); b.gh = ghOf(s.base.gh);
+  addCron(b, s.baseCron, m.cronLabel, ghOf);
   if (s.compose && s.compose.length){
     const g = attach(m, mk(s.id + '/compose', {name:'Docker Compose', kind:'group', type:'compose'}));
     s.compose.forEach(p => {
       const pj = attach(g, mk(p.id, {name:p.name, kind:'project', type:'compose', meta:{file:p.file}}));
-      p.services.forEach(v => { const n = attach(pj, leaf(v.id, v.name, 'compose', 'service', v.h, {image:v.image, status:v.status, project:p.name})); n.gk = gks(v.g); });
+      p.services.forEach(v => { const n = attach(pj, leaf(v.id, v.name, 'compose', 'service', v.h, {image:v.image, status:v.status, project:p.name})); n.gk = gks(v.g); n.gh = ghOf(v.gh); });
     });
   }
   if (s.containers && s.containers.length){
     const g = attach(m, mk(s.id + '/containers', {name:'Containers', kind:'group', type:'container'}));
-    s.containers.forEach(c => { const n = attach(g, leaf(c.id, c.name, 'container', 'container', c.h, {image:c.image, status:c.status})); n.gk = gks(c.g); });
+    s.containers.forEach(c => { const n = attach(g, leaf(c.id, c.name, 'container', 'container', c.h, {image:c.image, status:c.status})); n.gk = gks(c.g); n.gh = ghOf(c.gh); });
   }
   if (s.vms && s.vms.length){
     const g = attach(m, mk(s.id + '/vms', {name:'VMs', kind:'group', type:'vm'}));
@@ -119,10 +122,10 @@ function machineFrom(s, isVm){
   }
   return m;
 }
-function addCron(owner, list, label){
+function addCron(owner, list, label, ghOf){
   if (!list || !list.length) return;
   const f = attach(owner, mk(owner.id + '/cron', {name:label || 'Cron jobs', kind:'cronfolder', type:owner.type}));
-  list.forEach(j => { const n = attach(f, leaf(j.id, j.name, owner.type, 'cron', j.h, {})); n.kind = 'cron'; n.job = j; n.running = !!j.running; n.gk = j.g && j.g.length ? j.g : owner.gk; });
+  list.forEach(j => { const n = attach(f, leaf(j.id, j.name, owner.type, 'cron', j.h, {})); n.kind = 'cron'; n.job = j; n.running = !!j.running; n.gk = j.g && j.g.length ? j.g : owner.gk; n.gh = ghOf(j.gh); });
 }
 function sumSeries(list){ const o = {}; METRICS.forEach(m => { const a = zero(); list.forEach(c => { const s = c.series[m.id]; for (let i = 0; i < H; i++) a[i] += s[i]; }); o[m.id] = a; }); return o; }
 function splitG(series, keys){ const o = {}; (keys || []).forEach(k => { o[k] = series.map(v => v / keys.length); }); return o; }
@@ -130,7 +133,7 @@ function perG(gh){ const o = {}; for (const k in gh) o[k] = gh[k] && gh[k].lengt
 function addG(t, src, map){ for (const k in src){ const kk = map ? map[k] : k; if (kk == null) continue; const a = t[kk] || (t[kk] = zero()), s = src[k]; for (let i = 0; i < H; i++) a[i] += s[i]; } return t; }
 function compute(n){
   n.children.forEach(compute);
-  if (n.kind === 'cron'){ n.series = n.hist; n.gseries = splitG(n.hist.gpu, n.gk); return; }
+  if (n.kind === 'cron'){ n.series = n.hist; n.gseries = n.gh ? perG(n.gh) : splitG(n.hist.gpu, n.gk); return; }
   if (n.kind === 'cronfolder'){ n.series = sumSeries(n.children); n.gseries = n.children.reduce((t, c) => addG(t, c.gseries), {}); return; }
   if (n.hist){
     const f = n.children.find(c => c.kind === 'cronfolder');
@@ -139,13 +142,18 @@ function compute(n){
     return;
   }
   n.series = sumSeries(n.children);
-  n.gseries = n.children.reduce((t, c) => addG(t, c.gseries, c.kind === 'machine' && c.parent ? c.gmap : null), {});
+  n.gseries = n.children.reduce((t, c) => addG(t, c.gseries), {});
   // A VM Fleet reads over SSH: as a part of its host it costs what the host gives it (its QEMU process: CPU, memory,
   // disk and network as the host sees them; GPU as the guest sees it, since a passed-through GPU is invisible to the
-  // host). What the guest itself reports (its own page's figures) stays in n.own.
-  if (n.kind === 'machine' && n.hostHist){
-    n.own = n.series;
-    n.series = {}; METRICS.forEach(m => { n.series[m.id] = m.id === 'gpu' ? n.own.gpu : n.hostHist[m.id]; });
+  // host), and on each of the host's GPUs what the host measures it use there (hostG). What the guest itself reports
+  // (its own page's figures, its own GPUs) stays in n.own and n.inside.
+  if (n.kind === 'machine' && n.parent){
+    n.inside = {series:n.series, gseries:n.gseries};
+    if (n.hostHist){
+      n.own = n.series;
+      n.series = {}; METRICS.forEach(m => { n.series[m.id] = m.id === 'gpu' ? n.own.gpu : n.hostHist[m.id]; });
+    }
+    n.gseries = n.hostG;
   }
 }
 function build(d){
@@ -185,10 +193,7 @@ function shareOfHost(n, metric){   // under a host without a reading there's no 
 /* which GPU */
 function gpuBt(m, key, i){ const o = {base:0, compose:0, container:0, vm:0}; m.children.forEach(c => { const s = c.gseries[key]; if (s) o[c.type] += i == null ? s[H-1] : s[i]; }); return o; }
 function keysUsed(n){
-  if (n.kind === 'cron') return (n.u[MI.gpu] > 0 || Math.max(...n.hist.gpu) > 0) ? (n.gk || []) : [];
-  const map = n.kind === 'machine' && n.parent ? n.gmap : null, out = [];
-  for (const k in n.gseries){ if (Math.max(...n.gseries[k]) <= 0) continue; const kk = map ? map[k] : k; if (kk != null && !out.includes(kk)) out.push(kk); }
-  return out;
+  return Object.keys(n.gseries).filter(k => Math.max(...n.gseries[k]) > 0);
 }
 function gpuIdxs(n){ const host = hostOf(n); return keysUsed(n).map(k => host.gpus.findIndex(g => g.key === k)).filter(i => i >= 0).sort((a, b) => a - b); }
 function whichGpu(n){ const ix = gpuIdxs(n); return ix.length ? 'GPU' + ix.join('+') : ''; }
@@ -196,8 +201,7 @@ function whichGpuLong(n){ const host = hostOf(n), ix = gpuIdxs(n); return ix.map
 function gpuConsumers(m, key){
   const out = [];
   (function v(n){ n.children.forEach(c => {
-    if (c.kind === 'machine'){ const ks = Object.keys(c.gseries).filter(k => c.gmap[k] === key); if (ks.length) out.push({n:c, v:ks.reduce((s, k) => s + c.gseries[k][H-1], 0)}); return; }
-    if (c.hist){ const s = c.gseries[key]; if (s && Math.max(...s) > 0) out.push({n:c, v:s[H-1]}); return; }
+    if (c.kind === 'machine' || c.hist){ const s = c.gseries[key]; if (s && Math.max(...s) > 0) out.push({n:c, v:s[H-1]}); return; }
     v(c);
   }); })(m);
   return out.sort((a, b) => b.v - a.v);
@@ -774,7 +778,7 @@ function diskSelCard(m){
 }
 function gpuToggle(){ return `<div class="seg" role="group" aria-label="GPU graph"><button type="button" data-gpuview="type" aria-pressed="${S.gpuView!=='each'}">By type</button><button type="button" data-gpuview="each" aria-pressed="${S.gpuView==='each'}">Each GPU</button></div>`; }
 function gpuSel(m){ return S.gpuSel && S.gpuSel.mid === m.id ? S.gpuSel.keys.filter(k => m.gpus.some(g => g.key === k)) : []; }
-function gpuHist(m, key){ return (m.gseries && m.gseries[key]) || zero(); }
+function gpuHist(m, key){ const g = (m.inside || m).gseries; return (g && g[key]) || zero(); }   // a VM's own GPUs: its inside view
 // Each GPU (issue #6): like the CCD viewer, a group per GPU with a live tile per metric it reports.
 const GPU_M = {util:['Utilisation', '%'], '3d':['3D', '%'], compute:['Compute', '%'], copy:['Copy', '%'], video:['Video', '%'], encode:['Video encode', '%'],
   decode:['Video decode', '%'], vpp:['Video proc.', '%', 'Video processing'], jpeg:['JPEG', '%'], tiler:['Tiler', '%'], memctl:['Mem. controller', '%', 'Memory controller'],
@@ -818,7 +822,7 @@ function gpuSelCard(m){
     const gi = m.gpus.findIndex(g => g.key === key), g = m.gpus[gi], h = gpuHist(m, key);
     const cons = gpuConsumers(m, key);
     const top = cons.slice(0, 6);
-    const hist = n => n.kind === 'machine' ? Object.keys(n.gseries).filter(k => n.gmap[k] === key).reduce((a, k) => a.map((v, i) => v + n.gseries[k][i]), zero()) : (n.gseries[key] || zero());
+    const hist = n => n.gseries[key] || zero();
     const series = top.map(c => ({label:c.n.name, color:colOf(c.n), data:hist(c.n)}));
     const rest = h.map((v, i) => Math.max(0, v - series.reduce((s, x) => s + x.data[i], 0)));
     if (rest.some(v => v > 0.05)) series.push({label:'everything else', color:'var(--t-base)', data:rest});

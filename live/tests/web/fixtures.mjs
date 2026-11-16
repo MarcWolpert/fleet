@@ -6,6 +6,8 @@
 //   lx2   the "nothing else" control: same process names, CPUs and GPUs as lx, other PIDs
 //   win   Windows: one GPU, per-process GPUs reported, the last CPU not (-1)
 //   mac   macOS: one unified GPU, neither reported
+//
+// modelFleet() is another fleet, with usage in it (history, Compose, cron jobs, VMs), for the model's arithmetic.
 const H = 60;
 const zeros = () => new Array(H).fill(0);
 
@@ -70,6 +72,41 @@ export function fixture(){
     },
     cpus: {lx: cpusOf(groups2), lx2: cpusOf(groups2), win: cpusOf(winGroups), mac: cpusOf(macGroups)}
   };
+}
+
+// A fleet with usage in it, for the model's arithmetic (/api/fleet only). Every series is flat, so "now" is
+// the same as any point in the history. Usage is [CPU cores, memory GB, GPU %, disk MB/s, network MB/s].
+//
+//   host  Linux, 16 CPUs, 64 GB, two GPUs. Base system (2, 8, 30, 10, 1) on GPU 0 5% and GPU 1 25%, plus its
+//         jobs: render.sh running (0.5, 1, 20, 2, 0) on GPU 1, backup.sh idle. Compose project ml: trainer
+//         (4, 12, 90, 5, 0.5) on GPU 0 85% and GPU 1 5%, db (0.5, 2, 0, 3, 0.2). Containers: web (0.3, 1, 0, 1, 2)
+//         and old, stopped. VMs: vm1, reachable, which the host sees use (2, 16, 50, 4, 1), all of it on GPU 1;
+//         inside, its Base system (1, 3, 40, 1, 0.5) and container app (0.5, 2, 5, 0, 0.5) on its one vGPU.
+//         other, seen only from the host: (0.5, 4, 0, 0, 0).
+//   nog   Linux, 8 CPUs, 32 GB, no GPU: Base system (1, 4, 0, 2, 0.5) and container web (0.2, 1, 0, 0, 0.1).
+export function modelFleet(){
+  const flat = v => new Array(H).fill(v);
+  const h = (cpu, mem, gpu, disk, net) => ({cpu: flat(cpu), mem: flat(mem), gpu: flat(gpu), disk: flat(disk), net: flat(net)});
+  const gh = (...g) => Object.fromEntries(g.map((v, i) => ['gpu' + i, flat(v)]));
+  const m = (id, name, ncpu, mem, gpus, over) => Object.assign({id, name, tile: 'server', status: 'ok', error: '', os: 'Linux · x86_64', agent: 'ssh ' + id,
+    cronLabel: 'Cron jobs', cap: [ncpu, mem, 100 * gpus.length, 500, 125], ncpu, cpu_model: name + ' CPU', groups: [], has_data: true,
+    last_ok: Date.now() / 1000, uptime: '3 days', ssh: id, gpus, baseCron: [], compose: [], containers: [], vms: []}, over);
+  const c = (id, name, u, g, status = 'Up 2 hours') => ({id, name, image: name + ':1', status, h: h(...u), gh: g});
+  return {t: Date.now() / 1000, interval: 3, window_s: 180, pins: [], machines: [
+    m('host', 'lab-host', 16, 64, [{name: 'NVIDIA RTX A4000', mem: '16 GB VRAM'}, {name: 'NVIDIA RTX A2000', mem: '12 GB VRAM'}], {
+      base: {id: 'host/base', h: h(2, 8, 30, 10, 1), gh: gh(5, 25)},
+      baseCron: [{id: 'host/base/cron/0', name: 'render.sh', sched: '*/5 * * * *', human: 'every 5 minutes', running: true, h: h(0.5, 1, 20, 2, 0), gh: gh(0, 20)},
+                 {id: 'host/base/cron/1', name: 'backup.sh', sched: '0 3 * * *', human: 'at 03:00', running: false, h: h(0, 0, 0, 0, 0), gh: gh(0, 0)}],
+      compose: [{id: 'host/compose/ml', name: 'ml', file: '/srv/ml/compose.yaml', services: [
+        c('host/compose/ml/trainer', 'trainer', [4, 12, 90, 5, 0.5], gh(85, 5)), c('host/compose/ml/db', 'db', [0.5, 2, 0, 3, 0.2], gh(0, 0))]}],
+      containers: [c('host/containers/web', 'web', [0.3, 1, 0, 1, 2], gh(0, 0)), c('host/containers/old', 'old', [0, 0, 0, 0, 0], gh(0, 0), 'Exited (0) 2 days ago')],
+      vms: [
+        m('vm1', 'vm1', 4, 16, [{name: 'NVIDIA GRID vGPU', mem: '4 GB VRAM'}], {tile: 'vm', base: {id: 'vm1/base', h: h(1, 3, 40, 1, 0.5), gh: gh(40)},
+          containers: [c('vm1/containers/app', 'app', [0.5, 2, 5, 0, 0.5], gh(5))], hostside: h(2, 16, 50, 4, 1), hostside_gh: gh(0, 50)}),
+        m('host/vms/other', 'other', 16, 64, [], {tile: 'vm', agent: 'seen from the host', cap: [16, 64, 0, 1, 1],
+          base: {id: 'host/vms/other/base', h: h(0.5, 4, 0, 0, 0)}, hostside_gh: gh(0, 0)})]}),
+    m('nog', 'lab-nogpu', 8, 32, [], {base: {id: 'nog/base', h: h(1, 4, 0, 2, 0.5), gh: {}}, containers: [c('nog/containers/web', 'web', [0.2, 1, 0, 0, 0.1], {})]})
+  ]};
 }
 
 // Saved UI state for a test page (what app.js keeps in localStorage).
