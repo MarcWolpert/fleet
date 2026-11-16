@@ -805,8 +805,9 @@ function gpuSelCard(m){
 function cpuToggle(){ return `<div class="seg" role="group" aria-label="CPU graph"><button type="button" data-cpuview="type" aria-pressed="${S.cpuView==='type'}">By type</button><button type="button" data-cpuview="logical" aria-pressed="${S.cpuView==='logical'}">Logical processors</button></div>`; }
 function logicalCard(m){
   const d = CPUS[m.id];
-  const head = `<div class="card-h"><h2>Logical processors</h2><span class="sub">${esc(m.cpu_model || '')}${d ? ' · ' + d.cpus.length + ' processors' : ''}</span><span class="grow"></span>${sortMenu('cpu')}${cpuToggle()}</div>`;
-  if (!d || !d.cpus) return `<section class="card">${head}<div class="sub">Loading…</div></section>`;
+  const head = `<div class="card-h"><h2>Logical processors</h2><span class="sub">${esc(m.cpu_model || '')}${d && d.cpus ? ' · ' + d.cpus.length + ' processors' : ''}</span><span class="grow"></span>${sortMenu('cpu')}${cpuToggle()}</div>`;
+  // The server answers {} for a machine it doesn't read itself (a VM seen only from its host).
+  if (!d || !d.cpus) return `<section class="card">${head}<div class="sub">${d ? `No per-processor readings for ${esc(m.name)}.` : 'Loading…'}</div></section>`;
   const byN = {}; d.cpus.forEach(c => { byN[c.n] = c; });
   const sel = cpuSel(m);
   const groups = (d.groups && d.groups.length ? d.groups : [{name:'All processors', cpus:d.cpus.map(c => c.n)}]).map((g, i) => [g, i]).sort((a, b) => pinFirst('cpugroup', m.id, x => x[0].name)(a, b) || a[1] - b[1]).map(x => x[0]);
