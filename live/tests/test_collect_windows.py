@@ -199,6 +199,10 @@ class EveryProgramHasADeadline(unittest.TestCase):
             ("docker", 'stats --no-stream --format "{{json .}}"'),
         ]))
 
+    def test_one_line_of_output_stays_a_list(self):
+        # a PowerShell function's output unrolls, so a lone line would arrive as a bare string
+        self.assertEqual(re.findall(r"(\S*)Invoke-Bounded '", self.SRC), ["@(", "@(", "@("])
+
     def test_nothing_runs_them_without_a_deadline(self):
         bare = re.findall(r"(?<![$.\w-])(nvidia-smi|wsl(?:\.exe)?|docker)(?![\w-])", collector_text())   # not $wsl or $o.wsl
         self.assertEqual(bare, [])

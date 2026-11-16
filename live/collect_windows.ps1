@@ -22,6 +22,7 @@ function Wait-Bounded($job, $secs = 8) {
   ''
 }
 function UnixNow { [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() / 1000.0 }
+# (a function's output unrolls: callers wrap Invoke-Bounded in @() to keep one line a list)
 function Invoke-Bounded($exe, $argline) { @((Wait-Bounded (Start-Bounded $exe $argline)) -split "`r?`n" | Where-Object { $_ }) }
 # Stop when Fleet goes away. Fleet keeps our stdin open and writes nothing after this script, so the pending read
 # completes (EOF) the moment the SSH session ends for any reason; also stop if our parent shell is
@@ -106,8 +107,8 @@ $o.gpus = @($adMem.Keys | Where-Object { $adMem[$_] -gt 0 } | Sort-Object | ForE
   $l = $_; $e = @{}; foreach ($tk in $engT.Keys) { $p = $tk.Split('|', 2); if ($p[0] -eq $l) { $e[$p[1]] = $engT[$tk] } }
   @{ luid = $l; util = [double]$gpuUtil[$l]; dedicated = $adMem[$l]; shared = [double]$adShared[$l]; eng = $e } })
 # NVIDIA's own numbers; drivers without the newer fields fail the whole query, so fall back to the basic one
-$nv = Invoke-Bounded 'nvidia-smi' '--query-gpu=index,name,utilization.gpu,memory.used,memory.total,utilization.memory,temperature.gpu,power.draw,power.limit,clocks.gr,clocks.max.gr,clocks.mem,fan.speed,utilization.encoder,utilization.decoder --format=csv,noheader,nounits'
-if (-not ($nv | Where-Object { $_ -match ',' })) { $nv = Invoke-Bounded 'nvidia-smi' '--query-gpu=index,name,utilization.gpu,memory.used,memory.total --format=csv,noheader,nounits' }
+$nv = @(Invoke-Bounded 'nvidia-smi' '--query-gpu=index,name,utilization.gpu,memory.used,memory.total,utilization.memory,temperature.gpu,power.draw,power.limit,clocks.gr,clocks.max.gr,clocks.mem,fan.speed,utilization.encoder,utilization.decoder --format=csv,noheader,nounits')
+if (-not ($nv | Where-Object { $_ -match ',' })) { $nv = @(Invoke-Bounded 'nvidia-smi' '--query-gpu=index,name,utilization.gpu,memory.used,memory.total --format=csv,noheader,nounits') }
 $o.nvidia = $nv
 $o.videoNames = @(Get-CimInstance Win32_VideoController | ForEach-Object { $_.Name })
 $o.gproc = @($pidGpu.Keys | ForEach-Object { $gp = $_.Split('|'); ,@([int]$gp[0], $gp[1], $pidGpu[$_]) })
@@ -161,7 +162,7 @@ $o.ifs = @(Get-NetAdapter | ForEach-Object {
 
 $o.containers = @(); $o.dstats = @()
 if ($dockerUp) {
-  $o.containers = Invoke-Bounded 'docker' 'ps --no-trunc --format "{{json .}}"'
+  $o.containers = @(Invoke-Bounded 'docker' 'ps --no-trunc --format "{{json .}}"')
   $o.dstats = @((Wait-Bounded $ds) -split "`r?`n" | Where-Object { $_ })
   $o.td = UnixNow; try { $o.td = ([DateTimeOffset]$ds.p.ExitTime.ToUniversalTime()).ToUnixTimeMilliseconds() / 1000.0 } catch {}
 }
