@@ -70,6 +70,53 @@ class UserCrontab(unittest.TestCase):
                                 {"sched": "@daily", "cmd": "/usr/local/bin/rotate-logs", "src": "crontab"}])
 
 
+USERS = {"root", "daemon", "backup", "nobody"}
+
+
+class SystemCrontabs(unittest.TestCase):
+    """/etc/crontab and /etc/cron.d files have a user column before the command, except dcron's per-user crontabs,
+    which Unraid keeps in /etc/cron.d (crontab -c /etc/cron.d)."""
+    def jobs(self, text, src, users=USERS):
+        cron = []
+        collector().add_cron(cron, text, src, users)
+        return [(j["sched"], j["cmd"]) for j in cron], {j["src"] for j in cron}
+
+    def test_unraid_per_user_crontab_in_cron_d(self):
+        text = ("# Generated docker monitoring schedule:\n"
+                "10 0 * * * /usr/local/emhttp/plugins/dynamix.docker.manager/scripts/dockerupdate check &> /dev/null\n"
+                "\n"
+                "# Generated system monitoring schedule:\n"
+                "*/1 * * * * /usr/local/emhttp/plugins/dynamix/scripts/monitor &> /dev/null\n"
+                "\n"
+                "# Generated mover schedule:\n"
+                "40 3 * * * /usr/local/sbin/mover &> /dev/null\n")
+        self.assertEqual(self.jobs(text, "/etc/cron.d/root"), (
+            [("10 0 * * *", "/usr/local/emhttp/plugins/dynamix.docker.manager/scripts/dockerupdate check &> /dev/null"),
+             ("*/1 * * * *", "/usr/local/emhttp/plugins/dynamix/scripts/monitor &> /dev/null"),
+             ("40 3 * * *", "/usr/local/sbin/mover &> /dev/null")], {"/etc/cron.d/root"}))
+
+    def test_cron_d_file_with_a_user_column(self):
+        text = ("SHELL=/bin/sh\n"
+                "30 3 * * 0 root test -e /run/systemd/system || SERVICE_MODE=1 /usr/lib/e2fsprogs/e2scrub_all_cron\n"
+                "@reboot root /usr/local/bin/warm-cache --quiet\n"
+                "*/10 * * * * daemon /usr/local/bin/poll\n")
+        self.assertEqual(self.jobs(text, "/etc/cron.d/e2scrub_all"), (
+            [("30 3 * * 0", "test -e /run/systemd/system || SERVICE_MODE=1 /usr/lib/e2fsprogs/e2scrub_all_cron"),
+             ("@reboot", "/usr/local/bin/warm-cache --quiet"),
+             ("*/10 * * * *", "/usr/local/bin/poll")], {"/etc/cron.d/e2scrub_all"}))
+
+    def test_etc_crontab(self):
+        text = "17 * * * * root cd / && run-parts --report /etc/cron.hourly\n25 6 * * * root test -x /usr/sbin/anacron || run-parts /etc/cron.daily\n"
+        self.assertEqual(self.jobs(text, "/etc/crontab"), (
+            [("17 * * * *", "cd / && run-parts --report /etc/cron.hourly"),
+             ("25 6 * * *", "test -x /usr/sbin/anacron || run-parts /etc/cron.daily")], {"/etc/crontab"}))
+
+    def test_a_user_crontab_never_has_a_user_column(self):
+        # `backup` is a user here, but crontab -l is one user's own crontab: it's the command
+        self.assertEqual(self.jobs("0 1 * * * backup --full /srv\n@hourly backup --quick\n", "crontab"), (
+            [("0 1 * * *", "backup --full /srv"), ("@hourly", "backup --quick")], {"crontab"}))
+
+
 def domiflist(*rows):
     """`virsh domiflist` output: a header, a rule, a row per interface (name, type, source, model, MAC)."""
     return (" Interface   Type     Source   Model    MAC\n" + "-" * 59 + "\n"

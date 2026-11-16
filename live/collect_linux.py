@@ -51,17 +51,20 @@ def cpulist(s):
     return got
 
 
-def add_cron(cron, text, src):
-    """Append the jobs of one crontab (`crontab -l`, /etc/crontab or a file of /etc/cron.d) to cron."""
+def add_cron(cron, text, src, users=()):
+    """Append the jobs of one crontab (`crontab -l`, /etc/crontab or a file of /etc/cron.d) to cron. A system crontab
+    has a user column before the command, but dcron's per-user crontabs, which Unraid keeps in /etc/cron.d, have
+    none: the column is there when it names one of the users."""
     for line in text.splitlines():
         line = line.strip()
         if not line or line.startswith("#") or re.match(r"^[A-Z_]+=", line):
             continue
         f = line.split()
         if f[0].startswith("@"):
-            cron.append({"sched": f[0], "cmd": " ".join(f[1:]), "src": src})
+            user_col = src != "crontab" and len(f) >= 3 and f[1] in users
+            cron.append({"sched": f[0], "cmd": " ".join(f[2:] if user_col else f[1:]), "src": src})
         elif len(f) >= 6:
-            user_col = src != "crontab" and len(f) >= 7
+            user_col = src != "crontab" and len(f) >= 7 and f[5] in users
             cron.append({"sched": " ".join(f[:5]), "cmd": " ".join(f[6:] if user_col else f[5:]), "src": src})
 
 
@@ -569,12 +572,12 @@ def snapshot():
     out["vms"] = libvirt_vms()
 
     # Scheduled jobs: crontabs and systemd timers.
-    cron = []
+    cron, names = [], set(users.values())
     add_cron(cron, run(["crontab", "-l"]), "crontab")
-    add_cron(cron, rd("/etc/crontab"), "/etc/crontab")
+    add_cron(cron, rd("/etc/crontab"), "/etc/crontab", names)
     try:
         for n in sorted(os.listdir("/etc/cron.d")):
-            add_cron(cron, rd("/etc/cron.d/" + n), "/etc/cron.d/" + n)
+            add_cron(cron, rd("/etc/cron.d/" + n), "/etc/cron.d/" + n, names)
     except Exception:
         pass
     out["cron"] = cron
