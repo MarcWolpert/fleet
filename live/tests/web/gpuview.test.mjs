@@ -80,3 +80,76 @@ test('clicking a GPU\'s tile picks that GPU, as before; a pinned metric goes fir
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
 });
+
+// A picked GPU and the Usage sort read the GPU's own utilisation, like its tiles. The server tags Base
+// system gpu0 whichever GPU it runs on (#116), so the tree's per-GPU split can't stand in for it.
+const PICKED = `[...document.querySelectorAll('section.card')].filter(s => s.querySelector('[data-gpuclear]')).map(s => ({
+  title: s.querySelector('h2').textContent, sub: s.querySelector('.card-h .sub').textContent,
+  legend: [...s.querySelectorAll('.legend span')].map(x => x.textContent),
+  rank: [...s.querySelectorAll('.gpu-rank .namebtn')].map(b => b.textContent.trim() + ' ' + b.nextElementSibling.nextElementSibling.textContent),
+  note: [...s.querySelectorAll(':scope > .sub')].map(x => x.textContent)}))`;
+const ORDER = `[...document.querySelectorAll('.ggroups > .ggroup')].map(g => g.dataset.gpu)`;
+// lab-linux's two GPUs at their own utilisation; Base system's GPU use tagged gpu0, as the server sends it
+function own(u0, u1, baseGpu){
+  const fx = fixture(), lx = fx.fleet.machines.find(m => m.id === 'lx');
+  lx.gpus = [Object.assign({}, lx.gpus[0], {m: [['util', null, u0], ['temp', null, flat(40)]]}), Object.assign({}, lx.gpus[1], {m: [['util', null, u1]]})];
+  lx.base.h = {gpu: baseGpu};
+  return fx;
+}
+async function picked(fx, keys, over = {}){
+  const p = await browser.page(fx, {ui: ui(Object.assign({sel: 'lx', metric: 'gpu', gpuView: 'each', gpuSel: {mid: 'lx', keys}}, over))});
+  try { await p.waitFor(`${PICKED}.length === ${keys.length}`); } catch (e) { await p.close(); throw e; }
+  return p;
+}
+const spike = (v, i, at) => { const a = flat(v); a[i] = at; return a; };
+const BUSY = 'Nothing in the tree is counted on this GPU, though it’s busy. Details lists the processes using it.';
+
+test('a bare-metal process on GPU 1: GPU 1 is busy and GPU 0 idle, in the picked card and the Usage sort', async () => {
+  const fx = own(spike(0, 10, 35), flat(100), flat(100));
+  let p = await picked(fx, ['gpu1'], {tileSort: {gpu: 'usage'}});
+  try {
+    assert.deepEqual(await p.eval(ORDER), ['gpu1', 'gpu0'], 'Usage sort: the busy GPU first');
+    assert.deepEqual(await p.eval(PICKED), [{title: 'GPU 1 · NVIDIA RTX A2000', sub: '12 GB VRAM · now 100% · peak 100%', legend: [], rank: [], note: [BUSY]}]);
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+  p = await picked(fx, ['gpu0']);
+  try {
+    assert.deepEqual((await p.eval(PICKED)).map(c => c.sub), ['16 GB VRAM · now 0% · peak 35%']);
+    assert.deepEqual(await p.eval(ORDER), ['gpu0', 'gpu1'], 'Index sort is unchanged');
+  } finally { await p.close(); }
+});
+
+test('both GPUs busy outside containers: each picked GPU reads its own 100%, not 200% and 0%', async () => {
+  const p = await picked(own(flat(100), flat(100), flat(200)), ['gpu0', 'gpu1']);
+  try {
+    assert.deepEqual((await p.eval(PICKED)).map(c => [c.title, c.sub]), [
+      ['GPU 0 · NVIDIA RTX A4000', '16 GB VRAM · now 100% · peak 100%'], ['GPU 1 · NVIDIA RTX A2000', '12 GB VRAM · now 100% · peak 100%']]);
+  } finally { await p.close(); }
+});
+
+test('a container on GPU 1: listed with what is left as everything else; nothing else is listed', async () => {
+  const fx = own(flat(0), flat(100), flat(0));
+  const lx = fx.fleet.machines.find(m => m.id === 'lx');
+  lx.containers[0] = Object.assign({}, lx.containers[0], {g: ['gpu1'], gh: {gpu1: flat(60)}, h: {gpu: flat(60)}});
+  const p = await picked(fx, ['gpu1']);
+  try {
+    assert.deepEqual(await p.eval(PICKED), [{title: 'GPU 1 · NVIDIA RTX A2000', sub: '12 GB VRAM · now 100% · peak 100%', legend: ['web', 'everything else'], rank: ['web 60%'], note: []}]);
+  } finally { await p.close(); }
+});
+
+test('an idle GPU with nothing on it still says nothing is using it', async () => {
+  const p = await picked(own(flat(0), flat(0), flat(0)), ['gpu1']);
+  try {
+    assert.deepEqual(await p.eval(PICKED), [{title: 'GPU 1 · NVIDIA RTX A2000', sub: '12 GB VRAM · now 0% · peak 0%', legend: [], rank: [], note: ['Nothing is using this GPU.']}]);
+  } finally { await p.close(); }
+});
+
+test('a GPU that reports no utilisation of its own falls back to what the tree counts on it', async () => {
+  const fx = fixture(), win = fx.fleet.machines.find(m => m.id === 'win');
+  win.base.h = {gpu: flat(30)}; win.base.gh = {gpu0: flat(30)};
+  const p = await browser.page(fx, {ui: ui({sel: 'win', metric: 'gpu', gpuView: 'each', gpuSel: {mid: 'win', keys: ['gpu0']}})});
+  try {
+    await p.waitFor(`${PICKED}.length === 1`);
+    assert.deepEqual(await p.eval(PICKED), [{title: 'GPU 0 · NVIDIA GeForce RTX 3090', sub: '24 GB VRAM · now 30% · peak 30%', legend: [], rank: ['Base system 30%'], note: []}]);
+  } finally { await p.close(); }
+});

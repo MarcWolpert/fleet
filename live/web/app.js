@@ -749,6 +749,8 @@ function diskSelCard(m){
 function gpuToggle(){ return `<div class="seg" role="group" aria-label="GPU graph"><button type="button" data-gpuview="type" aria-pressed="${S.gpuView!=='each'}">By type</button><button type="button" data-gpuview="each" aria-pressed="${S.gpuView==='each'}">Each GPU</button></div>`; }
 function gpuSel(m){ return S.gpuSel && S.gpuSel.mid === m.id ? S.gpuSel.keys.filter(k => m.gpus.some(g => g.key === k)) : []; }
 function gpuHist(m, key){ return (m.gseries && m.gseries[key]) || zero(); }
+// A GPU's own utilisation, as its tiles show it; what the tree counts on it only for a GPU that doesn't report one.
+function gpuUtil(m, key){ const g = m.gpus.find(x => x.key === key), u = g && (g.m || []).find(x => x[0] === 'util'); return u && u[2] && u[2].length === H ? u[2] : gpuHist(m, key); }
 // Each GPU (issue #6): like the CCD viewer, a group per GPU with a live tile per metric it reports.
 const GPU_M = {util:['Utilisation', '%'], '3d':['3D', '%'], compute:['Compute', '%'], copy:['Copy', '%'], video:['Video', '%'], encode:['Video encode', '%'],
   decode:['Video decode', '%'], vpp:['Video proc.', '%', 'Video processing'], jpeg:['JPEG', '%'], tiler:['Tiler', '%'], memctl:['Mem. controller', '%', 'Memory controller'],
@@ -765,10 +767,10 @@ function gpuValText(unit, v){
 }
 function gpuEachCard(m){
   const sel = gpuSel(m), mac = /mac/i.test(m.os || '');
-  const groups = m.gpus.map((g, gi) => [g, gi, gpuHist(m, g.key)[H-1]]).sort((a, b) => pinFirst('gpu', m.id, x => x[0].key)(a, b) || bySort('gpu')(a, b)).map(([g, gi]) => {
+  const groups = m.gpus.map((g, gi) => [g, gi, gpuUtil(m, g.key)[H-1]]).sort((a, b) => pinFirst('gpu', m.id, x => x[0].key)(a, b) || bySort('gpu')(a, b)).map(([g, gi]) => {
     const on = sel.includes(g.key);
     const metrics = g.m && g.m.length ? g.m : [['util', null, gpuHist(m, g.key)]];
-    const util = (metrics.find(x => x[0] === 'util') || [0, 0, gpuHist(m, g.key)])[2];
+    const util = gpuUtil(m, g.key);
     const tiles = metrics.map((x, i) => [x, i]).sort((a, b) => pinFirst('gpum', m.id, y => g.key + ':' + y[0][0])(a, b) || a[1] - b[1]).map(([[k, lim, h]]) => {
       const [label0, unit, long] = GPU_M[k] || [k, ''], label = k === '3d' && mac ? 'Renderer' : label0, full = long || label;
       const now = h[H-1], peak = Math.max(...h);
@@ -789,7 +791,7 @@ function gpuSelCard(m){
   const sel = gpuSel(m);
   if (!sel.length) return `<p class="lhint">Click a GPU to see its use over time by what runs on it; ⌘/Ctrl- or Shift-click to compare several.</p>`;
   return sel.map(key => {
-    const gi = m.gpus.findIndex(g => g.key === key), g = m.gpus[gi], h = gpuHist(m, key);
+    const gi = m.gpus.findIndex(g => g.key === key), g = m.gpus[gi], h = gpuUtil(m, key);
     const cons = gpuConsumers(m, key);
     const top = cons.slice(0, 6);
     const hist = n => n.kind === 'machine' ? Object.keys(n.gseries).filter(k => n.gmap[k] === key).reduce((a, k) => a.map((v, i) => v + n.gseries[k][i]), zero()) : (n.gseries[key] || zero());
@@ -798,7 +800,7 @@ function gpuSelCard(m){
     if (rest.some(v => v > 0.05)) series.push({label:'everything else', color:'var(--t-base)', data:rest});
     const peak = Math.max(...h);
     const card = graphCard(`GPU ${gi} · ${esc(g.name)}`, `${esc(g.mem || '')}${g.mem ? ' · ' : ''}now ${pct(h[H-1])} · peak ${pct(peak)}`, series.length ? series : [{label:g.name, color:'var(--accent)', data:h}], 100, 'gpu', `<button type="button" class="btn" data-gpuclear="1">${icon('x', 2.2)}Clear</button>`);
-    const list = cons.length ? `<div class="rank gpu-rank" style="margin-top:12px">${cons.slice(0, 12).map(c => `<button type="button" class="namebtn" data-select="${esc(c.n.id)}"><span class="ico" style="color:${colOf(c.n)}">${icon(iconOf(c.n))}</span>${esc(c.n.name)}</button><div class="track"><div class="bar" style="width:${Math.min(100, c.v).toFixed(2)}%;background:${colOf(c.n)}"></div></div><div class="tot">${pct(c.v)}</div>`).join('')}</div>` : `<div class="sub" style="margin-top:10px">Nothing is using this GPU.</div>`;
+    const list = cons.length ? `<div class="rank gpu-rank" style="margin-top:12px">${cons.slice(0, 12).map(c => `<button type="button" class="namebtn" data-select="${esc(c.n.id)}"><span class="ico" style="color:${colOf(c.n)}">${icon(iconOf(c.n))}</span>${esc(c.n.name)}</button><div class="track"><div class="bar" style="width:${Math.min(100, c.v).toFixed(2)}%;background:${colOf(c.n)}"></div></div><div class="tot">${pct(c.v)}</div>`).join('')}</div>` : `<div class="sub" style="margin-top:10px">${h[H-1] > 0.05 ? 'Nothing in the tree is counted on this GPU, though it’s busy. <b>Details</b> lists the processes using it.' : 'Nothing is using this GPU.'}</div>`;
     return card.replace(/<\/section>$/, list + '</section>');
   }).join('');
 }
