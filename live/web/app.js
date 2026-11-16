@@ -723,7 +723,7 @@ function cpuRanges(ns){
 function cpuSelCard(m){
   const d = CPUS[m.id], sel = cpuSel(m);
   if (!d || !d.cpus) return '';
-  if (!sel.length) return `<p class="lhint">Click a processor or a group name to see it on its own; ⌘/Ctrl- or Shift-click to add more.</p>`;
+  if (!sel.length) return `<p class="lhint">${cpuViewOf(m) === 'groups' ? `Click a ${CPU_GROUPINGS[cpuGrouping(m)][1]}` : 'Click a processor or a group name'} to see it on its own; ⌘/Ctrl- or Shift-click to add more.</p>`;
   const cs = d.cpus.filter(c => sel.includes(c.n));
   if (!cs.length) return '';
   const group = (d.groups || []).find(g => g.cpus.length === sel.length && g.cpus.every(n => sel.includes(n)));
@@ -924,10 +924,41 @@ function gpuSelCard(m){
     return card.replace(/<\/section>$/, list + '</section>');
   }).join('');
 }
-function cpuToggle(){ return `<div class="seg" role="group" aria-label="CPU graph"><button type="button" data-cpuview="type" aria-pressed="${S.cpuView==='type'}">By type</button><button type="button" data-cpuview="logical" aria-pressed="${S.cpuView==='logical'}">Logical processors</button></div>`; }
+// How a machine's CPUs are grouped (#356), from its groups' names: by CCD, by core type (P- and E-cores, Apple's
+// Performance and Efficiency cores), by Apple core cluster, by socket; null when they aren't (one group, or none).
+// [the whole-group view's name, one group, several]
+const CPU_GROUPINGS = {ccd:['Each CCD', 'CCD', 'CCDs'], type:['Each core type', 'core type', 'core types'], cluster:['Each cluster', 'cluster', 'clusters'],
+  socket:['Each socket', 'socket', 'sockets'], group:['Each group', 'group', 'groups']};
+function cpuGrouping(m){
+  const ns = (m && m.groups || []).map(g => String(g.name));
+  if (ns.length < 2) return null;
+  if (ns.some(n => /\bcluster\b/i.test(n))) return 'cluster';
+  if (ns.some(n => /\bCCD\b/.test(n))) return 'ccd';
+  if (ns.some(n => /\b[PE]-cores\b|\b(Performance|Efficiency) cores\b/i.test(n))) return 'type';
+  if (ns.every(n => /^Socket\b/.test(n))) return 'socket';
+  return 'group';
+}
+// the CPU view a machine shows: the whole-group one only on a machine whose CPUs are grouped, Logical processors on
+// any other (S.cpuView stays, for the next grouped machine)
+function cpuViewOf(m){ return S.cpuView === 'groups' ? (cpuGrouping(m) ? 'groups' : 'logical') : S.cpuView === 'logical' ? 'logical' : 'type'; }
+function cpuToggle(m){
+  const v = cpuViewOf(m), g = cpuGrouping(m);
+  return `<div class="seg" role="group" aria-label="CPU graph"><button type="button" data-cpuview="type" aria-pressed="${v === 'type'}">By type</button><button type="button" data-cpuview="logical" aria-pressed="${v === 'logical'}">Logical processors</button>`
+    + (g ? `<button type="button" data-cpuview="groups" aria-pressed="${v === 'groups'}">${CPU_GROUPINGS[g][0]}</button>` : '') + `</div>`;
+}
+// A group in Logical processors folds to its header line (#356), kept per machine and group in ui.json
+// (PREFS.foldedCpuGroups: {machine: [group name]}).
+function cpuGroupFolded(mid, name){ return ((PREFS.foldedCpuGroups || {})[mid] || []).includes(name); }
+function foldCpuGroup(mid, name){
+  const all = Object.assign({}, PREFS.foldedCpuGroups), was = all[mid] || [];
+  all[mid] = was.includes(name) ? was.filter(x => x !== name) : was.concat([name]);
+  if (!all[mid].length) delete all[mid];
+  PREFS = Object.assign({}, PREFS, {foldedCpuGroups:all});
+  lastMainHTML = ''; renderMain(); savePrefs('the folded CPU groups');
+}
 function logicalCard(m){
   const d = CPUS[m.id];
-  const head = `${cardTop('logical', 'Logical processors')}<h2>Logical processors</h2><span class="sub">${esc(m.cpu_model || '')}${d && d.cpus ? ' · ' + d.cpus.length + ' processors' : ''}</span><span class="grow"></span>${sortMenu('cpu')}${cpuToggle()}</div>`;
+  const head = `${cardTop('logical', 'Logical processors')}<h2>Logical processors</h2><span class="sub">${esc(m.cpu_model || '')}${d && d.cpus ? ' · ' + d.cpus.length + ' processors' : ''}</span><span class="grow"></span>${sortMenu('cpu')}${cpuToggle(m)}</div>`;
   // The server answers {} for a machine it doesn't read itself (a VM seen only from its host).
   if (!d || !d.cpus) return `${head}<div class="sub">${d ? `No per-processor readings for ${esc(m.name)}.` : 'Loading…'}</div></section>`;
   const byN = {}; d.cpus.forEach(c => { byN[c.n] = c; });
@@ -935,16 +966,43 @@ function logicalCard(m){
   const groups = (d.groups && d.groups.length ? d.groups : [{name:'All processors', cpus:d.cpus.map(c => c.n)}]).map((g, i) => [g, i]).sort((a, b) => pinFirst('cpugroup', m.id, x => x[0].name)(a, b) || a[1] - b[1]).map(x => x[0]);
   const html = groups.map(g => {
     const cs = g.cpus.map(n => byN[n]).filter(Boolean);
-    const avg = cs.reduce((s, c) => s + c.pct, 0) / (cs.length || 1);
-    const cells = cs.slice().sort((a, b) => pinFirst('cpu', m.id, c => c.n)(a, b) || bySort('cpu')(a, b)).map(c => {
+    const avg = cs.reduce((s, c) => s + c.pct, 0) / (cs.length || 1), folded = cpuGroupFolded(m.id, g.name);
+    const cells = folded ? '' : cs.slice().sort((a, b) => pinFirst('cpu', m.id, c => c.n)(a, b) || bySort('cpu')(a, b)).map(c => {
       const max = 100, pts = c.h.map((v, i) => `${(i/(H-1)*100).toFixed(1)},${(56 - Math.min(v, max)/max*52).toFixed(1)}`);
       const on = sel.includes(c.n);
       return `<div class="lcell${on ? ' sel' : ''}${tpinned('cpu', m.id, c.n) ? ' pinned' : ''}"><button type="button" class="tsel" data-lcpu="${c.n}" aria-pressed="${on}" aria-label="CPU ${c.n}, ${Math.round(c.pct)}%" data-tip="lcpu|${esc(m.id)}|${c.n}"></button><span class="trow"><span class="lt">CPU ${c.n}${tpinBtn('cpu', m.id, c.n, 'CPU ' + c.n)}</span><span class="lv">${Math.round(c.pct)}%</span></span><span class="lm">${c.mhz ? (c.mhz/1000).toFixed(2) + ' GHz' : '&nbsp;'}</span><svg viewBox="0 0 100 56" preserveAspectRatio="none" aria-hidden="true"><path d="M0,56L${pts.join('L')}L100,56Z" fill="var(--accent-bg)" fill-opacity=".35"/><polyline points="${pts.join(' ')}" fill="none" stroke="var(--accent)" stroke-width="1.4" vector-effect="non-scaling-stroke"/></svg></div>`;
     }).join('');
     const gsel = cs.length && cs.every(c => sel.includes(c.n));
-    return `<div><div class="lgh"><button type="button" class="lgbtn${gsel ? ' sel' : ''}" data-lgroup="${esc(g.cpus.join(','))}" aria-pressed="${gsel}" title="Show this group on its own">${esc(g.name)}</button>${tpinBtn('cpugroup', m.id, g.name)}<span>${cs.length} processors</span><span>average ${pct(avg)}</span></div><div class="lgrid">${cells}</div></div>`;
+    const chev = `<button type="button" class="chev lgfold${folded ? '' : ' open'}" data-lgfold="${esc(g.name)}" aria-expanded="${!folded}" aria-label="${folded ? 'Unfold' : 'Fold'} ${esc(g.name)}">${icon('chev', 2.4)}</button>`;
+    return `<div class="cgroup${folded ? ' folded' : ''}" data-cgroup="${esc(g.name)}"><div class="lgh">${chev}<button type="button" class="lgbtn${gsel ? ' sel' : ''}" data-lgroup="${esc(g.cpus.join(','))}" aria-pressed="${gsel}" title="Show this group on its own">${esc(g.name)}</button>${tpinBtn('cpugroup', m.id, g.name)}<span>${cs.length} processors</span><span>average ${pct(avg)}</span></div>${folded ? '' : `<div class="lgrid">${cells}</div>`}</div>`;
   }).join('');
   return `${head}<div class="lgroups">${html}</div></section>`;
+}
+// Each CCD (or core type, or cluster) (#356): one graph per group, its processors' average over time; its number now
+// is the average its header shows in Logical processors. A click picks the group, as its name does there, and the
+// group's pin is the same one.
+function cpuGroupsCard(m){
+  const d = CPUS[m.id], [title, one, many] = CPU_GROUPINGS[cpuGrouping(m)];
+  const gs = d && d.cpus ? (d.groups && d.groups.length ? d.groups : m.groups) : [];
+  const sub = [m.cpu_model ? esc(m.cpu_model) : '', gs.length ? `${d.cpus.length} processors in ${gs.length} ${gs.length === 1 ? one : many}` : ''].filter(Boolean).join(' · ');
+  const head = `${cardTop('cpugroups', title)}<h2>${title}</h2><span class="sub">${sub}</span><span class="grow"></span>${cpuToggle(m)}</div>`;
+  if (!d || !d.cpus) return `${head}<div class="sub">${d ? `No per-processor readings for ${esc(m.name)}.` : 'Loading…'}</div></section>`;
+  const byN = {}; d.cpus.forEach(c => { byN[c.n] = c; });
+  const sel = cpuSel(m);
+  const tiles = gs.map((g, i) => [g, i]).sort((a, b) => pinFirst('cpugroup', m.id, x => x[0].name)(a, b) || a[1] - b[1]).map(([g]) => {
+    const cs = g.cpus.map(n => byN[n]).filter(Boolean);
+    if (!cs.length) return '';
+    const now = cs.reduce((s, c) => s + c.pct, 0) / cs.length;
+    const avg = Array.from({length:H}, (_, i) => cs.reduce((s, c) => s + (c.h[i] || 0), 0) / cs.length);
+    const withMhz = cs.filter(c => c.mhz), mhz = withMhz.length ? withMhz.reduce((s, c) => s + c.mhz, 0) / withMhz.length : 0;
+    const on = cs.every(c => sel.includes(c.n));
+    const pts = avg.map((v, i) => `${(i/(H-1)*100).toFixed(1)},${(64 - Math.min(v, 100)/100*58).toFixed(1)}`);
+    return `<div class="kcell cgtile${on ? ' sel' : ''}${tpinned('cpugroup', m.id, g.name) ? ' pinned' : ''}" data-cgroup="${esc(g.name)}"><button type="button" class="tsel" data-lgroup="${esc(g.cpus.join(','))}" aria-pressed="${on}" aria-label="${esc(g.name)}, average ${pct(now)}"></button>`
+      + `<span class="trow"><span class="kn">${esc(g.name)}${tpinBtn('cpugroup', m.id, g.name)}</span><span class="kb">${pct(now)}</span></span>`
+      + `<span class="km">${cs.length} processors · CPUs ${cpuRanges(g.cpus)}</span><span class="ks">${mhz ? 'average ' + (mhz / 1000).toFixed(2) + ' GHz' : '&nbsp;'}</span>`
+      + `<svg viewBox="0 0 100 64" preserveAspectRatio="none" aria-hidden="true"><path d="M0,64L${pts.join('L')}L100,64Z" fill="var(--accent-bg)" fill-opacity=".35"/><polyline points="${pts.join(' ')}" fill="none" stroke="var(--accent)" stroke-width="1.5" vector-effect="non-scaling-stroke"/></svg></div>`;
+  }).join('');
+  return `${head}<div class="kgrid cgrid">${tiles}</div></section>`;
 }
 
 /* ---------- views ---------- */
@@ -988,9 +1046,9 @@ function machineView(m){
   let out = head;
   if (m.status === 'hostonly') out += noteHTML(`<b>Seen from its host.</b> ${esc(m.name)} can’t be reached directly, so this is what ${esc(host ? host.name : 'its host')} sees of it. <button type="button" class="linkbtn" data-retry="${esc(m.id)}">Retry</button>`);
   if (m.note) out += noteHTML(`<b>${esc(m.note.label)}</b> ${esc(m.note.text)}`);
-  const cpuHead = S.metric === 'cpu' ? cpuToggle() : S.metric === 'gpu' && m.gpus.length ? gpuToggle() : S.metric === 'disk' ? diskToggle() : S.metric === 'net' ? ifToggle() : '';
-  const graph = (S.metric === 'cpu' && S.cpuView === 'logical') || (S.metric === 'gpu' && S.gpuView === 'each' && m.gpus.length) || (S.metric === 'disk' && S.diskView === 'each') || (S.metric === 'net' && S.ifView === 'each') ? '' : graphCard(mlabel(S.metric), S.metric === 'gpu' && m.gpus.length > 1 ? `all ${m.gpus.length} GPUs, by type` : 'by type, stacked', series, graphMax(capOf(m, S.metric), series, S.metric), S.metric, cpuHead);
-  const alt = S.metric === 'gpu' ? gpuEachCard(m) : S.metric === 'disk' ? diskEachCard(m) : S.metric === 'net' ? ifEachCard(m) : logicalCard(m);
+  const cv = cpuViewOf(m), cpuHead = S.metric === 'cpu' ? cpuToggle(m) : S.metric === 'gpu' && m.gpus.length ? gpuToggle() : S.metric === 'disk' ? diskToggle() : S.metric === 'net' ? ifToggle() : '';
+  const graph = (S.metric === 'cpu' && cv !== 'type') || (S.metric === 'gpu' && S.gpuView === 'each' && m.gpus.length) || (S.metric === 'disk' && S.diskView === 'each') || (S.metric === 'net' && S.ifView === 'each') ? '' : graphCard(mlabel(S.metric), S.metric === 'gpu' && m.gpus.length > 1 ? `all ${m.gpus.length} GPUs, by type` : 'by type, stacked', series, graphMax(capOf(m, S.metric), series, S.metric), S.metric, cpuHead);
+  const alt = S.metric === 'gpu' ? gpuEachCard(m) : S.metric === 'disk' ? diskEachCard(m) : S.metric === 'net' ? ifEachCard(m) : cv === 'groups' ? cpuGroupsCard(m) : logicalCard(m);
   out += `<div class="grid2">${whereCard(m.id, m.parent ? 'Where this VM’s usage goes' : 'Where this machine’s usage goes')}${graph || alt}</div>`;
   if (!graph) out += S.metric === 'gpu' ? gpuSelCard(m) : S.metric === 'disk' ? diskSelCard(m) : S.metric === 'net' ? ifSelCard(m) : cpuSelCard(m);
   if (graph === '' ) {} // logical shown inline
@@ -1346,7 +1404,7 @@ function renderMain(){
   let refocus = null, refocusAt = 0, selStart = null, selStop = null, selDir;   // selStop: not selEnd, the selection helper above
   if (a && main.contains(a)){
     if (a.id) { refocus = '#' + a.id; selStart = a.selectionStart; selStop = a.selectionEnd; selDir = a.selectionDirection; }
-    else if (a.dataset) for (const k of ['select', 'mode', 'sort', 'pin', 'cpuview', 'netsel', 'gtoggle', 'gall', 'tilesort', 'lcpu', 'lgroup', 'tpin', 'cardfold']) if (a.dataset[k] != null){ refocus = `[data-${k}="${CSS.escape(a.dataset[k])}"]`; break; }
+    else if (a.dataset) for (const k of ['select', 'mode', 'sort', 'pin', 'cpuview', 'netsel', 'gtoggle', 'gall', 'tilesort', 'lcpu', 'lgroup', 'tpin', 'cardfold', 'lgfold']) if (a.dataset[k] != null){ refocus = `[data-${k}="${CSS.escape(a.dataset[k])}"]`; break; }
     if (refocus) refocusAt = Math.max(0, [...main.querySelectorAll(refocus)].indexOf(a));   // a view can draw the same button twice (a card and a table)
   }
   let html;
@@ -1535,6 +1593,10 @@ document.addEventListener('click', e => {
   const cf = e.target.closest('[data-cardfold]'); if (cf){ foldCard(cf.dataset.cardfold); return; }
   const chd = e.target.closest('#main section.card[data-card] > .card-h');
   if (chd && !e.target.closest('button, a, input, select, label, .seg, [data-tip]') && getSelection().isCollapsed){ foldCard(chd.parentElement.dataset.card); return; }
+  // a CPU group's chevron, or its header's empty area, folds the group to that line or unfolds it (#356)
+  const lf = e.target.closest('[data-lgfold]'); if (lf){ const m = nodes[S.sel]; if (m) foldCpuGroup(m.id, lf.dataset.lgfold); return; }
+  const lgh = e.target.closest('#main .cgroup > .lgh');
+  if (lgh && !e.target.closest('button, a, input, select, label') && getSelection().isCollapsed){ const m = nodes[S.sel]; if (m) foldCpuGroup(m.id, lgh.parentElement.dataset.cgroup); return; }
   const tp = e.target.closest('[data-tpin]'); if (tp){ e.stopPropagation(); toggleTilePin(tp.dataset.tpin); return; }
   const ap = e.target.closest('[data-addpin]'); if (ap){ PICK.open ? closePicker(false) : openPicker(); return; }
   const st = e.target.closest('[data-settings]'); if (st){ openSettings(); return; }
@@ -1661,8 +1723,8 @@ async function refreshNow(){
     const jobs = [];
     const shown = shownDetails();
     if (shown){ const mid = procMachineFor(shown); if (mid) jobs.push(fetch('/api/procs?machine=' + encodeURIComponent(mid) + procsScope(shown, mid), {cache:'no-store'}).then(r => r.json()).then(d => takeProcs(mid, d))); }
-    if (S.view !== 'details' && !S.detailsDocked && n && n.kind === 'machine' && S.metric === 'cpu' && S.cpuView === 'logical' && cpuSel(n).length && n.status === 'ok') jobs.push(fetch('/api/procs?machine=' + encodeURIComponent(n.id) + '&docker=0', {cache:'no-store'}).then(r => r.json()).then(d => takeProcs(n.id, d)));
-    if (S.view !== 'details' && n && n.kind === 'machine' && S.metric === 'cpu' && S.cpuView === 'logical') jobs.push(fetch('/api/cpus?machine=' + encodeURIComponent(n.id), {cache:'no-store'}).then(r => r.json()).then(d => { CPUS[n.id] = d; }));
+    if (S.view !== 'details' && !S.detailsDocked && n && n.kind === 'machine' && S.metric === 'cpu' && cpuViewOf(n) !== 'type' && cpuSel(n).length && n.status === 'ok') jobs.push(fetch('/api/procs?machine=' + encodeURIComponent(n.id) + '&docker=0', {cache:'no-store'}).then(r => r.json()).then(d => takeProcs(n.id, d)));
+    if (S.view !== 'details' && n && n.kind === 'machine' && S.metric === 'cpu' && cpuViewOf(n) !== 'type') jobs.push(fetch('/api/cpus?machine=' + encodeURIComponent(n.id), {cache:'no-store'}).then(r => r.json()).then(d => { CPUS[n.id] = d; }));
     const nm = n && n.kind === 'machine' ? n : null;
     // Each interface / Each disk shows nm's; Details filtered by a disk or interface pick needs its machine's to tell whether that's still there.
     const dn = shownDetails(), dmid = dn && procMachineFor(dn), lists = (shown, pick) => [...new Set([shown && nm ? nm.id : null, pick && pick.mid === dmid && pick.names.length ? dmid : null].filter(Boolean))];
@@ -2641,6 +2703,8 @@ function ctxFor(t){
   }
   const gh = t.closest('.ggroup .lgh');
   if (gh){ const g = gh.closest('.ggroup'), m = nodes[S.sel], gi = m ? m.gpus.findIndex(x => x.key === g.dataset.gpu) : -1; return {title:`GPU ${gi}`, items:[...selItems(gh.querySelector('[data-gsel]'), 'GPU ' + gi), pinItem(gh, 'GPU ' + gi)]}; }
+  const cgt = t.closest('.cgtile');
+  if (cgt){ const name = cgt.dataset.cgroup; return {title:name, items:[...selItems(cgt.querySelector('[data-lgroup]'), name), pinItem(cgt, name)]}; }
   const lg = t.closest('.lgh');
   if (lg && lg.querySelector('[data-lgroup]')){ const name = lg.querySelector('[data-lgroup]').textContent.trim(); return {title:name, items:[...selItems(lg.querySelector('[data-lgroup]'), name), pinItem(lg, name)]}; }
   for (const [attr, what] of [['lcpu', v => 'CPU ' + v], ['gsel', v => 'GPU ' + v.replace('gpu', '')], ['dsel', v => v], ['isel', v => v]]){

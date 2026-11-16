@@ -55,7 +55,8 @@ a page folds to its title line from the chevron in its header (or a click on the
 stays folded on every page, through restarts, until you unfold it.
 
 **Hardware, up close.** Logical processors one graph each, grouped by CCD, P/E cores or Apple core
-clusters. Each GPU as a group of live tiles, like Task Manager: 3D, compute, copy, video encode and decode,
+clusters; each group folds to its header line, and **Each CCD** (Each core type, Each cluster) draws just
+one graph per group, its processors' average. Each GPU as a group of live tiles, like Task Manager: 3D, compute, copy, video encode and decode,
 VRAM and shared memory, temperature, power, clocks and fan, for NVIDIA, AMD, Intel and Apple GPUs. Each
 disk and each interface. Pick any of them to see just what runs there.
 

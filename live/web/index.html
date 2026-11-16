@@ -303,6 +303,8 @@ main{flex:1;min-width:0;overflow:auto;background:var(--win)}
 .lgroups{display:flex;flex-direction:column;gap:14px;margin-top:6px}
 .lgh{display:flex;align-items:baseline;gap:10px;font-size:12.5px;color:var(--ink-3);margin-bottom:6px}
 .lgh b{color:var(--ink);font-weight:600;font-size:13px}
+.lgh .lgfold{width:18px;height:18px;align-self:center;margin:0 -6px 0 -4px}
+.cgroup.folded .lgh{margin-bottom:0}
 .lgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(86px,100%),1fr));gap:6px}
 .lcell{position:relative;height:56px;border:1px solid var(--line);border-radius:7px;background:var(--card-2);overflow:hidden}
 .lcell svg{position:absolute;inset:0;width:100%;height:100%}
@@ -534,6 +536,7 @@ html.native .setbtn{height:32px}
 .lcell{height:78px}.lcell svg{height:30px}
 .gcell{height:150px}.gcell svg{height:62px}
 .kcell{height:146px}.kcell svg{height:44px}
+.cgtile{height:186px}.cgtile svg{height:104px}   /* Each CCD (#356): a few groups, each a taller graph of its average */
 .trow{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
 .lcell .lt,.lcell .lv,.lcell .lm,.gcell .gk,.gcell .gv,.gcell .gn,.gcell .gm,.kcell .kn,.kcell .kb,.kcell .km,.kcell .ks,.kcell .kr{position:static}
 .lcell{gap:1px}
