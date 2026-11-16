@@ -265,10 +265,10 @@ class VirtualizationVms(unittest.TestCase):
     def test_docker_desktops_vm_is_not_a_vm_and_utm_vms_are_named(self):
         mac = Mac(dict(ps(*self.PROCS), **self.FILES))
         snap = mac.collector(self).snapshot()
-        self.assertEqual(snap["vms"], [
-            {"name": "fleet-lab", "u": [0.0, 1.0, 0.0, 0.0, 0.0], "running": True, "ifs": [], "cpus": ""},
-            {"name": "VM 700", "u": [0.0, 0.5, 0.0, 0.0, 0.0], "running": True, "ifs": [], "cpus": ""},
-            {"name": "nas-lab", "u": [0.0, 0.25, 0.0, 0.0, 0.0], "running": True, "ifs": [], "cpus": ""},
+        self.assertEqual(snap["vms"], [   # a Mac sees its VMs' CPU and memory, not their disk or network (#300)
+            {"name": "fleet-lab", "u": [0.0, 1.0, 0.0, 0.0, 0.0], "running": True, "ifs": [], "cpus": "", "measured": [0, 1]},
+            {"name": "VM 700", "u": [0.0, 0.5, 0.0, 0.0, 0.0], "running": True, "ifs": [], "cpus": "", "measured": [0, 1]},
+            {"name": "nas-lab", "u": [0.0, 0.25, 0.0, 0.0, 0.0], "running": True, "ifs": [], "cpus": "", "measured": [0, 1]},
         ])
         self.assertEqual({p[0]: p[11] for p in snap["procs"]},
                          {1: "base", 400: "base", 500: "dockervm", 600: "vm:fleet-lab", 700: "vm:VM 700", 800: "vm:nas-lab", 900: "base"})

@@ -86,5 +86,45 @@ class NestedVm(unittest.TestCase):
         self.assertEqual(last(s["vms"][0]["base"]["h"]), {"cpu": 4, "mem": 32, "gpu": 0, "disk": 6, "net": 2})
 
 
+class WhatTheHostCannotSee(unittest.TestCase):
+    """A host that can't measure some of a VM's figures says which it measured (measured: positions in METRICS): a
+    Mac sees its VMs' CPU and memory but not their disk or network, WSL's host has no network for it. There the
+    VM's share of its host is what the guest itself reports, and the host's Base system is what's left (#300)."""
+
+    def setUp(self):
+        fl.HIST.d.clear()
+
+    def spec(self, measured, guest_status="ok", guest=True):
+        # the host does 20 MB/s of disk and 5 of network in all; inside, the VM does 1.5 cores, 6 GB, 8 MB/s and 3 MB/s
+        vm_entry = {"name": "vm1", "u": [4, 32, 0, 0, 0], "running": True, "ifs": [], "cpus": ""}
+        if measured != "absent":
+            vm_entry["measured"] = measured
+        host = machine({"id": "host", "name": "lab-host"}, view([10, 40, 0, 20, 5], [16, 64, 0, 500, 125], vms=[vm_entry]))
+        vm = machine({"id": "vm1", "name": "vm1", "vm_on": "host"}, view([1.5, 6, 0, 8, 3], [4, 32, 0, 500, 125]) if guest else None)
+        vm.status = guest_status if guest else vm.status
+        s = fleet(host, vm).machine_spec(host, record=True)
+        return last(s["vms"][0]["hostside"]), last(s["base"]["h"])
+
+    def test_a_macs_vm_takes_its_disk_and_network_from_inside(self):
+        self.assertEqual(self.spec([0, 1]), ({"cpu": 4, "mem": 32, "gpu": 0, "disk": 8, "net": 3}, {"cpu": 6, "mem": 8, "gpu": 0, "disk": 12, "net": 2}))
+
+    def test_wsls_takes_only_its_network_from_inside(self):
+        self.assertEqual(self.spec([0, 1, 2, 3]), ({"cpu": 4, "mem": 32, "gpu": 0, "disk": 0, "net": 3}, {"cpu": 6, "mem": 8, "gpu": 0, "disk": 20, "net": 2}))
+
+    def test_a_host_that_measures_everything_control(self):
+        for measured in ([0, 1, 2, 3, 4], "absent", "garbage", {"0": 1}):
+            with self.subTest(measured=measured):
+                hs, base = self.spec(measured)
+                self.assertEqual(hs, {"cpu": 4, "mem": 32, "gpu": 0, "disk": 0, "net": 0})
+        # a list names what was measured; what isn't a position in it names nothing
+        self.assertEqual(self.spec([True, "3", None, 1])[0], {"cpu": 1.5, "mem": 32, "gpu": 0, "disk": 8, "net": 3})
+
+    def test_a_guest_that_isnt_live_leaves_the_hosts_figures_control(self):
+        for status in ("offline", "connecting", "disabled"):
+            with self.subTest(status=status):
+                self.assertEqual(self.spec([0, 1], guest_status=status)[0], {"cpu": 4, "mem": 32, "gpu": 0, "disk": 0, "net": 0})
+        self.assertEqual(self.spec([0, 1], guest=False)[0], {"cpu": 4, "mem": 32, "gpu": 0, "disk": 0, "net": 0})
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -614,7 +614,9 @@ class Machine:
         for name, v in vmmap.items():
             u = vm_u.get(name, [0.0] * 5)
             u[4] = sum(x["rx"] + x["tx"] for x in ifs if x["name"] in [i["if"] for i in v["ifs"]])
-            vms.append({"name": name, "u": u, "gu": vm_g.get(name, [0.0] * len(gpus)), "running": True, "ifs": v["ifs"], "cpus": (r.get("vm_cpus") or {}).get(name, "")})
+            # measured: which of u the host sees (#300); without a tap on the host (a NIC passed through) not its network
+            vms.append({"name": name, "u": u, "gu": vm_g.get(name, [0.0] * len(gpus)), "running": True, "ifs": v["ifs"], "cpus": (r.get("vm_cpus") or {}).get(name, ""),
+                        "measured": [0, 1, 2, 3, 4] if v["ifs"] else [0, 1, 2, 3]})
         # Scheduled jobs: crontab lines (deduplicated) and systemd timers.
         jobs, seen = [], set()
         for c in r.get("cron", []):
@@ -971,7 +973,8 @@ class Machine:
         running = [w["name"] for w in r.get("wsl", []) if w.get("state") == "Running"]
         vms = []
         if r.get("wsl"):
-            vms.append({"name": "WSL", "u": vm_u, "gu": vm_g, "running": bool(running), "ifs": [], "distros": r.get("wsl", []), "cpus": ""})
+            vms.append({"name": "WSL", "u": vm_u, "gu": vm_g, "running": bool(running), "ifs": [], "distros": r.get("wsl", []), "cpus": "",
+                        "measured": [0, 1, 2, 3]})   # vmmemWSL's CPU, memory, GPU and I/O; its network isn't seen (#300)
         jobs = []
         for tk in r.get("tasks", []):
             trig = ", ".join(tk.get("triggers") or []) or "on demand"
@@ -1019,6 +1022,23 @@ def mac_row_ok(p):
             return isinstance(v, list) and all(ok(x, t[0]) for x in v)
         return isinstance(v, t)
     return isinstance(p, list) and len(p) == len(MAC_ROW) and all(ok(v, t) for v, t in zip(p, MAC_ROW))
+
+
+def vm_hostside_u(v, mm):
+    """What a VM costs its host, [cpu, mem, gpu, disk, net]: what the host measured of it (v["u"]), and for a figure
+    the host can't see (v["measured"] leaves it out: a Mac's VMs' disk and network, WSL's network) what the guest
+    itself reports, while it's live (#300). A host that doesn't say measured all five."""
+    u = list(v["u"])
+    seen = v.get("measured")
+    seen = set(range(5)) if not isinstance(seen, list) else {i for i in seen if isinstance(i, int) and not isinstance(i, bool)}
+    if mm is None or seen >= set(range(5)):
+        return u
+    with mm.lock:
+        guest = mm.view if mm.status == "ok" else None
+    if guest:
+        for i in set(range(5)) - seen:
+            u[i] = guest["host"][i]
+    return u
 
 
 def aslist(x):
@@ -1476,7 +1496,8 @@ class MacCollector:
                     p[11] = "dockervm"
                     continue
                 name = m.group(1) if m else own or ("UTM VM" if "utm" in anc else "VM %d" % p[0])
-                acc = vms.setdefault(name, {"name": name, "u": [0.0] * 5, "running": True, "ifs": [], "cpus": ""})
+                # measured: a Mac sees its VMs' CPU and memory (their processes), not their disk or network (#300)
+                acc = vms.setdefault(name, {"name": name, "u": [0.0] * 5, "running": True, "ifs": [], "cpus": "", "measured": [0, 1]})
                 acc["u"][0] += p[5]
                 acc["u"][1] += p[6]
                 p[11] = "vm:" + name
@@ -1699,14 +1720,15 @@ class Fleet:
         nested = {mm.cfg.get("domain", mm.name): mm for mm in self.machines.values() if mm.cfg.get("vm_on") == mid}
         listed = set()
         for v in view["vms"]:
-            for i in range(5):
-                vsum[i] += v["u"][i]
             mm = nested.get(v["name"])
+            u = vm_hostside_u(v, mm)
+            for i in range(5):
+                vsum[i] += u[i]
             if mm:
                 listed.add(v["name"])
                 sub = self.machine_spec(mm, record, vm_hostside={"u": v["u"], "cap": vm_cap(view, v)} if live else None, vm_parent=m if live else None)
                 if live:   # what the host gives it (its QEMU process), as a history, and of each of the host's GPUs
-                    sub["hostside"] = self.leaf(sub["id"] + "/hostside", v["u"], own)
+                    sub["hostside"] = self.leaf(sub["id"] + "/hostside", u, own)
                     sub["hostside_gh"] = self.gpu_leaf(sub["id"] + "/hostside", v.get("gu"), ng, own)
                 elif record:   # not shown while the host isn't live, and kept like the host's own history
                     for key in [sub["id"] + "/hostside"] + ["%s/hostside/__gpu/%d" % (sub["id"], i) for i in range(ng)]:
