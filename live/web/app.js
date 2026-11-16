@@ -2186,9 +2186,10 @@ function gotoItems(){
   for (const x of cmds){ const r = gotoRank(q, x.label, 'command'); if (r >= 0) scored.push([r, x]); }
   return scored.sort((a, b) => b[0] - a[0]).map(x => x[1]).slice(0, 60);
 }
-function renderGoto(){
+// keep: draw the same items in the same order (a pin from the list changes only its pin), see gotoPin
+function renderGoto(keep){
   const box = $('gotolist'); if (!box) return;
-  GOTO.items = gotoItems();
+  if (!keep) GOTO.items = gotoItems();
   GOTO.i = Math.max(0, Math.min(GOTO.i, GOTO.items.length - 1));
   box.innerHTML = GOTO.items.length ? GOTO.items.map((x, i) => {
     const ic = x.n ? icon(iconOf(x.n)) : icon(x.ic || 'chev'), col = x.n ? (x.n.kind === 'machine' ? 'var(--ink-2)' : colOf(x.n)) : 'var(--ink-3)';
@@ -2224,7 +2225,10 @@ function openGoto(){
   $('gotoq').focus();
 }
 function closeGoto(){ const el = $('goto'); if (el) el.remove(); }
-function gotoPin(id){ const was = PINS.includes(id); togglePin(id); renderGoto(); const q = $('gotoq'); if (q) q.focus(); toast(was ? 'Unpinned' : 'Pinned as a space'); }
+// A pin from the list leaves the list as it is while it's open (#296): sorting it again (pinned items go first) would
+// move another item under the highlight and the pointer, so the next ⇧Enter or click would act on that one. A new
+// query sorts it again.
+function gotoPin(id){ const was = PINS.includes(id); togglePin(id); renderGoto(true); const q = $('gotoq'); if (q) q.focus(); toast(was ? 'Unpinned' : 'Pinned as a space'); }
 function runGoto(i){ const x = GOTO.items[i]; if (!x) return; closeGoto(); x.run(); }
 
 

@@ -113,6 +113,46 @@ test('⌘K goes to anything: a machine, a command or a theme', async () => {
   } finally { await p.close(); }
 });
 
+// Pinning from Go to keeps the list as it is while it's open (#296). Pinned items sort first, but sorting again under
+// the highlight, or under the pointer, made the next ⇧Enter or click act on another item. A new query sorts again.
+const GOROWS = `[...document.querySelectorAll('#gotolist .gorow')].map(r => [r.querySelector('.pn span').textContent, r.classList.contains('on'), (r.querySelector('[data-gopin]') || {getAttribute: () => null}).getAttribute('aria-pressed')])`;
+test('pinning from Go to: the highlight and the row under the pointer stay on what was pinned, so pinning again unpins it', async () => {
+  const fx = fixture();
+  const p = await open({sel: 'lx'}, fx);
+  const pins = () => p.waitFor(`!pinsSaves && JSON.stringify(PINS)`).then(JSON.parse);
+  try {
+    await press(p, 'k', {mod: true, code: 'KeyK'});
+    await p.waitFor(`document.activeElement && document.activeElement.id === 'gotoq' && document.querySelector('#gotolist .gorow')`);
+    const before = await p.eval(GOROWS), cmds = before.slice(4);
+    assert.deepEqual(before.slice(0, 4), [['lab-linux', true, 'false'], ['lab-linux-2', false, 'false'], ['lab-mac', false, 'false'], ['lab-windows', false, 'false']]);
+    assert.equal(cmds.length, 8);
+    await press(p, 'ArrowDown'); await press(p, 'ArrowDown');
+    await press(p, 'Enter', {shift: true});
+    assert.deepEqual(await pins(), ['mac']);
+    assert.deepEqual(await p.eval(GOROWS), [['lab-linux', false, 'false'], ['lab-linux-2', false, 'false'], ['lab-mac', true, 'true'], ['lab-windows', false, 'false']].concat(cmds.map(c => [c[0], false, null])));
+    await press(p, 'Enter', {shift: true});
+    assert.deepEqual(await pins(), []);
+    assert.deepEqual((await p.eval(GOROWS)).slice(0, 4), [['lab-linux', false, 'false'], ['lab-linux-2', false, 'false'], ['lab-mac', true, 'false'], ['lab-windows', false, 'false']]);
+    // the mouse: two clicks on the same spot, lab-windows's pin
+    const at = await p.eval(`(() => { const b = [...document.querySelectorAll('#gotolist .gorow')][3].querySelector('[data-gopin]').getBoundingClientRect(); return {x: b.left + b.width / 2, y: b.top + b.height / 2}; })()`);
+    for (const want of [['win'], []]){
+      await p.send('Input.dispatchMouseEvent', {type: 'mouseMoved', x: at.x, y: at.y});
+      await p.send('Input.dispatchMouseEvent', {type: 'mousePressed', x: at.x, y: at.y, button: 'left', buttons: 1, clickCount: 1});
+      await p.send('Input.dispatchMouseEvent', {type: 'mouseReleased', x: at.x, y: at.y, button: 'left', buttons: 0, clickCount: 1});
+      assert.deepEqual(await pins(), want);
+      assert.deepEqual((await p.eval(GOROWS))[3], ['lab-windows', true, String(!!want.length)]);
+    }
+    // a new query sorts again: pinned first
+    await press(p, 'Enter', {shift: true});   // lab-windows, highlighted
+    assert.deepEqual(await pins(), ['win']);
+    await p.eval(`(() => { const i = document.getElementById('gotoq'); i.value = 'lab'; i.dispatchEvent(new Event('input', {bubbles: true})); return true; })()`);
+    await p.waitFor(`document.querySelector('#gotolist .gorow .pn span').textContent === 'lab-windows'`).catch(() => null);
+    assert.deepEqual((await p.eval(GOROWS)).slice(0, 4), [['lab-windows', true, 'true'], ['lab-linux', false, 'false'], ['lab-linux-2', false, 'false'], ['lab-mac', false, 'false']]);
+    assert.deepEqual(JSON.parse(fx.posts.filter(x => x.path === '/api/pins').pop().body), ['win']);
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
 test('⌘N opens the dialog to pin a new space, and the shortcut list says so', async () => {
   const p = await open({sel: 'fleet'});
   try {
