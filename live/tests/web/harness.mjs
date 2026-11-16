@@ -37,7 +37,7 @@ export function startServer(fx){
         const pid = +u.searchParams.get('pid'); fx.procCalls = (fx.procCalls || []).concat([mid + ':' + pid]);
         return json((typeof fx.proc === 'function' ? fx.proc(mid, pid, fx.procCalls.length) : null) || {pid, error: 'no fixture'});
       }
-      if (u.pathname === '/api/config') return json({path: '/dev/null', interval: 3, machines: [], status: {}, terminals: []});
+      if (u.pathname === '/api/config') return json(fx.config || {path: '/dev/null', interval: 3, machines: [], status: {}, terminals: []});
       res.writeHead(404); return res.end();
     }
     const f = path.join(WEB, u.pathname === '/' ? 'index.html' : path.normalize(u.pathname).replace(/^\/+/, ''));
