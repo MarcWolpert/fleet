@@ -444,7 +444,7 @@ function renderGroupsTree(){
   treeHeader();
 }
 function updateTree(){
-  if (S.tree === 'network') return renderNetTree();
+  if (S.tree === 'network') return updateNetTree();
   document.querySelectorAll('[data-val]').forEach(e => { const n = nodes[e.dataset.val]; if (n) e.textContent = rowVal(n); });
   document.querySelectorAll('[data-spark]').forEach(e => { const n = nodes[e.dataset.spark]; if (n) e.firstElementChild.setAttribute('points', sparkPts(n.series[S.metric], 60, 16)); });
   document.querySelectorAll('[data-dot]').forEach(e => { const n = nodes[e.dataset.dot]; if (n) e.classList.toggle('on', !!n.running); });
@@ -488,27 +488,39 @@ function buildNet(){
   return [root];
 }
 function netOpen(n){ return S.open[n.id] !== undefined ? S.open[n.id] : (n.kind === 'tailnet' || (n.kind === 'nmachine' && n.status === 'ok' && n.children.length < 12)); }
-function renderNetTree(){
+// The rows are drawn without their rates. A poll that brings the same rows only fills in the rates, so focus and a
+// click in progress survive it (#157); any other change, and every renderTree, draws the rows anew.
+let netDrawn = null;
+function netTreeHTML(){
   const rootsN = buildNet();
   const rows = [];
   const keep = TF.q ? treeMatches(rootsN, TF.q) : null;
   const entries = groupedWalk(rootsN, n => n.children, n => keep ? n.children.some(c => keep.has(c.id)) : netOpen(n), n => !keep || keep.has(n.id), 'network');
   entries.forEach(e => { if (e.n) rows.push(e); });
-  $('tree').innerHTML = rows.length ? entries.map(e => e.open ? tgroupOpen(e) : e.close ? '</div>' : netRow(e)).join('') : '<div class="side-note">Loading the network…</div>';
+  return rows.length ? entries.map(e => e.open ? tgroupOpen(e) : e.close ? '</div>' : netRow(e)).join('') : '<div class="side-note">Loading the network…</div>';
   function netRow({n, d, pk}){
     const kids = n.children.length > 0, open = kids && netOpen(n);
     const ic = n.kind === 'tailnet' ? 'net' : n.kind === 'nmachine' ? 'desktop' : n.kind === 'ncontainer' ? 'cube' : n.ifkind === 'bridge' ? 'bridge' : n.vm ? 'vm' : 'nic';
     const sub = n.kind === 'nmachine' ? `<i class="sdot ${n.status}" title="${esc(n.status)}"></i>` : n.vm ? `<span class="count">${esc(n.vm)}</span>` : n.dnet && n.kind === 'if' ? `<span class="count">${esc(n.dnet)}</span>` : '';
-    const rate = `<span>↓ ${rateText(n.rx)}</span><span>↑ ${n.kind === 'ncontainer' ? '—' : rateText(n.tx)}</span>`;
     return `<div class="row${S.netSel===n.id?' sel':''}" style="--d:${d}" role="treeitem" aria-level="${d+1}" ${kids?`aria-expanded="${open}"`:''} data-netsel="${esc(n.id)}" data-pk="${esc(pk)}">`
       + `<span class="tdrag" draggable="true" title="Drag into a group" aria-hidden="true">${icon('grip')}</span>`
       + `<button type="button" class="chev${open?' open':''}${kids?'':' leaf'}" ${kids?`data-toggle="${esc(n.id)}" aria-label="${open?'Collapse':'Expand'} ${esc(n.name)}"`:'tabindex="-1" aria-hidden="true"'}>${icon('chev', 2.4)}</button>`
-      + `<span class="ico" style="color:var(--ink-2)">${icon(ic)}</span><button type="button" class="nm" data-netsel="${esc(n.id)}">${esc(n.name)}</button>${sub}<span class="nrate">${rate}</span></div>`;
+      + `<span class="ico" style="color:var(--ink-2)">${icon(ic)}</span><button type="button" class="nm" data-netsel="${esc(n.id)}">${esc(n.name)}</button>${sub}<span class="nrate" data-nrate="${esc(n.id)}"></span></div>`;
   }
+}
+function renderNetTree(html = netTreeHTML()){
+  $('tree').innerHTML = html; netDrawn = {html, first:$('tree').firstElementChild};
+  netRates();
   $('tree-title').innerHTML = 'Network';
   $('tree-col').textContent = '↓ in · ↑ out';
   $('side-note').innerHTML = '';
 }
+function updateNetTree(){
+  const html = netTreeHTML();
+  if (!netDrawn || html !== netDrawn.html || $('tree').firstElementChild !== netDrawn.first) return renderNetTree(html);
+  netRates();
+}
+function netRates(){ document.querySelectorAll('#tree [data-nrate]').forEach(e => { const n = netNodes[e.dataset.nrate]; if (n) e.innerHTML = `<span>↓ ${rateText(n.rx)}</span><span>↑ ${n.kind === 'ncontainer' ? '—' : rateText(n.tx)}</span>`; }); }
 
 /* ---------- cards ---------- */
 function whereRows(key){
