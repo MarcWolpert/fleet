@@ -991,8 +991,34 @@ class Machine:
         }
 
     # ------------------------------------------------------------ macOS (already rates)
+    # A Mac's reader sends rates, so its reading is the view. A remote Mac's is data from another machine, like any
+    # host's: every process row must have the types the server and the page take it to have, or the reading is a bad
+    # reading, as on Linux, where derive_linux can't use a PID that isn't a number (#299).
     def derive_generic(self, r):
+        procs = r.get("procs") if isinstance(r, dict) else None
+        if not isinstance(procs, list):
+            raise ValueError("no process list")
+        for i, p in enumerate(procs):
+            if not mac_row_ok(p):
+                raise ValueError("process row %d isn't one" % i)
         return r
+
+
+# A process row from a Mac's reader: pid, ppid, name, user, state, CPU, memory, disk, GPU, threads, command, owner,
+# last CPU, [GPU positions], [disks], [interfaces], network ("num": an int or a float, never a bool)
+MAC_ROW = (int, int, str, str, str, "num", "num", "num", "num", int, str, str, int, (int,), (str,), (str,), "num")
+
+
+def mac_row_ok(p):
+    def ok(v, t):
+        if isinstance(v, bool):
+            return False
+        if t == "num":
+            return isinstance(v, (int, float))
+        if isinstance(t, tuple):
+            return isinstance(v, list) and all(ok(x, t[0]) for x in v)
+        return isinstance(v, t)
+    return isinstance(p, list) and len(p) == len(MAC_ROW) and all(ok(v, t) for v, t in zip(p, MAC_ROW))
 
 
 def aslist(x):

@@ -118,3 +118,25 @@ test('with GPU picked, the tree\'s GPU tags and the machine\'s GPU card show the
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
 });
+
+// ---- a PID in the lists of processes on a processor, a disk or an interface (#299): a host (a remote Mac's reader
+// runs whatever python3 its account has) can send anything as a PID; it shows as text there too
+test('the processes on a picked processor, disk or interface show a PID the host sent as text', async () => {
+  for (const [what, over, toggle] of [
+    ['cpu', {metric: 'cpu', cpuView: 'logical', cpuSel: {mid: 'lx', cpus: [4]}}, null],
+    ['disk', {metric: 'disk', diskSel: {mid: 'lx', names: ['nvme0n1']}}, 'diskview'],
+    ['net', {metric: 'net', ifSel: {mid: 'lx', names: ['eth0']}}, 'ifview']]){
+    const fx = fixture();
+    fx.procs.lx.procs[0][0] = QUOTE;   // nginx: last ran on CPU 4, did I/O on nvme0n1, talks via eth0
+    const p = await browser.page(fx, {ui: ui(Object.assign({sel: 'lx'}, over))});
+    try {
+      if (toggle){ await p.waitFor(`document.querySelector('[data-${toggle}="each"]')`); await p.click(`[data-${toggle}="each"]`); }
+      await p.waitFor(`[...document.querySelectorAll('h3.cpuproc + * table.tbl tbody tr, section.card table.tbl tbody tr')].some(r => r.cells[0].textContent === 'nginx')`);
+      await sleep(300);
+      const rows = await p.eval(`[...document.querySelectorAll('section.card table.tbl tbody tr')].map(r => [r.cells[0].textContent, r.cells[1].textContent]).filter(r => r[0] === 'nginx')`);
+      assert.ok(rows.some(r => r[1] === QUOTE), what + ': ' + JSON.stringify(rows));
+      assert.deepEqual(await p.eval(`[document.querySelectorAll('section.card table.tbl img').length, window.__xss || []]`), [0, []], what);
+      assert.deepEqual(p.errors, [], what);
+    } finally { await p.close(); }
+  }
+});
