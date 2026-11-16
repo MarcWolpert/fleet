@@ -162,7 +162,7 @@ Fleet keeps what you arrange in the app beside it, so it survives restarts:
 
 | Keys | Does |
 |---|---|
-| ⌘K | Go to anything: machines, VMs, projects, containers, jobs, commands, themes |
+| ⌘K | Go to anything: machines, VMs, projects, containers, jobs, groups (by name or kind: type "squadron"), commands, themes; the pin on a result (or ⇧Enter) pins it |
 | ⌘F or `/` | Find in the panel you're in: filter the tree, find on the page, or filter Details |
 | ⌘[ ⌘] | Back, forward (also the ‹ › buttons and the mouse's side buttons) |
 | ⌘D, ⌘⇧D | Details on and off; dock it beside the overview |

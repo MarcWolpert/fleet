@@ -1854,7 +1854,8 @@ function gotoCommands(){
   ], allThemes().map(t => ({label:'Theme: ' + t.name, ic:'palette', run:() => pickTheme(t.id)})));
 }
 function gotoNodes(){
-  const out = [];
+  buildDivisions();
+  const out = Object.values(nodes).filter(n => n.kind === 'division').map(n => ({n, path:n.parent ? [hostOf(n).name] : []}));
   (function w(list, path){ list.forEach(n => { out.push({n, path}); w(orderedKids(n), path.concat(n.name)); }); })(sortedRoots(), []);
   return out;
 }
@@ -1882,7 +1883,8 @@ function renderGoto(){
     const ic = x.n ? icon(iconOf(x.n)) : icon(x.ic || 'chev'), col = x.n ? (x.n.kind === 'machine' ? 'var(--ink-2)' : colOf(x.n)) : 'var(--ink-3)';
     const where = x.n && x.path.length ? `<span class="pw">${esc(x.path.join(' › '))}</span>` : '';
     return `<div class="grow${i === GOTO.i ? ' on' : ''}" role="option" id="go-${i}" aria-selected="${i === GOTO.i}" data-goi="${i}"><span class="ico" style="color:${col}">${ic}</span>`
-      + `<span class="pn"><span>${esc(x.label)}</span>${where}</span>${x.hint ? `<kbd>${esc(x.hint)}</kbd>` : `<span class="pk">${esc(x.kind)}</span>`}</div>`;
+      + `<span class="pn"><span>${esc(x.label)}</span>${where}</span>${x.hint ? `<kbd>${esc(x.hint)}</kbd>` : `<span class="pk">${esc(x.kind)}</span>`}`
+      + (x.n && x.n.kind !== 'cron' && x.n.kind !== 'cronfolder' ? `<button type="button" class="gopin${PINS.includes(x.n.id) ? ' on' : ''}" data-gopin="${esc(x.n.id)}" aria-pressed="${PINS.includes(x.n.id)}" aria-label="${PINS.includes(x.n.id) ? 'Unpin' : 'Pin'} ${esc(x.label)}" title="Pin as a space (⇧Enter)">${icon('pin')}</button>` : '') + `</div>`;
   }).join('') : `<div class="more">Nothing matches “${esc(GOTO.q)}”.</div>`;
   $('gotoq').setAttribute('aria-activedescendant', GOTO.items.length ? 'go-' + GOTO.i : '');
   const on = box.querySelector('.grow.on'); if (on) on.scrollIntoView({block:'nearest'});
@@ -1893,12 +1895,17 @@ function openGoto(){
   GOTO.q = ''; GOTO.i = 0;
   const el = document.createElement('div'); el.id = 'goto'; el.className = 'sheet-bg goto-bg';
   el.innerHTML = `<div class="goto" role="dialog" aria-modal="true" aria-label="Go to"><div class="pick-h">${icon('search')}<input type="search" id="gotoq" role="combobox" aria-expanded="true" aria-controls="gotolist" aria-autocomplete="list" placeholder="Go to a machine, VM, project, container or job, or type a command" autocomplete="off" spellcheck="false"></div><div class="picklist" id="gotolist" role="listbox"></div><div class="pick-f"><kbd>↑</kbd> <kbd>↓</kbd> to choose · <kbd>Enter</kbd> to go · <kbd>Esc</kbd> to close</div></div>`;
-  el.addEventListener('click', e => { if (e.target === el){ closeGoto(); return; } const r = e.target.closest('[data-goi]'); if (r) runGoto(+r.dataset.goi); });
+  el.addEventListener('click', e => {
+    if (e.target === el){ closeGoto(); return; }
+    const gp = e.target.closest('[data-gopin]'); if (gp){ e.stopPropagation(); gotoPin(gp.dataset.gopin); return; }
+    const r = e.target.closest('[data-goi]'); if (r) runGoto(+r.dataset.goi);
+  });
   el.addEventListener('mousemove', e => { const r = e.target.closest('[data-goi]'); if (r && +r.dataset.goi !== GOTO.i){ GOTO.i = +r.dataset.goi; el.querySelectorAll('.grow').forEach((g, i) => { g.classList.toggle('on', i === GOTO.i); g.setAttribute('aria-selected', i === GOTO.i); }); } });
   el.addEventListener('input', e => { if (e.target.id === 'gotoq'){ GOTO.q = e.target.value; GOTO.i = 0; renderGoto(); } });
   el.addEventListener('keydown', e => {
     if (e.key === 'Escape'){ e.preventDefault(); e.stopPropagation(); closeGoto(); }
     else if (e.key === 'ArrowDown' || e.key === 'ArrowUp'){ e.preventDefault(); const n = GOTO.items.length; if (n){ GOTO.i = (GOTO.i + (e.key === 'ArrowDown' ? 1 : -1) + n) % n; renderGoto(); } }
+    else if (e.key === 'Enter' && e.shiftKey){ e.preventDefault(); const x = GOTO.items[GOTO.i]; if (x && x.n) gotoPin(x.n.id); }
     else if (e.key === 'Enter'){ e.preventDefault(); runGoto(GOTO.i); }
   });
   document.body.appendChild(el);
@@ -1906,6 +1913,7 @@ function openGoto(){
   $('gotoq').focus();
 }
 function closeGoto(){ const el = $('goto'); if (el) el.remove(); }
+function gotoPin(id){ const was = PINS.includes(id); togglePin(id); renderGoto(); const q = $('gotoq'); if (q) q.focus(); toast(was ? 'Unpinned' : 'Pinned as a space'); }
 function runGoto(i){ const x = GOTO.items[i]; if (!x) return; closeGoto(); x.run(); }
 
 
@@ -2056,10 +2064,17 @@ document.addEventListener('focusin', notePanel);
 
 // The tree: matching nodes and their ancestors
 function treeMatches(rootList, q){
-  const want = q.trim().toLowerCase(), keep = new Set();
+  const want = q.trim().toLowerCase(), keep = new Set(), byGroup = new Set();
+  for (const [key, list] of Object.entries(PREFS.tgroups || {})){
+    if (!key.startsWith(treeScope() + '|')) continue;
+    list.forEach(g => {
+      const ms = g.ids.map(id => nodes[id] || netNodes[id]).filter(Boolean);
+      if (g.name.toLowerCase().includes(want) || GKIND[groupKind(ms)][1].includes(want)) g.ids.forEach(id => byGroup.add(id));
+    });
+  }
   (function w(list, path){ list.forEach(n => {
     const kids = n.children || [];
-    if ((n.name || '').toLowerCase().includes(want)){ keep.add(n.id); path.forEach(a => keep.add(a.id)); }
+    if ((n.name || '').toLowerCase().includes(want) || byGroup.has(n.id)){ keep.add(n.id); path.forEach(a => keep.add(a.id)); }
     w(kids, path.concat([n]));
   }); })(rootList, []);
   return keep;
