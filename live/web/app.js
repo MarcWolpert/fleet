@@ -1404,6 +1404,8 @@ document.addEventListener('click', e => {
   if (e.target.closest('[data-mfclose]')){ closeFind(); return; }
   if (e.target.closest('[data-inspclose]')){ closeInspect(); return; }
   const lb = e.target.closest('[data-lookback]'); if (lb){ PREFS = Object.assign({}, PREFS, {cacheLookback:+lb.dataset.lookback}); lastMainHTML = ''; renderMain(); savePrefs('the cache lookback'); return; }
+  const look = e.target.closest('[data-vmlook]');
+  if (look && typeof INSP.pid === 'string'){ INSP.via = look.dataset.vmlook; INSP.data = null; INSP.good = null; INSP.acc = {}; INSP.samples = 0; INSP.secs = 0; INSP.looks = 0; INSP.cacheLooks = []; lastMainHTML = ''; renderMain(); inspectTick(); return; }
   const prow = e.target.closest('.ptbl tbody tr[data-pid]');
   if (prow && !e.target.closest('button, a, input, select, label')){
     const k = prow.dataset.pid;   // a process in Docker Desktop's VM is keyed d:<container>:<pid>
@@ -2147,19 +2149,21 @@ const VERDICT = {cpu:'CPU: it is running most of the time it isn’t idle', cpuw
 function toggleInspect(mid, pid, row){
   if (INSP.pid === pid && INSP.mid === mid){ closeInspect(); return; }
   const tbl = row && row.closest('.ptbl');
-  Object.assign(INSP, {mid, pid, name:'', data:null, good:null, acc:{}, samples:0, secs:0, looks:0, busy:false, cacheLooks:[],
+  Object.assign(INSP, {via:null, mid, pid, name:'', data:null, good:null, acc:{}, samples:0, secs:0, looks:0, busy:false, cacheLooks:[],
     order:tbl ? [...tbl.querySelectorAll('tbody tr[data-pid]')].map(r => +r.dataset.pid) : null,
     gorder:tbl ? [...tbl.querySelectorAll('[data-gtoggle]')].map(b => b.dataset.gtoggle) : null});
   const pr = PROCS.list.find(p => p[0] === pid); INSP.name = pr ? pr[1] : '';
   lastMainHTML = ''; renderMain(); inspectTick();
 }
-function closeInspect(){ if (!INSP.pid) return; Object.assign(INSP, {mid:null, pid:0, order:null, gorder:null, data:null, good:null, acc:{}, looks:0}); lastMainHTML = ''; renderMain(); }
+function closeInspect(){ if (!INSP.pid) return; Object.assign(INSP, {via:null, mid:null, pid:0, order:null, gorder:null, data:null, good:null, acc:{}, looks:0}); lastMainHTML = ''; renderMain(); }
 async function inspectTick(){
-  if (!INSP.pid || INSP.busy || typeof INSP.pid === 'string') return;   // Docker's VM: nothing to ask the server
+  // a process in Docker's VM is looked at only the way you picked (#218): a helper container, or its own container
+  if (!INSP.pid || INSP.busy || (typeof INSP.pid === 'string' && !INSP.via)) return;
   const mid = INSP.mid, pid = INSP.pid;
   INSP.busy = true;
   let d;
-  try { d = await (await fetch(`/api/proc?machine=${encodeURIComponent(mid)}&pid=${pid}`, {cache:'no-store'})).json(); }
+  const q = typeof pid === 'string' ? `key=${encodeURIComponent(pid)}&via=${INSP.via}` : `pid=${pid}`;
+  try { d = await (await fetch(`/api/proc?machine=${encodeURIComponent(mid)}&${q}`, {cache:'no-store'})).json(); }
   catch (e) { d = {pid, error:'Fleet didn’t answer'}; }
   INSP.busy = false;
   if (INSP.pid !== pid || INSP.mid !== mid) return;
@@ -2216,10 +2220,10 @@ function cacheRows(cache){
 }
 function sinceText(t){ const s = Date.now() / 1000 - t; return s < 90 ? Math.round(s) + ' s ago' : s < 5400 ? Math.round(s / 60) + ' min ago' : s < 172800 ? Math.round(s / 3600) + ' h ago' : Math.round(s / 86400) + ' days ago'; }
 function inspectPanel(p){
-  if (typeof INSP.pid === 'string') return vmInspectPanel(p);
+  if (typeof INSP.pid === 'string' && !INSP.via) return vmInspectPanel(p);
   const d = INSP.data, g = INSP.good, name = (g && g.name) || INSP.name || (p && p[1]) || '';
   const close = `<button type="button" class="iconbtn" data-inspclose="1" aria-label="Close" title="Close (Esc)">${icon('x', 2.2)}</button>`;
-  const head = `<div class="insp-h"><div><b>${esc(name)}</b> <span class="mono">PID ${INSP.pid}</span>${g && g.cmdline ? `<div class="insp-cmd mono">${esc(g.cmdline)}</div>` : ''}</div>${close}</div>`;
+  const head = `<div class="insp-h"><div><b>${esc(name)}</b> <span class="mono">PID ${typeof INSP.pid === 'string' ? pidNum(INSP.pid) + ' in Docker’s VM · ' + (INSP.via === 'helper' ? 'through a helper container' : 'inside its container') : INSP.pid}</span>${g && g.cmdline ? `<div class="insp-cmd mono">${esc(g.cmdline)}</div>` : ''}</div>${close}</div>`;
   if (!d) return `<div class="insp">${head}<div class="insp-wait">Looking at it… (about 2 seconds)</div></div>`;
   let note = '';
   if (d.gone) note = noteHTML(`<b>${esc(name || 'This process')} has exited.</b> What Fleet saw before is below.`, 'warn');
@@ -2882,6 +2886,10 @@ function vmInspectPanel(p){
   const rows = [['Runs in', node ? esc(node.name) : '—'], ['User', esc(p[2])], ['State', esc(STATE[String(p[3])[0]] || p[3])], ['CPU now', fmt(p[4], 'cpu')],
     ['Memory', fmt(p[5], 'mem')], ['Threads', String(p[8])], ['Parent PID', String(pidNum(p[11]))]];
   return `<div class="insp">${head}<dl class="dl">${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl>`
-    + noteHTML('<b>Read with docker top, from outside Docker Desktop’s Linux VM,</b> which macOS can’t see into. What it waits on, its cache misses, files and sockets need a look from inside that VM.')
-    + (node && termOk(node) ? `<div class="state-actions">${termBtn(node)}</div>` : '') + `</div>`;
+    + noteHTML('<b>Read with docker top, from outside Docker Desktop’s Linux VM,</b> which macOS can’t see into. What it waits on, its cache misses, files and sockets need a look from inside that VM. Choose how:')
+    + `<div class="vmlook"><div><button type="button" class="btn primary" data-vmlook="helper">${icon('search')}Look with a helper container</button>`
+    + `<span class="sub">A throwaway <code>docker run --rm</code> that can see the VM’s processes (no network), running Fleet’s inspector. Uses the <code>${'python:3.12-slim'}</code> image, pulled once if it isn’t there.</span></div>`
+    + `<div><button type="button" class="btn" data-vmlook="exec">${icon('terminal')}Run it inside ${node ? esc(node.name) : 'its container'}</button>`
+    + `<span class="sub"><code>docker exec</code> runs the same inspector in the process’s own container. It needs python3 there.</span></div>`
+    + (node && termOk(node) ? `<div>${termBtn(node)}</div>` : '') + `</div></div>`;
 }

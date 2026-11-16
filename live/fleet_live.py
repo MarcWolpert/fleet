@@ -2226,6 +2226,90 @@ def inspect_process(m, pid):
     return out
 
 
+# Looking inside a process in Docker Desktop's Linux VM (#218): a throwaway helper container that sees the VM's
+# processes, or Fleet's Linux inspector run inside the process's own container. Either runs inspect_linux.py.
+HELPER_IMAGE = "python:3.12-slim"   # pulled once if it isn't there
+VM_KEY = re.compile(r"^d:([0-9a-f]{12}):([1-9][0-9]{0,9})$")
+EXEC_PRELUDE = """import json, os, sys
+WANT_CMD = %r
+WANT_AGE = %d
+def _fleet_find():
+    # the process inside its container: the same command line, started the same number of seconds ago
+    up, hz, best = float(open("/proc/uptime").read().split()[0]), os.sysconf("SC_CLK_TCK"), None
+    for d in os.listdir("/proc"):
+        if not d.isdigit():
+            continue
+        try:
+            cmd = open("/proc/%%s/cmdline" %% d, "rb").read().replace(b"\\0", b" ").decode("utf-8", "replace").strip()
+            st = open("/proc/%%s/stat" %% d).read()
+            age = up - int(st[st.rindex(")") + 2:].split()[19]) / hz
+        except Exception:
+            continue
+        if cmd == WANT_CMD and (best is None or abs(age - WANT_AGE) < best[0]):
+            best = (abs(age - WANT_AGE), int(d))
+    return best[1] if best and best[0] <= 3 else None
+_p = _fleet_find()
+if _p is None:
+    print(json.dumps({"pid": 0, "error": "Couldn't find that process inside its container."}))
+    sys.exit(0)
+sys.argv = ["-", str(_p), %r]
+"""
+
+
+def parse_vm_key(k):
+    m = VM_KEY.match(k or "")
+    return (m.group(1), int(m.group(2))) if m else None
+
+
+def docker_vm_inspect_cmd(cid, pid, via, args, age):
+    src = open(os.path.join(HERE, "inspect_linux.py"), "rb").read()
+    if via == "helper":
+        return (["docker", "run", "--rm", "-i", "--pid=host", "--cap-add=SYS_PTRACE", "--network=none", "--label", "fleet.helper=inspect",
+                 HELPER_IMAGE, "python3", "-", str(pid), str(INSPECT_SECS)], src)
+    if via == "exec":
+        return ["docker", "exec", "-i", cid, "python3", "-"], (EXEC_PRELUDE % (args, int(age), str(INSPECT_SECS))).encode() + src
+    raise ValueError("no such way to look: %r" % via)
+
+
+def vm_inspect_error(via, text):
+    text = text.strip()
+    if via == "exec" and re.search(r"python3.*(not found|no such file)|executable file not found", text, re.I):
+        return "This container has no python3 to run Fleet's inspector. Look with a helper container instead."
+    return (text.splitlines()[-1].strip() if text else "no answer from Docker")[:300]
+
+
+def inspect_docker_vm(m, cid, pid, via):
+    key = (m.id, cid, pid, via)
+    with INSPECT_LOCK:
+        c = INSPECT_CACHE.get(key)
+        if c and time.time() - c[0] < 1.0:
+            return c[1]
+    try:
+        args, age = "", 0
+        if via == "exec":   # its command line and age, to find it inside its container
+            for line in run(["docker", "top", cid, "-eo", "pid,etimes,args"], timeout=5).splitlines()[1:]:
+                f = line.split(None, 2)
+                if len(f) == 3 and f[0] == str(pid) and f[1].isdigit():
+                    args, age = f[2], int(f[1])
+            if not args:
+                return {"pid": pid, "gone": True}
+        cmd, stdin = docker_vm_inspect_cmd(cid, pid, via, args, age)
+        r = subprocess.run(cmd, input=stdin, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
+        lines = [l for l in r.stdout.decode("utf-8", "replace").splitlines() if l.startswith("{")]
+        if lines:
+            out = json.loads(lines[-1])
+        else:   # docker exec reports a missing command on stdout, docker run on stderr
+            out = {"pid": pid, "error": vm_inspect_error(via, (r.stderr + b"\n" + r.stdout).decode("utf-8", "replace"))}
+    except subprocess.TimeoutExpired:
+        out = {"pid": pid, "error": "Docker took too long to answer"}
+    except Exception as e:
+        out = {"pid": pid, "error": str(e)[:300]}
+    out["machine"], out["t"], out["via"] = m.id, time.time(), via
+    with INSPECT_LOCK:
+        INSPECT_CACHE[key] = (time.time(), out)
+    return out
+
+
 def test_connection(dest, os_name):
     if not SSH_DEST.match(dest or ""):
         return {"ok": False, "output": "That doesn't look like an SSH destination."}
@@ -2471,6 +2555,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return self.send_json(self.fleet.api_disks(q.get("machine", [""])[0]))
         if u.path == "/api/proc":
             m = self.fleet.machines.get(q.get("machine", [""])[0])
+            vk, via = parse_vm_key(q.get("key", [""])[0]), q.get("via", [""])[0]
+            if q.get("key"):   # a process in Docker Desktop's VM, looked at the way the user picked (#218)
+                if not m or not vk or via not in ("helper", "exec") or not (m.cfg.get("kind") == "local" and sys.platform == "darwin"):
+                    return self.send_json({"error": "no such process"})
+                return self.send_json(inspect_docker_vm(m, vk[0], vk[1], via))
             pid = q.get("pid", [""])[0]
             if not m or not pid.isdigit() or not 0 < int(pid) < 1 << 31:
                 return self.send_json({"error": "no such machine or process"})
