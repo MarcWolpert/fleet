@@ -1780,6 +1780,7 @@ const SHORTCUTS = [
   ['Previous or next space', [MODK + SHIFTK + '[', MODK + SHIFTK + ']']],
   ['Move through the tree', ['↑', '↓']],
   ['Collapse or expand; go to the parent', ['←', '→']],
+  ['New space: pick a grouping to pin', [MODK + 'N']],
   ['Pin or unpin the selection as a space', ['P']],
   ['Open a terminal on the selection', [MODK + 'T']],
   ['Bigger, smaller, actual size', [MODK + '+', MODK + '−', MODK + '0']],
@@ -1814,6 +1815,7 @@ function fleetCommand(name, arg){
     case 'space': { const ks = spaceKeys(); if (arg >= 0 && arg < ks.length){ goSpace(ks[arg]); return true; } return false; }
     case 'space-step': { const ks = spaceKeys(), i = Math.max(0, ks.indexOf(S.space)); goSpace(ks[(i + arg + ks.length) % ks.length]); return true; }
     case 'pin': { const n = nodes[S.sel]; if (!n || S.sel === 'fleet') return false; const was = PINS.includes(S.sel); togglePin(S.sel); toast(was ? `Unpinned ${n.name}` : `Pinned ${n.name} as a space`); return true; }
+    case 'newspace': if (overlayOpen() && !PICK.open) return false; if (!PICK.open) openPicker(); return true;
     case 'terminal': { const b = document.querySelector('[data-terminal]'); if (!b){ toast('Select a machine or container to open a terminal on it'); return true; } b.click(); return true; }
     case 'settings': if (!SET.open) openSettings(); return true;
     case 'refresh': refreshNow(); return true;
@@ -1879,6 +1881,7 @@ document.addEventListener('keydown', e => {
     if (k === '/') return run('keys');
     if (k === 'r' && !e.shiftKey) return run('refresh');
     if (k === 't' && !e.shiftKey && !typing) return run('terminal');
+    if (k === 'n' && !e.shiftKey) return run('newspace');
     if (e.code === 'BracketLeft' || e.code === 'BracketRight' || e.key === '[' || e.key === ']'){
       const fwd = e.code === 'BracketRight' || e.key === ']';
       return e.shiftKey ? run('space-step', fwd ? 1 : -1) : run(fwd ? 'fwd' : 'back');

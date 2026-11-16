@@ -112,3 +112,18 @@ test('⌘K goes to anything: a machine, a command or a theme', async () => {
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
 });
+
+test('⌘N opens the dialog to pin a new space, and the shortcut list says so', async () => {
+  const p = await open({sel: 'fleet'});
+  try {
+    await press(p, 'n', {mod: true, code: 'KeyN'});
+    await p.waitFor(`!document.getElementById('picker').hidden && document.activeElement && document.activeElement.id === 'pickq'`);
+    assert.equal(await p.eval(`document.querySelector('[data-addpin]').getAttribute('aria-expanded')`), 'true');
+    await press(p, 'Escape');
+    await p.waitFor(`document.getElementById('picker').hidden`);
+    await press(p, '?');
+    await p.waitFor(`document.getElementById('keys')`);
+    assert.ok(await p.eval(`[...document.querySelectorAll('#keys .keytbl tr')].some(r => /new space/i.test(r.textContent) && /N/.test(r.querySelector('kbd') ? r.textContent : ''))`), 'listed');
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});

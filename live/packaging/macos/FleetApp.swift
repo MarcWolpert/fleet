@@ -261,6 +261,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         spaces.addItem(cmdItem("All Machines", "'space', 0", "1"))
         for n in 2...9 { spaces.addItem(cmdItem("Space \(n)", "'space', \(n - 1)", "\(n)")) }
         spaces.addItem(.separator())
+        spaces.addItem(cmdItem("New Space…", "'newspace'", "n"))
         spaces.addItem(cmdItem("Pin or Unpin Selection (P)", "'pin'", ""))  // a bare P in the page; a menu key would fire while typing
         spaces.addItem(cmdItem("Open Terminal on Selection", "'terminal'", "t"))
         spaceItem.submenu = spaces
