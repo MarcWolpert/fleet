@@ -2,7 +2,7 @@
 """Details for a container on Docker Desktop (a Mac): its processes run in Docker's Linux VM, which
 macOS can't see, so they are read with docker top and keyed d:<container>:<pid>, so the VM's PIDs
 never meet this Mac's (#211)."""
-import importlib.util, os, sys, threading, time, unittest
+import builtins, contextlib, importlib.util, io, json, os, sys, tempfile, threading, time, unittest
 from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -191,6 +191,90 @@ class ProcsAskForWhatTheyShow(unittest.TestCase):
             srv.server_close()
         self.assertEqual(fleet.api_procs.call_args_list, [mock.call("here", scope=None, docker=True), mock.call("here", scope="here/compose/app/web", docker=True),
                                                           mock.call("here", scope=None, docker=False)])
+
+
+HZ, UPTIME = 100, 5000.0
+
+
+def stat_line(pid, comm, ppid, start):
+    """/proc/<pid>/stat: starttime (in clock ticks since boot) is field 22, the 20th after the ") " that ends comm."""
+    return "%d (%s) S %d " % (pid, comm, ppid) + " ".join(["0"] * 17 + [str(start)] + ["0"] * 30) + "\n"
+
+
+def run_exec_finder(procs, pid, top, backwards=False):
+    """Run the prelude docker_vm_inspect_cmd sends with docker exec, as python3 runs it inside the container, against a
+    fake /proc: procs {container pid: (cmdline bytes, comm, ppid, seconds since it started)}. `top` is what docker top
+    said of the container (VM pid, etimes, args), as inspect_docker_vm reads it. Returns the container PID the
+    inspector is then run on, or the error it printed. /proc is listed in name order, or backwards."""
+    out = "PID ELAPSED COMMAND\n" + "".join("%d %d %s\n" % row for row in top)
+    with mock.patch.object(fl, "run", lambda cmd, timeout=10: out), mock.patch.object(fl.subprocess, "run") as sp:
+        sp.return_value = mock.Mock(stdout=b'{"pid": 1}\n', stderr=b"")
+        fl.INSPECT_CACHE.clear()
+        fl.inspect_docker_vm(types_m(), "abc123def456", pid, "exec")
+    stdin = sp.call_args.kwargs["input"].decode()
+    prelude = stdin[:stdin.index(open(os.path.join(LIVE, "inspect_linux.py")).read())]
+    with tempfile.TemporaryDirectory() as root:
+        with open(os.path.join(root, "uptime"), "w") as f:
+            f.write("%.2f 100.00\n" % UPTIME)
+        for p, (cmdline, comm, ppid, age) in procs.items():
+            os.mkdir(os.path.join(root, str(p)))
+            with open(os.path.join(root, str(p), "cmdline"), "wb") as f:
+                f.write(cmdline)
+            with open(os.path.join(root, str(p), "stat"), "w") as f:
+                f.write(stat_line(p, comm, ppid, int(round((UPTIME - age) * HZ))))
+        os.mkdir(os.path.join(root, "self"))
+        real_open, real_listdir = builtins.open, os.listdir
+        moved = lambda path: os.path.join(root, path[len("/proc/"):]) if isinstance(path, str) and path.startswith("/proc/") else path
+        argv, printed = sys.argv, io.StringIO()
+        try:
+            with mock.patch.object(builtins, "open", lambda path, *a, **k: real_open(moved(path), *a, **k)), \
+                    mock.patch.object(os, "listdir", lambda path=".": sorted(real_listdir(root), reverse=backwards) if path == "/proc" else real_listdir(path)), \
+                    mock.patch.object(os, "sysconf", lambda name: HZ if name == "SC_CLK_TCK" else os.sysconf(name)), \
+                    contextlib.redirect_stdout(printed):
+                try:
+                    exec(compile(prelude, "<exec prelude>", "exec"), {"__name__": "__main__"})
+                except SystemExit:
+                    return json.loads(printed.getvalue())["error"]
+            return int(sys.argv[1])
+        finally:
+            sys.argv = argv
+
+
+def types_m():
+    return fl.Machine({"id": "here", "name": "here", "kind": "local"}, 3)
+
+
+GUNI = b"/usr/local/bin/python3\0/usr/local/bin/gunicorn\0-w\0003\0app:app\0"
+GUNI_ARGS = "/usr/local/bin/python3 /usr/local/bin/gunicorn -w 3 app:app"
+# a pre-fork server in its container: the master (7) and its workers (8, 9, 10) share a command line and started
+# within the same second; in Docker's VM they are 3700, 3712, 3713, 3714 (a fork takes the next PID in both)
+PREFORK = {1: (b"/sbin/tini\0--\0gunicorn\0", "tini", 0, 600.0), 7: (GUNI, "gunicorn", 1, 590.2),
+           8: (GUNI, "gunicorn", 7, 590.0), 9: (GUNI, "gunicorn", 7, 590.0), 10: (GUNI, "gunicorn", 7, 590.0)}
+PREFORK_TOP = [(3690, 600, "/sbin/tini -- gunicorn"), (3700, 590, GUNI_ARGS), (3712, 590, GUNI_ARGS), (3713, 590, GUNI_ARGS), (3714, 590, GUNI_ARGS)]
+
+
+class ExecFindsTheProcess(unittest.TestCase):
+    """PR 273 review: docker exec runs inside the container, where the process has another PID. The prelude found it by
+    command line and age, the closest match winning: a pre-fork server's master and workers share both, so a click on
+    the master could inspect a worker, and nothing said so."""
+
+    def test_each_of_a_pre_fork_servers_look_alikes_is_itself(self):
+        got = {vm: run_exec_finder(PREFORK, vm, PREFORK_TOP) for vm in (3700, 3712, 3713, 3714)}
+        self.assertEqual(got, {3700: 7, 3712: 8, 3713: 9, 3714: 10})
+
+    def test_in_any_order_proc_lists_them(self):
+        self.assertEqual({vm: run_exec_finder(PREFORK, vm, PREFORK_TOP, backwards=True) for vm in (3700, 3712, 3713, 3714)},
+                         {3700: 7, 3712: 8, 3713: 9, 3714: 10})
+
+    def test_when_one_came_or_went_since_docker_top_it_does_not_guess(self):
+        gone = {k: v for k, v in PREFORK.items() if k != 8}   # worker 8 exited between docker top and docker exec
+        self.assertEqual(run_exec_finder(gone, 3713, PREFORK_TOP),
+                         "Its container runs other processes just like it, and Fleet couldn't tell which one it is. Look with a helper container instead.")
+
+    def test_nothing_else_a_process_without_look_alikes_is_found_by_its_command_line_and_age(self):
+        procs = {1: (b"/sbin/tini\0--\0node\0server.js\0", "tini", 0, 300.0), 6: (b"node\0server.js\0", "node", 1, 299.4)}
+        top = [(4100, 300, "/sbin/tini -- node server.js"), (4107, 299, "node server.js")]
+        self.assertEqual((run_exec_finder(procs, 4107, top), run_exec_finder(procs, 4100, top)), (6, 1))
 
 
 class LookInside(unittest.TestCase):

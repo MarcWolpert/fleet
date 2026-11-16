@@ -2304,7 +2304,7 @@ function inspectPanel(p){
   if (typeof INSP.pid === 'string' && !INSP.via) return vmInspectPanel(p);
   const d = INSP.data, g = INSP.good, name = (g && g.name) || INSP.name || (p && p[1]) || '';
   const close = `<button type="button" class="iconbtn" data-inspclose="1" aria-label="Close" title="Close (Esc)">${icon('x', 2.2)}</button>`;
-  const head = `<div class="insp-h"><div><b>${esc(name)}</b> <span class="mono">PID ${typeof INSP.pid === 'string' ? pidNum(INSP.pid) + ' in Docker’s VM · ' + (INSP.via === 'helper' ? 'through a helper container' : 'inside its container') : INSP.pid}</span>${g && g.cmdline ? `<div class="insp-cmd mono">${esc(g.cmdline)}</div>` : ''}</div>${close}</div>`;
+  const head = `<div class="insp-h"><div><b>${esc(name)}</b> <span class="mono">PID ${typeof INSP.pid === 'string' ? pidNum(INSP.pid) + ' in Docker’s VM · ' + (INSP.via === 'helper' ? 'through a helper container' : (g && Number.isInteger(g.pid) && g.pid > 0 ? `PID ${g.pid} ` : '') + 'inside its container') : INSP.pid}</span>${g && g.cmdline ? `<div class="insp-cmd mono">${esc(g.cmdline)}</div>` : ''}</div>${close}</div>`;
   if (!d) return `<div class="insp">${head}<div class="insp-wait">Looking at it… (about 2 seconds)</div></div>`;
   let note = '';
   if (d.gone) note = noteHTML(`<b>${esc(name || 'This process')} has exited.</b> What Fleet saw before is below.`, 'warn');

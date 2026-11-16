@@ -2263,9 +2263,13 @@ VM_KEY = re.compile(r"^d:([0-9a-f]{12}):([1-9][0-9]{0,9})$")
 EXEC_PRELUDE = """import json, os, sys
 WANT_CMD = %r
 WANT_AGE = %d
+WANT_I, WANT_N = %d, %d
 def _fleet_find():
-    # the process inside its container: the same command line, started the same number of seconds ago
-    up, hz, best = float(open("/proc/uptime").read().split()[0]), os.sysconf("SC_CLK_TCK"), None
+    # The process inside its container, where its PID isn't the VM's: the same command line (NULs as spaces, as docker
+    # top shows it), started as long ago. Look-alikes (a pre-fork server's master and workers share both) are told
+    # apart by their order: docker top saw it as the WANT_I-th of WANT_N, by PID, and a fork takes the next PID in
+    # the VM and in the container alike. If one came or went since, only an unmistakable match will do.
+    up, hz, same = float(open("/proc/uptime").read().split()[0]), os.sysconf("SC_CLK_TCK"), []
     for d in os.listdir("/proc"):
         if not d.isdigit():
             continue
@@ -2275,12 +2279,20 @@ def _fleet_find():
             age = up - int(st[st.rindex(")") + 2:].split()[19]) / hz
         except Exception:
             continue
-        if cmd == WANT_CMD and (best is None or abs(age - WANT_AGE) < best[0]):
-            best = (abs(age - WANT_AGE), int(d))
-    return best[1] if best and best[0] <= 3 else None
-_p = _fleet_find()
+        if cmd == WANT_CMD:
+            same.append((int(d), age))
+    same.sort()
+    near = [p for p, age in same if abs(age - WANT_AGE) <= 3]
+    if len(same) == WANT_N and abs(same[WANT_I][1] - WANT_AGE) <= 3:
+        return same[WANT_I][0], ""
+    if len(near) == 1:
+        return near[0], ""
+    if near:
+        return None, "Its container runs other processes just like it, and Fleet couldn't tell which one it is. Look with a helper container instead."
+    return None, "Couldn't find that process inside its container."
+_p, _why = _fleet_find()
 if _p is None:
-    print(json.dumps({"pid": 0, "error": "Couldn't find that process inside its container."}))
+    print(json.dumps({"pid": 0, "error": _why}))
     sys.exit(0)
 sys.argv = ["-", str(_p), %r]
 """
@@ -2291,13 +2303,15 @@ def parse_vm_key(k):
     return (m.group(1), int(m.group(2))) if m else None
 
 
-def docker_vm_inspect_cmd(cid, pid, via, args, age):
+def docker_vm_inspect_cmd(cid, pid, via, args, age, i=0, n=1):
+    """How to look at VM process `pid` of container `cid`: through a helper that sees the VM, or (exec) inside the
+    container, where it is found by its command line `args` and `age` (s), the i-th of n such by PID (see EXEC_PRELUDE)."""
     src = open(os.path.join(HERE, "inspect_linux.py"), "rb").read()
     if via == "helper":
         return (["docker", "run", "--rm", "-i", "--pid=host", "--cap-add=SYS_PTRACE", "--network=none", "--label", "fleet.helper=inspect",
                  HELPER_IMAGE, "python3", "-", str(pid), str(INSPECT_SECS)], src)
     if via == "exec":
-        return ["docker", "exec", "-i", cid, "python3", "-"], (EXEC_PRELUDE % (args, int(age), str(INSPECT_SECS))).encode() + src
+        return ["docker", "exec", "-i", cid, "python3", "-"], (EXEC_PRELUDE % (args, int(age), int(i), int(n), str(INSPECT_SECS))).encode() + src
     raise ValueError("no such way to look: %r" % via)
 
 
@@ -2315,15 +2329,18 @@ def inspect_docker_vm(m, cid, pid, via):
         if c and time.time() - c[0] < 1.0:
             return c[1]
     try:
-        args, age = "", 0
-        if via == "exec":   # its command line and age, to find it inside its container
-            for line in run(["docker", "top", cid, "-eo", "pid,etimes,args"], timeout=5).splitlines()[1:]:
-                f = line.split(None, 2)
-                if len(f) == 3 and f[0] == str(pid) and f[1].isdigit():
+        args, age, i, n = "", 0, 0, 1
+        if via == "exec":   # its command line and age, and its place among its look-alikes, to find it inside its container
+            rows = [f for f in (line.split(None, 2) for line in run(["docker", "top", cid, "-eo", "pid,etimes,args"], timeout=5).splitlines()[1:])
+                    if len(f) == 3 and f[0].isdigit() and f[1].isdigit()]
+            for f in rows:
+                if f[0] == str(pid):
                     args, age = f[2], int(f[1])
             if not args:
                 return {"pid": pid, "gone": True}
-        cmd, stdin = docker_vm_inspect_cmd(cid, pid, via, args, age)
+            same = sorted(int(f[0]) for f in rows if f[2] == args)
+            i, n = same.index(pid), len(same)
+        cmd, stdin = docker_vm_inspect_cmd(cid, pid, via, args, age, i, n)
         r = subprocess.run(cmd, input=stdin, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
         lines = [l for l in r.stdout.decode("utf-8", "replace").splitlines() if l.startswith("{")]
         if lines:
