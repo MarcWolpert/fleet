@@ -178,7 +178,7 @@ class CompleteView(unittest.TestCase):
             "groups": [{"name": "P-cores", "cpus": [0, 1, 2, 3]}, {"name": "E-cores", "cpus": [4, 5, 6, 7]}],
             "containers": [web, dict(web, id=DB[:12], name="shop-db-1", image="postgres:16", service="db", u=[0.0] * 5)],   # docker stats: "--"
             # the WSL utility VM: vmmemWSL's 2 cores and 6 GB, less the container Docker Desktop runs in it
-            "vms": [{"name": "WSL", "u": [1.5, 5.0, 0.0, 0.0, 0.0], "running": True, "ifs": [], "cpus": "",
+            "vms": [{"name": "WSL", "u": [1.5, 5.0, 0.0, 0.0, 0.0], "gu": [0.0, 0.0], "running": True, "ifs": [], "cpus": "",   # on neither GPU
                      "distros": [{"name": "docker-desktop", "state": "Running", "default": False}, {"name": "Ubuntu", "state": "Running", "default": True}]}],
             "jobs": [{"name": "Backup", "sched": "Daily 02:00", "human": "Daily 02:00", "cmd": "C:\\backup.cmd --all", "src": "\\Fleet\\",
                       "last": "2026-11-14 02:00", "next": "2026-11-16 02:00", "running": False, "state": "Ready", "u": [0.0] * 5}],

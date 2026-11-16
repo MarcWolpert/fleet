@@ -118,13 +118,13 @@ class Attribution(unittest.TestCase):
         self.assertEqual(self.v["cap"], [8, 32.0, 0.0, 500.0, 125.0], "1 Gb/s eth0 is 125 MB/s")
 
     def test_containers(self):
-        self.assertEqual({c["name"]: (r3(c["u"]), c["gkeys"]) for c in self.v["containers"]}, {
+        self.assertEqual({c["name"]: (r3(c["u"]), c["gu"]) for c in self.v["containers"]}, {   # gu: per GPU, and this host has none
             "web-db-1": ([1.0, 1.0, 0.0, 1.0, 0.5], []), "web-app-1": ([0.5, 0.5, 0.0, 0.0, 0.0], []),
             "proxy": ([0.25, 0.0625, 0.0, 0.0, 1.0], []), "metrics": ([0.1, 0.0, 0.0, 0.0, 0.0], [])})
 
     def test_vms(self):
         self.assertEqual([dict(x, u=r3(x["u"])) for x in self.v["vms"]], [
-            {"name": "fleet-lab", "u": [2.0, 4.0, 0.0, 0.0, 0.45], "running": True, "cpus": "4-7",
+            {"name": "fleet-lab", "u": [2.0, 4.0, 0.0, 0.0, 0.45], "gu": [], "running": True, "cpus": "4-7",
              "ifs": [{"if": "vnet0", "source": "br0", "mac": "52:54:00:00:00:01"}]}])
 
     def test_each_process(self):
