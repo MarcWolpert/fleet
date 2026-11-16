@@ -1,16 +1,22 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""The server itself: how it restarts itself, and when it reopens the app window. Nothing here starts, stops
-or replaces a real process or opens a window: os.execv, save_state, stop_collectors and open_app_window are
-replaced by mocks, time runs on a fake clock, and saved state goes to a temporary file.
+"""The server itself: who it answers, how it restarts itself, and when it reopens the app window. Nothing
+here starts, stops or replaces a real process or opens a window: os.execv, save_state, stop_collectors and
+open_app_window are replaced by mocks, time runs on a fake clock, and saved state goes to a temporary file.
+The HTTP tests run the handler on a free port of 127.0.0.1 and send only requests that write nothing.
 
 Run: python3 -m unittest discover -s live/tests -p 'test_*.py'   (or live/tests/run.sh)
 """
 import contextlib
+import email.message
+import http.client
+import http.server
 import io
 import ntpath
 import os
 import sys
 import tempfile
+import threading
+import types
 import unittest
 from unittest import mock
 
@@ -128,6 +134,107 @@ class ReopenIfUnseen(unittest.TestCase):
             fleet_live.LAST_CLIENT[0] = 0.0      # a new process
             fleet_live.load_state(fleet)
         self.assertEqual((fleet_live.LAST_CLIENT[0], out.getvalue()), (SINCE - 30, ""))
+
+
+def allowed(headers, write=False, port=4518):
+    """Handler.allowed() for one request with these headers, to a server on `port`."""
+    h = fleet_live.Handler.__new__(fleet_live.Handler)
+    h.headers = email.message.Message()
+    for k, v in headers.items():
+        h.headers[k] = v
+    h.server = types.SimpleNamespace(server_address=("127.0.0.1", port))
+    return h.allowed(write=write)
+
+
+class Allowed(unittest.TestCase):
+    """Only this computer's own Fleet window gets answers: the Host must be 127.0.0.1 or localhost on Fleet's
+    port (a DNS-rebound name is turned away), and a write also needs no foreign Origin and X-Fleet: 1 (a
+    cross-site page can't send that header without a preflight, which the server doesn't answer)."""
+
+    def test_reads_only_for_fleets_own_host_names(self):
+        hosts = ["127.0.0.1:4518", "localhost:4518", "127.0.0.1", "localhost", "127.0.0.1:4519", "localhost:80", "evil.example:4518",
+                 "fleet.attacker.example", "[::1]:4518", "LOCALHOST:4518", "127.0.0.1:4518.evil.example", "0.0.0.0:4518", ""]
+        got = {h: allowed({"Host": h}) for h in hosts}
+        got["(no Host)"] = allowed({})
+        self.assertEqual({h for h, ok in got.items() if ok}, {"127.0.0.1:4518", "localhost:4518"})
+        self.assertEqual(len(got), len(hosts) + 1)
+
+    def test_the_port_is_the_servers_own(self):
+        self.assertEqual((allowed({"Host": "127.0.0.1:5000"}, port=5000), allowed({"Host": "127.0.0.1:4518"}, port=5000)), (True, False))
+
+    def test_writes_need_fleets_origin_or_none_and_the_fleet_header(self):
+        good = {"Host": "127.0.0.1:4518", "X-Fleet": "1"}
+        cases = {
+            "the app's own fetch": good,
+            "Origin 127.0.0.1": dict(good, Origin="http://127.0.0.1:4518"),
+            "Origin localhost": dict(good, Origin="http://localhost:4518"),
+            "Host localhost, Origin 127.0.0.1": dict(good, Host="localhost:4518", Origin="http://127.0.0.1:4518"),
+            "no X-Fleet": {"Host": "127.0.0.1:4518", "Origin": "http://127.0.0.1:4518"},
+            "X-Fleet: true": dict(good, **{"X-Fleet": "true"}),
+            "X-Fleet: 0": dict(good, **{"X-Fleet": "0"}),
+            "foreign Origin": dict(good, Origin="https://evil.example"),
+            "Origin null": dict(good, Origin="null"),
+            "Origin over https": dict(good, Origin="https://127.0.0.1:4518"),
+            "Origin on another port": dict(good, Origin="http://127.0.0.1:3000"),
+            "foreign Host": dict(good, Host="evil.example:4518", Origin="http://evil.example:4518"),
+            "no Host": {"X-Fleet": "1", "Origin": "http://127.0.0.1:4518"},
+        }
+        got = {k: allowed(h, write=True) for k, h in cases.items()}
+        self.assertEqual({k for k, ok in got.items() if ok}, {"the app's own fetch", "Origin 127.0.0.1", "Origin localhost", "Host localhost, Origin 127.0.0.1"})
+
+    def test_a_read_doesnt_need_the_write_headers(self):
+        self.assertEqual((allowed({"Host": "localhost:4518", "Origin": "https://evil.example"}), allowed({"Host": "localhost:4518"}, write=True)),
+                         (True, False))
+
+
+class Http(unittest.TestCase):
+    """The same rules on the wire: every refused request gets 403 before the handler looks at its path or body."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), fleet_live.Handler)
+        cls.port = cls.srv.server_address[1]
+        threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.srv.shutdown()
+        cls.srv.server_close()
+
+    def send(self, method, path, headers, host="own"):
+        c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        try:
+            c.putrequest(method, path, skip_host=True, skip_accept_encoding=True)
+            if host:
+                c.putheader("Host", "127.0.0.1:%d" % self.port if host == "own" else host)
+            for k, v in headers.items():
+                c.putheader(k, v)
+            c.putheader("Content-Length", "0")
+            c.endheaders()
+            r = c.getresponse()
+            r.read()
+            return r.status
+        finally:
+            c.close()
+
+    def test_reads(self):
+        got = {"own": self.send("GET", "/", {}),
+               "localhost": self.send("GET", "/", {}, host="localhost:%d" % self.port),
+               "foreign": self.send("GET", "/", {}, host="evil.example:%d" % self.port),
+               "wrong port": self.send("GET", "/", {}, host="127.0.0.1:%d" % (self.port + 1)),
+               "no Host": self.send("GET", "/", {}, host=None),
+               "API, foreign": self.send("GET", "/api/fleet", {}, host="evil.example:%d" % self.port)}
+        self.assertEqual(got, {"own": 200, "localhost": 200, "foreign": 403, "wrong port": 403, "no Host": 403, "API, foreign": 403})
+
+    def test_writes(self):
+        own = "http://127.0.0.1:%d" % self.port
+        got = {"passes the gate": self.send("POST", "/api/no-such-thing", {"X-Fleet": "1", "Origin": own}),   # 404: past the checks, nothing written
+               "no X-Fleet": self.send("POST", "/api/pins", {"Origin": own}),
+               "foreign Origin": self.send("POST", "/api/config", {"X-Fleet": "1", "Origin": "https://evil.example"}),
+               "foreign Host": self.send("POST", "/api/prefs", {"X-Fleet": "1"}, host="evil.example:%d" % self.port),
+               "preflight": self.send("OPTIONS", "/api/pins", {"Origin": "https://evil.example", "Access-Control-Request-Method": "POST",
+                                                                "Access-Control-Request-Headers": "x-fleet"})}
+        self.assertEqual(got, {"passes the gate": 404, "no X-Fleet": 403, "foreign Origin": 403, "foreign Host": 403, "preflight": 501})
 
 
 if __name__ == "__main__":
