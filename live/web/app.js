@@ -431,7 +431,11 @@ function cmpNodes(a, b){ const pa = PINS.includes(a.id), pb = PINS.includes(b.id
 function orderedKids(n){ return n.kind === 'machine' ? n.children : n.children.slice().sort(cmpNodes); }
 function sortedRoots(){ return roots.slice().sort(cmpNodes); }
 function treeRoots(){
-  if (S.pinsOnly) return PINS.map(id => nodes[id]).filter(Boolean).sort((a, b) => COLL.compare(a.name, b.name));
+  if (S.pinsOnly){
+    // a pinned Pins only group is already among the pins, as its box around them: not a row of its own too (#296)
+    const boxed = new Set(((PREFS.tgroups || {})['pins|root'] || []).filter(g => g.ids.some(id => PINS.includes(id) && nodes[id])).map(g => 'div:' + g.id));
+    return PINS.filter(id => !boxed.has(id)).map(id => nodes[id]).filter(Boolean).sort((a, b) => COLL.compare(a.name, b.name));
+  }
   return S.space === 'fleet' ? sortedRoots() : (nodes[S.space] ? [nodes[S.space]] : sortedRoots());
 }
 // A group's name field while it's open (renameGroup): the tree isn't redrawn under it, since a poll can bring other

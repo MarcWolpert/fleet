@@ -96,8 +96,13 @@ test("groups in Pins only and inside a group's space: pinned, each reads its sha
       assert.deepEqual(p.errors, []);
       assert.deepEqual(await p.eval(PILLS), ALLPILLS);
       assert.ok(await p.eval(`!!document.querySelector('#spaces [data-addpin]')`));
-      if (pinsOnly) assert.deepEqual(await p.eval(`[...document.querySelectorAll('#tree .row[data-select^="div:"]')].map(r => [r.dataset.select, r.querySelector('[data-val]').textContent])`),
-        [['div:g7', '46%'], ['div:g8', '18%'], ['div:g1', '46%'], ['div:gy', '18%'], ['div:gx', '2.1%'], ['div:g2', '18%']]);   // by name: Inner, Inside, Lab, Mine, Webs, Workloads
+      // Pins only: the machine tree's groups are rows of their own, by name (Inner, Inside, Lab, Workloads); its own
+      // groups, Mine and Webs, are their boxes around their members (#296)
+      if (pinsOnly){
+        assert.deepEqual(await p.eval(`[...document.querySelectorAll('#tree .row[data-select^="div:"]')].map(r => [r.dataset.select, r.querySelector('[data-val]').textContent])`),
+          [['div:g7', '46%'], ['div:g8', '18%'], ['div:g1', '46%'], ['div:g2', '18%']]);
+        assert.deepEqual(await p.eval(`[...document.querySelectorAll('#tree .tgroup[data-tgkey="pins|root"]')].map(g => [g.dataset.tgroup, g.querySelector('.tg-n').textContent])`), [['gy', 'Mine'], ['gx', 'Webs']]);
+      }
       assert.ok(!(await p.eval(`document.body.textContent`)).includes('NaN'));
     } finally { await p.close(); }
   }

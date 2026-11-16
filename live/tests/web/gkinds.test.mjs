@@ -171,3 +171,31 @@ test('Pins only has its own all-up view, like All machines (#57)', async () => {
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
 });
+
+// In Pins only a pinned Pins only group is already there among the pins, as its box: pinning it from its header
+// gives it a space, not a second copy of its members as a row of its own (#296). A group from the machine tree,
+// pinned, has no box in Pins only, so it is a row there; and so is a Pins only group none of whose members is pinned.
+const PROWS = `[...document.querySelectorAll('#tree .row[data-select]')].map(r => (r.closest('.tgroup') ? r.closest('.tgroup').dataset.tgroup + '>' : '') + r.dataset.select)`;
+test('pinning a Pins only group from its header gives it a space and draws its members once', async () => {
+  const fx = fixture(); fx.fleet.pins = ['lx', 'mac'];
+  fx.fleet.prefs = {tgroups: {'pins|root': [{id: 'gp', name: 'Mine', ids: ['lx', 'mac']}], 'machines|root': [{id: 'g1', name: 'Lab', ids: ['lx2', 'win']}]}};
+  const p = await browser.page(fx, {ui: ui({sel: 'fleet', pinsOnly: true, open: {lx: false, lx2: false, mac: false, win: false, 'div:g1': true, 'div:gp': true}})});
+  try {
+    await p.waitFor(`document.querySelector('.tgroup[data-tgroup="gp"] .tg-h [data-pin="div:gp"]')`);
+    assert.deepEqual(await p.eval(PROWS), ['gp>lx', 'gp>mac']);
+    await p.click('.tgroup[data-tgroup="gp"] .tg-h [data-pin="div:gp"]');
+    await p.waitFor(`document.querySelector('#spaces [data-space="div:gp"]') && !pinsSaves`);
+    assert.deepEqual(await p.eval(`PINS`), ['lx', 'mac', 'div:gp']);
+    assert.deepEqual(await p.eval(PROWS), ['gp>lx', 'gp>mac']);
+    assert.equal(await p.eval(`document.querySelector('.tgroup[data-tgroup="gp"] .tg-h [data-pin="div:gp"]').getAttribute('aria-pressed')`), 'true');
+    // the machine tree's group, pinned: a row of its own in Pins only, with its members (after Mine, pinned, #55)
+    await p.eval(`(() => { togglePin('div:g1'); return true; })()`);
+    await p.waitFor(`!pinsSaves && PINS.includes('div:g1')`);
+    assert.deepEqual(await p.eval(PROWS), ['gp>lx', 'gp>mac', 'div:g1', 'lx2', 'win']);
+    // the Pins only group with none of its members pinned any more: a row of its own too
+    await p.eval(`(() => { setPins(['div:gp']); return true; })()`);
+    await p.waitFor(`!pinsSaves && PINS.length === 1`);
+    assert.deepEqual(await p.eval(PROWS), ['div:gp', 'lx', 'mac']);
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
