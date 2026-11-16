@@ -186,6 +186,11 @@ function iconOf(n){
   return 'cube';
 }
 function sparkPts(data, w, h){ const max = Math.max(...data) * 1.15 || 1; return data.map((v, i) => `${(i/(H-1)*w).toFixed(2)},${(h - v/max*h).toFixed(2)}`).join(' '); }
+function sparkSVG(data, color, w, h){ return `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-hidden="true"><polyline points="${sparkPts(data, w, h)}" fill="none" stroke="${color}" stroke-width="1.6" vector-effect="non-scaling-stroke" stroke-linejoin="round"/></svg>`; }
+function legendHTML(withFree){ return `<div class="legend">${TYPES.map(t => `<span><i class="sw" style="background:${TCOL[t.id]}"></i>${t.label}</span>`).join('')}${withFree ? '<span><i class="sw free"></i>Free</span>' : ''}</div>`; }
+function modeSeg(){ return `<div class="seg" role="group" aria-label="Show percentages of"><button type="button" data-mode="cap" aria-pressed="${S.mode==='cap'}">of capacity</button><button type="button" data-mode="used" aria-pressed="${S.mode==='used'}">of what’s in use</button></div>`; }
+function noteHTML(html, cls){ return `<div class="${cls || 'note'}">${icon('info')}<div>${html}</div></div>`; }
+function heroStats(list){ return `<div class="hero-stats">${list.map(s => `<div class="hs"><div class="k">${s.k}</div><div class="v">${s.v}</div><div class="s">${s.s}</div></div>`).join('')}</div>`; }
 // A machine with data keeps showing it while it reconnects ("stale"); only a machine that never
 // reported gets the offline card. Status changes never swap the layout.
 function isLive(n){ return n.status === 'ok'; }
@@ -194,6 +199,7 @@ function isStale(n){ return n.kind === 'machine' && n.status !== 'ok' && n.statu
 function staleFor(n){ return n.lastOk ? Math.max(0, Date.now() / 1000 - n.lastOk) : 0; }
 function statusClass(n){ return isLive(n) ? 'ok' : n.status === 'hostonly' ? 'hostonly' : isStale(n) ? 'stale' : n.status === 'off' ? 'off' : n.status === 'connecting' ? 'connecting' : 'offline'; }
 function statusText(n){ return n.status === 'ok' ? 'live' : n.status === 'off' ? 'off' : n.status === 'hostonly' ? 'seen from host' : isStale(n) ? 'reconnecting' : n.status === 'connecting' ? 'connecting' : 'offline'; }
+function stalePill(n){ return isStale(n) ? `<span class="spill" title="Showing the last reading until ${esc(n.name)} answers again">reconnecting · ${ago(staleFor(n)).replace(' ago', '')}</span>` : ''; }
 function pinBtn(id){ const on = PINS.includes(id); return `<button type="button" class="pinbtn${on ? ' on' : ''}" data-pin="${esc(id)}" aria-pressed="${on}" aria-label="${on ? 'Unpin' : 'Pin'} ${esc(nodes[id] ? nodes[id].name : id)} as a space" title="${on ? 'Unpin from the space bar' : 'Pin to the space bar'}">${icon('pin')}</button>`; }
 
 /* ---------- spaces (All machines + pins) ---------- */
@@ -408,7 +414,275 @@ function renderNetTree(){
   $('side-note').innerHTML = '';
 }
 
-function renderAll(){ renderSpaces(); renderToolbar(); renderTree(); }
+/* ---------- cards ---------- */
+function whereRows(key){
+  const c = ctxOf(key), rows = [];
+  METRICS.forEach(m => {
+    if (m.id === 'gpu' && key !== 'fleet'){
+      const mm = nodes[key];
+      if (!mm.gpus.length){ rows.push({label:'GPU', empty:true}); return; }
+      mm.gpus.forEach((g, gi) => rows.push({label:'GPU ' + gi, sub:g.name, metric:'gpu', bt:gpuBt(mm, g.key), cap:100, tip:`gseg|${key}|${g.key}`}));
+      return;
+    }
+    const cap = c.cap(m.id);
+    if (!cap){ rows.push({label:m.label, empty:true}); return; }
+    rows.push({label:m.label, sub:m.id === 'gpu' ? `all ${cap/100} GPUs` : '', metric:m.id, bt:c.bt(m.id), cap, tip:`seg|${key}|${m.id}`});
+  });
+  return rows;
+}
+function whereCard(key, title){
+  const rows = whereRows(key).map(r => {
+    const lab = `<div class="lab">${esc(r.label)}${r.sub ? `<small title="${esc(r.sub)}">${esc(r.sub)}</small>` : ''}</div>`;
+    if (r.empty) return `<div class="res">${lab}<div class="sbar empty">no ${esc(r.label)} here</div><div class="tot">—</div></div>`;
+    const bt = r.bt, used = sumv(bt), cap = r.cap, m = r.metric;
+    const den = S.mode === 'cap' ? cap : (used || 1);
+    const live = TYPES.filter(t => bt[t.id] > 0);
+    const segs = live.map(t => `<span class="s" style="width:${Math.min(100, bt[t.id]/den*100).toFixed(3)}%;background:${TCOL[t.id]}" data-tip="${esc(r.tip)}|${t.id}"></span>`).join('');
+    const kv = live.map(t => `<span><i class="sw" style="background:${TCOL[t.id]}"></i>${t.short} <b>${pct(bt[t.id]/den*100)}</b></span>`).join('')
+      + (S.mode === 'cap' ? `<span><i class="sw free"></i>Free <b>${pct(Math.max(0, cap - used)/cap*100)}</b></span>` : '');
+    const capNote = m === 'disk' ? ' (peak seen)' : m === 'net' ? ' (link speed)' : '';
+    return `<div class="res">${lab}<div class="sbar" role="img" aria-label="${esc(r.label)}: ${live.map(t => t.label + ' ' + pct(bt[t.id]/den*100)).join(', ') || 'idle'}">${segs}</div><div class="tot">${pct(used/cap*100)} used<small>${fmt(used, m)} of ${capText(cap, m)}${capNote}</small></div><div class="kvs">${kv}</div></div>`;
+  }).join('');
+  return `<section class="card"><div class="card-h"><h2>${title}</h2><span class="grow"></span>${modeSeg()}</div>${legendHTML(S.mode === 'cap')}${rows}</section>`;
+}
+
+let lastGraph = null;
+function graphCard(title, sub, series, yMax, metric, extraHead){
+  lastGraph = {series, metric};
+  const W = 600, GH = 190, x = i => i/(H-1)*W, y = v => GH - Math.min(v, yMax)/yMax*GH;
+  let cum = zero(), paths = '';
+  series.forEach(s => {
+    const lo = cum, hi = cum.map((c, i) => c + s.data[i]);
+    const top = hi.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`), bot = lo.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).reverse();
+    paths += `<path d="M${top.join('L')}L${bot.join('L')}Z" fill="${s.color}" fill-opacity=".92"/><path d="M${top.join('L')}" fill="none" stroke="${series.length > 1 ? 'var(--card)' : s.color}" stroke-width="2" vector-effect="non-scaling-stroke"/>`;
+    cum = hi;
+  });
+  const grid = [1, .75, .5, .25].map(f => `<div class="gl" style="top:${(1-f)*100}%"><span>${metric === 'gpu' ? num(yMax*f) + '%' : num(yMax*f) + (f === 1 ? ' ' + UNIT[metric] : '')}</span></div>`).join('') + `<div class="gl" style="top:100%"><span>0</span></div>`;
+  const cx = S.hover && S.hover.k === 'graph' ? S.hover.idx : null;
+  const legend = series.length > 1 ? `<div class="legend">${series.map(s => `<span><i class="sw" style="background:${s.color}"></i>${esc(s.label)}</span>`).join('')}</div>` : '';
+  return `<section class="card"><div class="card-h"><h2>${title}</h2><span class="sub">${sub}</span><span class="grow"></span>${extraHead || ''}</div>${legend}<div class="graph" data-graph="1" role="img" aria-label="${esc(title)}">${grid}<svg viewBox="0 0 ${W} ${GH}" preserveAspectRatio="none" aria-hidden="true">${paths}</svg><div class="cross" style="${cx != null ? `display:block;left:${cx/(H-1)*100}%` : ''}"></div></div><div class="gx"><span>${ago(WINDOW)}</span><span>now</span></div></section>`;
+}
+function graphMax(capVal, series, metric){
+  if (capVal && (metric === 'cpu' || metric === 'mem' || metric === 'gpu')) return capVal;
+  let mx = 0; for (let i = 0; i < H; i++){ let s = 0; series.forEach(x => s += x.data[i]); mx = Math.max(mx, s); }
+  return niceMax(mx * 1.3);
+}
+function tableCard(title, sub, list){
+  const rows = list.map(({n, d}) => {
+    const share = shareOfHost(n, S.metric), w = isFinite(share) ? Math.min(100, share) : 0;
+    const off = n.kind === 'machine' && n.status !== 'ok' && n.status !== 'hostonly';
+    return `<tr><td style="padding-left:${10 + d*20}px"><button type="button" class="namebtn" data-select="${esc(n.id)}"><span class="ico" style="color:${n.kind==='cron'||n.kind==='cronfolder'?'var(--ink-3)':colOf(n)}">${icon(iconOf(n))}</span>${esc(n.name)}${off ? ` <span class="gtag">${statusText(n)}</span>` : ''}</button></td>`
+      + METRICS.map(m => `<td>${m.id === 'gpu' ? gpuCell(n) : fmt(cur(n, m.id), m.id)}</td>`).join('')
+      + `<td><span class="share" data-tip="child|${esc(n.id)}|${S.metric}"><span class="b"><i style="width:${w}%;background:${TCOL[n.type] || 'var(--accent-bg)'}"></i></span>${pct(share)}</span></td></tr>`;
+  }).join('');
+  return `<section class="card"><div class="card-h"><h2>${title}</h2><span class="sub">${sub}</span></div><div class="scroll-x"><table class="tbl"><thead><tr><th>Name</th>${METRICS.map(m => `<th>${m.label}</th>`).join('')}<th>Share of host · ${mlabel(S.metric)}</th></tr></thead><tbody>${rows}</tbody></table></div></section>`;
+}
+function cronTableCard(folder, title){
+  const rows = orderedKids(folder).map(n => `<tr><td><button type="button" class="namebtn" data-select="${esc(n.id)}"><span class="ico" style="color:var(--ink-3)">${icon('clock')}</span>${esc(n.name)}</button></td><td class="l"><code>${esc(n.job.sched)}</code>${n.job.human && n.job.human !== n.job.sched ? ' · ' + esc(n.job.human) : ''}</td><td class="l"><span class="pill${n.running?' on':''}"><i></i>${n.running ? 'running' : esc(n.job.state || 'idle')}</span></td>`
+    + METRICS.map(m => `<td>${!n.running ? '—' : m.id === 'gpu' ? gpuCell(n) : fmt(cur(n, m.id), m.id)}</td>`).join('') + `<td class="l">${esc(n.job.last || '')}</td></tr>`).join('');
+  return `<section class="card"><div class="card-h"><h2>${title}</h2><span class="sub">usage shows while a job runs</span></div><div class="scroll-x"><table class="tbl"><thead><tr><th>Job</th><th style="text-align:left">Schedule</th><th style="text-align:left">Status</th>${METRICS.map(m => `<th>${m.label}</th>`).join('')}<th style="text-align:left">Last / next</th></tr></thead><tbody>${rows}</tbody></table></div></section>`;
+}
+function gpuCard(m){
+  if (!m.gpus.length) return '';
+  const blocks = m.gpus.map((g, gi) => {
+    const total = sumv(gpuBt(m, g.key)), cons = gpuConsumers(m, g.key);
+    const rows = cons.length ? cons.slice(0, 12).map(c => `<button type="button" class="namebtn" data-select="${esc(c.n.id)}"><span class="ico" style="color:${colOf(c.n)}">${icon(iconOf(c.n))}</span>${esc(c.n.name)}</button><div class="track"><div class="bar" style="width:${Math.min(100, c.v).toFixed(2)}%;background:${colOf(c.n)}" data-tip="gpu|${esc(m.id)}|${g.key}|${esc(c.n.id)}"></div></div><div class="tot">${pct(c.v)}</div>`).join('') : `<div class="sub">nothing is using it</div>`;
+    return `<div class="gpu"><div class="gpu-h"><div><div class="k">GPU ${gi}</div><div class="gn">${esc(g.name)}</div><div class="s">${esc(g.mem || '')}${g.host ? ' · on host ' + esc(g.host.replace('gpu', 'GPU ')) : ''}</div></div><div class="v">${pct(total)}</div></div><div class="rank gpu-rank">${rows}</div></div>`;
+  }).join('');
+  return `<section class="card"><div class="card-h"><h2>${m.gpus.length > 1 ? 'GPUs: what runs on which' : 'GPU: what runs on it'}</h2><span class="sub">% of each GPU</span></div><div class="gpus">${blocks}</div></section>`;
+}
+
+/* ---------- views ---------- */
+function typeSeries(getBt){ return TYPES.map(t => ({label:t.label, color:TCOL[t.id], data:Array.from({length:H}, (_, i) => getBt(i)[t.id])})).filter(s => s.data.some(v => v > 0)); }
+function heroMachineTile(m){ return `<span class="tile ${m.tile}">${icon(m.tile)}</span>`; }
+
+function fleetView(){
+  const c = ctxOf('fleet'), nVm = Object.values(nodes).filter(n => n.kind === 'machine' && n.parent).length;
+  const live = roots.filter(r => isLive(r)).length;
+  const stat = m => ({k:mlabel(m), v:pct(sumv(c.bt(m)) / c.cap(m) * 100), s:`${fmt(sumv(c.bt(m)), m)} of ${capText(c.cap(m), m)}`});
+  const series = typeSeries(i => c.bt(S.metric, i));
+  const fleetUsed = sumv(c.bt(S.metric));
+  const mrows = sortedRoots().map(r => {
+    const bt = byType(r, S.metric), used = sumv(bt), cap = capOf(r, S.metric);
+    const den = S.mode === 'cap' ? cap : (used || 1);
+    const off = !hasData(r);
+    const bar = cap ? `<div class="sbar">${TYPES.filter(t => bt[t.id] > 0).map(t => `<span class="s" style="width:${Math.min(100, bt[t.id]/den*100).toFixed(3)}%;background:${TCOL[t.id]}" data-tip="seg|${esc(r.id)}|${S.metric}|${t.id}"></span>`).join('')}</div>` : `<div class="sbar empty">no ${mlabel(S.metric)}</div>`;
+    return `<div class="mrow"><button type="button" class="mbtn" data-select="${esc(r.id)}"><span class="tile ${r.tile}">${icon(r.tile)}</span><span>${esc(r.name)}</span><i class="sdot ${statusClass(r)}" title="${statusText(r)}"></i></button>${bar}<div class="tot">${!off && cap ? pct(used/cap*100) + ' used' : '—'}<small>${off ? '' : pct(used/(fleetUsed||1)*100) + ' of fleet ' + mlabel(S.metric)}</small></div></div>`;
+  }).join('');
+  return `<div class="hero"><span class="tile fleet">${icon('fleet')}</span><div><h1>All machines</h1><div class="facts"><span>${live} of ${roots.length} machines live</span><span>${nVm} VMs</span><span>${cronCount({children:roots})} scheduled jobs</span><span>${c.cap('cpu')} cores</span><span>${Math.round(c.cap('mem'))} GB RAM</span></div></div>${heroStats([stat('cpu'), stat('mem'), stat('gpu')])}</div>`
+    + `<div class="grid2">${whereCard('fleet', 'Where your fleet’s usage goes')}${graphCard(`Fleet ${mlabel(S.metric)}`, 'live machines, by type', series, graphMax(c.cap(S.metric), series, S.metric), S.metric)}</div>`
+    + `<section class="card"><div class="card-h"><h2>By machine · ${mlabel(S.metric)}</h2><span class="sub">each bar is that machine’s own ${S.mode === 'cap' ? 'capacity' : 'usage'}</span><span class="grow"></span>${modeSeg()}</div>${legendHTML(S.mode === 'cap')}${mrows}</section>`;
+}
+
+function machineView(m){
+  const host = m.parent ? hostOf(m) : null;
+  const ok = true;
+  const stat = k => ({k:mlabel(k), v:capOf(m, k) ? pct(cur(m, k)/capOf(m, k)*100) : '—', s:capOf(m, k) ? `${fmt(cur(m, k), k)} of ${capText(capOf(m, k), k)}` : `no ${mlabel(k)}`});
+  const stats = ok ? [stat('cpu'), stat('mem'), stat('gpu')] : [];
+  if (ok && m.gpus.length > 1) stats[2] = {k:'GPU', v:pct(cur(m, 'gpu') / m.gpus.length), s:m.gpus.map((g, i) => `GPU${i} ${pct(sumv(gpuBt(m, g.key)))}`).join(' · ')};
+  if (host && ok) stats.push({k:'of host ' + mlabel(S.metric), v:pct(shareOfHost(m, S.metric)), s:esc(host.name)});
+  const series = typeSeries(i => byType(m, S.metric, i));
+  const list = [];
+  m.children.forEach(c => { list.push({n:c, d:0}); if (c.kind === 'group') orderedKids(c).forEach(cc => list.push({n:cc, d:1})); });
+  const facts = [m.os, m.cpu_model, m.ncpu ? `${m.ncpu} logical CPUs` : '', capOf(m, 'mem') > 1 ? `${Math.round(capOf(m, 'mem'))} GB RAM` : ''].concat(m.gpus.map((g, i) => `GPU ${i}: ${g.name}`), [m.agent, m.uptime ? `up ${m.uptime}` : '', host ? `VM on ${host.name}` : '']).filter(Boolean);
+  const pinned = PINS.includes(m.id);
+  const head = `<div class="hero">${heroMachineTile(m)}<div><h1>${esc(m.name)} <i class="sdot ${statusClass(m)}" style="display:inline-block;vertical-align:middle"></i>${stalePill(m)}</h1><div class="facts">${facts.map(f => `<span>${esc(f)}</span>`).join('')}</div></div>${heroStats(stats)}<button type="button" class="btn${pinned ? ' on' : ''}" data-pin="${esc(m.id)}" aria-pressed="${pinned}">${icon('pin')}${pinned ? 'Pinned' : 'Pin as space'}</button></div>`;
+  let out = head;
+  if (m.status === 'hostonly') out += noteHTML(`<b>Seen from its host.</b> ${esc(m.name)} can’t be reached directly, so this is what ${esc(host ? host.name : 'its host')} sees of it.`);
+  if (m.note) out += noteHTML(`<b>${esc(m.note.label)}</b> ${esc(m.note.text)}`);
+  const graph = graphCard(mlabel(S.metric), S.metric === 'gpu' && m.gpus.length > 1 ? `all ${m.gpus.length} GPUs, by type` : 'by type, stacked', series, graphMax(capOf(m, S.metric), series, S.metric), S.metric);
+  out += `<div class="grid2">${whereCard(m.id, m.parent ? 'Where this VM’s usage goes' : 'Where this machine’s usage goes')}${graph}</div>`;
+  return out + gpuCard(m) + tableCard('Inside ' + esc(m.name), 'live', list);
+}
+
+function groupView(n){
+  const host = hostOf(n), kids = n.children.slice().sort((a, b) => cur(b, S.metric) - cur(a, S.metric));
+  const max = Math.max(...kids.map(k => cur(k, S.metric)), 1e-9), total = cur(n, S.metric);
+  const kindLabel = n.kind === 'project' ? `Compose project · ${n.children.length} services` : `${n.name} · ${n.children.length}`;
+  const ranks = kids.slice(0, 40).map(k => { const v = cur(k, S.metric); return `<button type="button" class="namebtn" data-select="${esc(k.id)}"><span class="ico" style="color:${colOf(k)}">${icon(iconOf(k))}</span>${esc(k.name)}</button><div class="track"><div class="bar" style="width:${(v/max*100).toFixed(2)}%;background:${TCOL[n.type]}" data-tip="child|${esc(k.id)}|${S.metric}"></div></div><div class="tot">${pct(v/capOf(host, S.metric)*100)}<small>${fmt(v, S.metric)} · ${pct(v/(total||1)*100)} of ${esc(n.name)}</small></div>`; }).join('');
+  const list = [];
+  orderedKids(n).forEach(c => { list.push({n:c, d:0}); if (c.kind === 'project') orderedKids(c).forEach(cc => list.push({n:cc, d:1})); });
+  const series = [{label:n.name, color:TCOL[n.type], data:n.series[S.metric]}];
+  const facts = [kindLabel, `on ${host.name}`].concat(n.meta && n.meta.file ? [n.meta.file] : []).concat([`${cronCount(n)} scheduled jobs`]);
+  const pinned = PINS.includes(n.id);
+  return `<div class="hero"><span class="tile" style="background:color-mix(in srgb, ${TCOL[n.type]} 22%, transparent);color:${TCOL[n.type]}">${icon(iconOf(n))}</span><div><h1>${esc(n.name)}</h1><div class="facts">${facts.map(f => `<span>${esc(f)}</span>`).join('')}</div></div>${heroStats(['cpu','mem','gpu'].map(k => ({k:mlabel(k) + ' of host', v:pct(shareOfHost(n, k)), s:fmt(cur(n, k), k)})))}<button type="button" class="btn${pinned ? ' on' : ''}" data-pin="${esc(n.id)}" aria-pressed="${pinned}">${icon('pin')}${pinned ? 'Pinned' : 'Pin as space'}</button></div>`
+    + `<div class="grid2"><section class="card"><div class="card-h"><h2>Where ${esc(n.name)}’s ${mlabel(S.metric)} goes</h2><span class="sub">% of host${kids.length > 40 ? ' · top 40' : ''}</span></div><div class="rank">${ranks}</div></section>${graphCard(mlabel(S.metric), esc(n.name), series, graphMax(0, series, S.metric), S.metric)}</div>`
+    + tableCard('Inside ' + esc(n.name), 'live', list);
+}
+
+function leafView(n){
+  const host = hostOf(n), cronF = n.children.find(c => c.kind === 'cronfolder');
+  const ref = n.parent, refName = ref.kind === 'machine' ? 'the machine’s use' : esc(ref.name);
+  const tiles = METRICS.map(m => { const v = cur(n, m.id); return `<div class="st" data-tip="child|${esc(n.id)}|${m.id}"><div class="k">${m.label}</div><div class="v">${fmt(v, m.id)}</div><div class="s">${m.id === 'gpu' ? gpuSub(n) : `${pct(v/capOf(host, m.id)*100)} of host · ${pct(v/(cur(ref, m.id)||1)*100)} of ${refName}`}</div>${sparkSVG(n.series[m.id], colOf(n), 120, 34)}</div>`; }).join('');
+  const detail = n.kind === 'base'
+    ? noteHTML('<b>Base system</b> is everything on the host that isn’t a Compose service, a container, a VM or a scheduled job: the OS, daemons and your apps. Open <b>Details</b> to see its processes.')
+    : `<section class="card"><div class="card-h"><h2>Details</h2></div><dl class="dl"><dt>Image</dt><dd><code>${esc(n.meta.image)}</code></dd>${n.meta.project ? `<dt>Compose project</dt><dd>${esc(n.meta.project)}</dd>` : ''}${n.meta.status ? `<dt>Status</dt><dd>${esc(n.meta.status)}</dd>` : ''}<dt>Host</dt><dd>${esc(host.name)}</dd><dt>GPU</dt><dd>${host.gpus.length ? (whichGpuLong(n) || 'none in use') : 'host has no GPU'}</dd></dl></section>`;
+  const series = [{label:n.name, color:colOf(n), data:n.series[S.metric]}];
+  const pinned = PINS.includes(n.id);
+  return `<div class="hero"><span class="tile" style="background:color-mix(in srgb, ${colOf(n)} 22%, transparent);color:${colOf(n)}">${icon(iconOf(n))}</span><div><h1>${esc(n.name)}</h1><div class="facts"><span>${n.kind === 'base' ? 'Base system' : n.kind === 'service' ? 'Compose service' : 'Container'}</span><span>on ${esc(host.name)}</span>${cronF ? `<span>${cronF.children.length} ${esc(cronF.name.toLowerCase())}</span>` : ''}</div></div>${n.kind !== 'base' ? `<button type="button" class="btn${pinned ? ' on' : ''}" data-pin="${esc(n.id)}" aria-pressed="${pinned}" style="margin-left:auto">${icon('pin')}${pinned ? 'Pinned' : 'Pin as space'}</button>` : ''}</div>`
+    + `<div class="tiles">${tiles}</div>`
+    + (cronF ? cronTableCard(cronF, esc(cronF.name) + ' in ' + esc(n.name)) : '')
+    + `<div class="grid2">${graphCard(mlabel(S.metric), cronF ? 'includes its scheduled jobs' : esc(n.name), series, graphMax(0, series, S.metric), S.metric)}${detail}</div>`;
+}
+function cronFolderView(f){
+  const owner = f.parent, host = hostOf(f);
+  const series = [{label:f.name, color:colOf(owner), data:f.series[S.metric]}];
+  return `<div class="hero"><span class="tile" style="background:var(--track);color:var(--ink-2)">${icon('clock')}</span><div><h1>${esc(f.name)} in ${esc(owner.name)}</h1><div class="facts"><span>${f.children.length} jobs</span><span>on ${esc(host.name)}</span></div></div>${heroStats([{k:'running now', v:String(f.children.filter(c => c.running).length), s:`of ${f.children.length}`}])}</div>`
+    + noteHTML(`${esc(f.name)} run inside <b>${esc(owner.name)}</b>, so their usage is already part of its numbers.`)
+    + cronTableCard(f, 'Jobs')
+    + graphCard(`${mlabel(S.metric)} from ${esc(f.name.toLowerCase())}`, 'all jobs here', series, graphMax(0, series, S.metric), S.metric);
+}
+function cronView(n){
+  const j = n.job, owner = ownerOf(n), host = hostOf(n);
+  const tiles = METRICS.map(m => { const v = cur(n, m.id); return `<div class="st" data-tip="child|${esc(n.id)}|${m.id}"><div class="k">${m.label}</div><div class="v">${n.running ? fmt(v, m.id) : '—'}</div><div class="s">${m.id === 'gpu' ? gpuSub(n) : n.running ? `${pct(v/capOf(host, m.id)*100)} of host · ${pct(v/(cur(owner, m.id)||1)*100)} of ${esc(owner.name)}` : 'idle'}</div>${sparkSVG(n.series[m.id], colOf(owner), 120, 34)}</div>`; }).join('');
+  const series = [{label:n.name, color:colOf(owner), data:n.series[S.metric]}];
+  return `<div class="hero"><span class="tile" style="background:var(--track);color:var(--ink-2)">${icon('clock')}</span><div><h1>${esc(n.name)}</h1><div class="facts"><span>${n.parent.name === 'Scheduled tasks' ? 'scheduled task' : 'scheduled job'}</span><span>in ${esc(owner.name)}</span><span>on ${esc(host.name)}</span></div></div><div class="hero-stats"><span class="pill${n.running?' on':''}"><i></i>${n.running ? 'running now' : esc(j.state || 'idle')}</span></div></div>`
+    + `<div class="tiles">${tiles}</div>`
+    + `<div class="grid2"><section class="card"><div class="card-h"><h2>Schedule</h2></div><dl class="dl"><dt>Schedule</dt><dd><code>${esc(j.sched)}</code>${j.human && j.human !== j.sched ? ' · ' + esc(j.human) : ''}</dd><dt>Command</dt><dd><code>${esc(j.cmd)}</code></dd><dt>Source</dt><dd><code>${esc(j.src || '')}</code></dd><dt>Runs inside</dt><dd>${esc(owner.name)} on ${esc(host.name)}</dd><dt>Last / next</dt><dd>${esc(j.last || '—')}</dd></dl></section>`
+    + graphCard(mlabel(S.metric), 'spikes are runs', series, graphMax(0, series, S.metric), S.metric) + `</div>`;
+}
+
+/* ---------- network detail ---------- */
+function netView(){
+  buildNet();
+  const n = netNodes[S.netSel] || netNodes['net:tailnet'];
+  if (!n) return `<div class="hero"><div><h1>Network</h1><div class="facts"><span>Loading…</span></div></div></div>`;
+  const facts = [];
+  if (n.kind === 'nmachine'){ if (n.ts){ facts.push('tailnet ' + (n.ts.ip || '')); facts.push(n.ts.online === false ? 'offline on tailnet' : n.ts.direct ? 'direct connection' : n.ts.relay ? 'relayed via ' + n.ts.relay : ''); } facts.push(statusText({status:n.status})); if (n.vm_on) facts.push('VM'); }
+  if (n.kind === 'if'){ facts.push(n.ifkind); if (n.state) facts.push(n.state); if (n.speed && n.speed !== '-1') facts.push(/^\d+$/.test(n.speed) ? n.speed + ' Mb/s' : n.speed); facts.push(...n.addrs); if (n.desc) facts.push(n.desc); if (n.vm) facts.push('VM: ' + n.vm); if (n.dnet) facts.push('Docker network: ' + n.dnet); }
+  let graph = '';
+  if (n.hrx && n.htx) graph = graphCard('Traffic', '↓ received and ↑ sent, stacked', [{label:'received', color:'var(--t-compose)', data:n.hrx}, {label:'sent', color:'var(--t-vm)', data:n.htx}], graphMax(0, [{data:n.hrx}, {data:n.htx}], 'net'), 'net');
+  const rows = n.children.map(c => `<tr><td><button type="button" class="namebtn" data-netsel="${esc(c.id)}">${esc(c.name)}</button></td><td class="l">${esc(c.kind === 'if' ? c.ifkind : c.kind === 'nmachine' ? statusText({status:c.status}) : c.kind === 'ncontainer' ? 'container' : '')}</td><td class="l">${esc((c.addrs || []).join(', ') || (c.ts && c.ts.ip) || '')}</td><td>${rateText(c.rx)}</td><td>${c.kind === 'ncontainer' ? '—' : rateText(c.tx)}</td></tr>`).join('');
+  return `<div class="hero"><span class="tile fleet">${icon(n.kind === 'tailnet' ? 'net' : n.kind === 'if' ? (n.ifkind === 'bridge' ? 'bridge' : 'nic') : 'desktop')}</span><div><h1>${esc(n.name)}</h1><div class="facts">${facts.filter(Boolean).map(f => `<span>${esc(f)}</span>`).join('')}</div></div>${heroStats([{k:'In', v:rateText(n.rx), s:'received'}, {k:'Out', v:n.kind === 'ncontainer' ? '—' : rateText(n.tx), s:'sent'}])}</div>`
+    + (n.error ? noteHTML(`<b>${esc(statusText({status:n.status}))}.</b> ${esc(n.error)}`, 'warn') : '')
+    + graph
+    + (rows ? `<section class="card"><div class="card-h"><h2>${n.kind === 'tailnet' ? 'Machines' : n.kind === 'nmachine' ? 'Interfaces' : 'Attached'}</h2></div><div class="scroll-x"><table class="tbl"><thead><tr><th>Name</th><th style="text-align:left">Kind</th><th style="text-align:left">Address</th><th>In</th><th>Out</th></tr></thead><tbody>${rows}</tbody></table></div></section>` : '');
+}
+
+/* ---------- main ---------- */
+let lastMainHTML = '';
+function renderMain(){
+  const main = $('main');
+  const a = document.activeElement;
+  let refocus = null, selStart = null;
+  if (a && main.contains(a)){
+    if (a.id) { refocus = '#' + a.id; selStart = a.selectionStart; }
+    else if (a.dataset) for (const k of ['select', 'mode', 'pin', 'netsel']) if (a.dataset[k] != null){ refocus = `[data-${k}="${CSS.escape(a.dataset[k])}"]`; break; }
+  }
+  let html;
+  if (S.tree === 'network') html = netView();
+  else {
+    const n = S.sel === 'fleet' ? null : nodes[S.sel];
+    html = !n ? fleetView() : n.kind === 'machine' ? machineView(n) : n.kind === 'cronfolder' ? cronFolderView(n) : n.kind === 'cron' ? cronView(n) : n.hist ? leafView(n) : groupView(n);
+  }
+  const full = `<div class="wrap">${html}</div>`;
+  if (full === lastMainHTML) return;
+  lastMainHTML = full;
+  main.innerHTML = full;
+  if (refocus){ const e = main.querySelector(refocus); if (e){ e.focus({preventScroll:true}); if (selStart != null && e.setSelectionRange) try { e.setSelectionRange(selStart, selStart); } catch (x) {} } }
+}
+function renderAll(){ renderSpaces(); renderToolbar(); renderTree(); renderMain(); refreshTip(); }
+
+/* ---------- tooltips ---------- */
+const tip = $('tip');
+function tipHTML(h){
+  const p = h.k.split('|');
+  if (h.k === 'graph' && lastGraph){
+    const i = h.idx, g = lastGraph; let tot = 0;
+    const rows = g.series.slice().reverse().map(s => { tot += s.data[i]; return `<div class="r"><span><i class="sw" style="background:${s.color}"></i>${esc(s.label)}</span><b>${fmt(s.data[i], g.metric)}</b></div>`; }).join('');
+    return `<div class="t">${i === H-1 ? 'now' : ago((H-1-i) * INTERVAL)}</div><div class="u">${mlabel(g.metric)}</div>${rows}${g.series.length > 1 ? `<div class="r"><span>Total</span><b>${fmt(tot, g.metric)}</b></div>` : ''}`;
+  }
+  if (p[0] === 'seg'){
+    const c = ctxOf(p[1]), bt = c.bt(p[2]), v = bt[p[3]], used = sumv(bt), cap = c.cap(p[2]);
+    const t = TYPES.find(x => x.id === p[3]);
+    return `<div class="t"><i class="sw" style="background:${TCOL[t.id]}"></i> ${t.label}</div><div class="u">${esc(c.name)} · ${mlabel(p[2])}</div><div class="r"><span>Using</span><b>${fmt(v, p[2])}</b></div><div class="r"><span>of capacity</span><b>${pct(v/cap*100)}</b></div><div class="r"><span>of what’s in use</span><b>${pct(v/(used||1)*100)}</b></div>`;
+  }
+  if (p[0] === 'gseg'){
+    const m = nodes[p[1]]; if (!m) return null;
+    const gi = m.gpus.findIndex(g => g.key === p[2]), bt = gpuBt(m, p[2]), v = bt[p[3]], used = sumv(bt);
+    const t = TYPES.find(x => x.id === p[3]);
+    return `<div class="t"><i class="sw" style="background:${TCOL[t.id]}"></i> ${t.label}</div><div class="u">${esc(m.name)} · GPU ${gi} · ${esc(m.gpus[gi].name)}</div><div class="r"><span>of this GPU</span><b>${pct(v)}</b></div><div class="r"><span>of what’s in use</span><b>${pct(v/(used||1)*100)}</b></div>`;
+  }
+  if (p[0] === 'gpu'){
+    const m = nodes[p[1]], n = nodes[p[3]]; if (!m || !n) return null;
+    const gi = m.gpus.findIndex(g => g.key === p[2]), c = gpuConsumers(m, p[2]).find(x => x.n === n);
+    return `<div class="t">${esc(n.name)}</div><div class="u">GPU ${gi} · ${esc(m.gpus[gi].name)}</div><div class="r"><span>of this GPU</span><b>${pct(c ? c.v : 0)}</b></div>`;
+  }
+  if (p[0] === 'child'){
+    const n = nodes[p[1]]; if (!n) return null;
+    const host = hostOf(n), v = cur(n, p[2]), par = n.kind === 'cron' ? ownerOf(n) : n.parent;
+    return `<div class="t">${esc(n.name)}</div><div class="u">${mlabel(p[2])}${n.kind === 'cron' ? (n.running ? ' · running' : ' · idle') : ''}</div><div class="r"><span>Using</span><b>${fmt(v, p[2])}</b></div><div class="r"><span>of ${esc(host.name)}</span><b>${pct(v/capOf(host, p[2])*100)}</b></div>${par ? `<div class="r"><span>of ${esc(par.name)}</span><b>${pct(v/(cur(par, p[2])||1)*100)}</b></div>` : ''}`;
+  }
+  return null;
+}
+function placeTip(){
+  const r = tip.getBoundingClientRect();
+  let x = S.mx + 16, y = S.my + 16;
+  if (x + r.width > innerWidth - 8) x = S.mx - r.width - 16;
+  if (y + r.height > innerHeight - 8) y = S.my - r.height - 16;
+  tip.style.left = Math.max(8, x) + 'px'; tip.style.top = Math.max(8, y) + 'px';
+}
+function refreshTip(){
+  if (!S.hover){ tip.hidden = true; return; }
+  let h = null; try { h = tipHTML(S.hover); } catch (e) { h = null; }
+  if (!h){ tip.hidden = true; return; }
+  tip.innerHTML = h; tip.hidden = false; placeTip();
+}
+document.addEventListener('mousemove', e => {
+  S.mx = e.clientX; S.my = e.clientY;
+  const g = e.target.closest('[data-graph]');
+  if (g){
+    const r = g.getBoundingClientRect();
+    const idx = Math.max(0, Math.min(H-1, Math.round((e.clientX - r.left) / r.width * (H-1))));
+    S.hover = {k:'graph', idx};
+    const c = g.querySelector('.cross'); c.style.display = 'block'; c.style.left = (idx/(H-1)*100) + '%';
+    refreshTip(); return;
+  }
+  const t = e.target.closest('[data-tip]');
+  if (t){ S.hover = {k:t.dataset.tip}; refreshTip(); return; }
+  if (S.hover){ if (S.hover.k === 'graph') document.querySelectorAll('.cross').forEach(c => c.style.display = 'none'); S.hover = null; refreshTip(); }
+});
+document.addEventListener('mouseleave', () => { S.hover = null; refreshTip(); });
 
 /* ---------- actions ---------- */
 async function api(path, body){
@@ -418,7 +692,7 @@ async function api(path, body){
 }
 async function setPins(pins){
   PINS = pins;
-  renderSpaces(); renderTree(); renderPickerList();
+  renderSpaces(); renderTree(); renderMain(); renderPickerList();
   try { const d = await api('/api/pins', pins); PINS = d.pins || pins; } catch (e) {}
   renderSpaces(); renderPickerList();
 }
@@ -441,11 +715,12 @@ document.addEventListener('click', e => {
   const tg = e.target.closest('[data-toggle]');
   if (tg){ const id = tg.dataset.toggle; const n = nodes[id] || netNodes[id]; S.open[id] = !(nodes[id] ? isOpen(n) : netOpen(n)); save(); renderTree(); return; }
   const po = e.target.closest('[data-pinsonly]'); if (po){ S.pinsOnly = po.dataset.pinsonly === '1'; save(); renderTree(); return; }
-  const tr = e.target.closest('[data-tree]'); if (tr){ S.tree = tr.dataset.tree; if (S.tree === 'network') S.view = 'overview'; save(); renderAll(); refreshNow(); return; }
-  const ns = e.target.closest('[data-netsel]'); if (ns){ S.netSel = ns.dataset.netsel; S.tree = 'network'; save(); renderTree(); renderToolbar(); return; }
+  const tr = e.target.closest('[data-tree]'); if (tr){ S.tree = tr.dataset.tree; if (S.tree === 'network') S.view = 'overview'; lastMainHTML = ''; save(); renderAll(); refreshNow(); return; }
+  const ns = e.target.closest('[data-netsel]'); if (ns){ S.netSel = ns.dataset.netsel; S.tree = 'network'; save(); renderTree(); renderToolbar(); renderMain(); return; }
   const sp = e.target.closest('[data-space]'); if (sp){ goSpace(sp.dataset.space); return; }
   const se = e.target.closest('[data-select]'); if (se){ select(se.dataset.select); return; }
   const me = e.target.closest('[data-metric]'); if (me){ S.metric = me.dataset.metric; S.view = 'overview'; save(); renderAll(); refreshNow(); return; }
+  const mo = e.target.closest('[data-mode]'); if (mo){ S.mode = mo.dataset.mode; save(); renderMain(); return; }
 });
 document.addEventListener('input', e => {
   if (e.target.id === 'pickq'){ PICK.q = e.target.value; renderPickerList(); }
@@ -472,7 +747,7 @@ async function refreshNow(){
     fails = 0; $('conn').hidden = true; $('live').hidden = false;
     const sig = sigOf();
     if (sig !== lastSig){ lastSig = sig; renderAll(); }
-    else { updateSpaces(); updateTree(); }
+    else { updateSpaces(); updateTree(); renderMain(); refreshTip(); }
   } catch (e) {
     fails++;
     if (fails >= 3){ $('conn').hidden = false; $('live').hidden = true; }  // a restart takes a second or two: don't flash
