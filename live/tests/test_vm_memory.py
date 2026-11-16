@@ -66,6 +66,25 @@ class InsideTheGuest(unittest.TestCase):
     def test_no_balloon(self):
         self.assertEqual(collector_fn("guest_mem")(MEMINFO, "nr_free_pages 1\n", [], 4096), [263895004 * KB, 24421508 * KB])
 
+    # Kernels before nr_balloon_pages (6.1, 6.6, 6.8, 6.12: Debian 12 and 13, Ubuntu 24.04, RHEL 9) still count every
+    # page the balloon took and gave back, so the balloon is inflate - deflate (#300)
+    LTS = "nr_free_pages 5205423\nballoon_inflate 50331648\nballoon_deflate 7340032\nballoon_migrate 12\n"
+
+    def test_a_kernel_without_nr_balloon_pages_counts_it_from_inflate_and_deflate(self):
+        self.assertEqual(collector_fn("guest_mem")(MEMINFO, self.LTS, [DEFLATE_ON_OOM], 4096), [263895004 * KB - 42991616 * 4096, 24421508 * KB])
+
+    def test_the_same_kernel_without_deflate_on_oom_control(self):
+        self.assertEqual(collector_fn("guest_mem")(MEMINFO, self.LTS, [NO_DEFLATE], 4096), [263895004 * KB, 24421508 * KB])
+
+    def test_a_balloon_given_all_back_takes_nothing_out(self):
+        for vmstat in ("balloon_inflate 7340032\nballoon_deflate 7340032\n", "balloon_inflate 5\nballoon_deflate 9\n", "balloon_deflate 9\n"):
+            with self.subTest(vmstat=vmstat):
+                self.assertEqual(collector_fn("guest_mem")(MEMINFO, vmstat, [DEFLATE_ON_OOM], 4096), [263895004 * KB, 24421508 * KB])
+
+    def test_nr_balloon_pages_wins_where_the_kernel_has_it(self):
+        vmstat = "nr_balloon_pages 1000\nballoon_inflate 50331648\nballoon_deflate 7340032\n"
+        self.assertEqual(collector_fn("guest_mem")(MEMINFO, vmstat, [DEFLATE_ON_OOM], 4096), [263895004 * KB - 1000 * 4096, 24421508 * KB])
+
 
 if __name__ == "__main__":
     unittest.main()
