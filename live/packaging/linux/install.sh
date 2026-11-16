@@ -13,8 +13,9 @@ PY=$(command -v python3 || true)
 "$PY" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)' || { echo "Fleet needs Python 3.11 or newer; found $("$PY" -V)." >&2; exit 1; }
 
 mkdir -p "$APPDIR/web" "$PREFIX/bin" "$PREFIX/share/applications"
-cp "$SRC/app/fleet_live.py" "$SRC/app/collect_linux.py" "$SRC/app/collect_windows.ps1" "$SRC/app/machines.example.toml" "$APPDIR/"
-cp "$SRC/app/web/index.html" "$SRC/app/web/app.js" "$SRC/app/web/icon.svg" "$APPDIR/web/"
+# everything the package's app/ holds (the server, its collectors and inspectors, the page and its scripts):
+# a list of names here went stale once already (themes.js, the inspectors; issue #52)
+cp -R "$SRC/app/." "$APPDIR/"
 cp "$SRC/COPYING" "$APPDIR/COPYING"
 
 cat > "$PREFIX/bin/fleet" <<EOF
