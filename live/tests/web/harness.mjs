@@ -146,8 +146,11 @@ export async function launch(){
 
 /* ---------- pages ---------- */
 // url: drive a running Fleet Live (e.g. an isolated instance) instead of a fixture server.
-async function openPage(cdp, fx, {ui = null, width = 1500, height = 950, fonts = false, url = null} = {}){
+// native: open the page as Fleet.app does (?native=1), with a stand-in for its message handler that keeps
+// what the page posts to it in window.nativePosts.
+async function openPage(cdp, fx, {ui = null, width = 1500, height = 950, fonts = false, url = null, native = false} = {}){
   const server = url ? {url, close: async () => {}} : await startServer(fx);
+  const start = server.url + (native ? '?native=1' : '');
   const {targetId} = await cdp.send('Target.createTarget', {url: 'about:blank'});
   const {sessionId: s} = await cdp.send('Target.attachToTarget', {targetId, flatten: true});
   const send = (m, p) => cdp.send(m, p, s);
@@ -158,9 +161,10 @@ async function openPage(cdp, fx, {ui = null, width = 1500, height = 950, fonts =
   await send('Emulation.setDeviceMetricsOverride', {width, height, deviceScaleFactor: 1, mobile: false});
   // Seed the saved UI state once per tab; a reload keeps whatever the page saved since.
   if (ui) await send('Page.addScriptToEvaluateOnNewDocument', {source: `if (!sessionStorage.getItem('seeded')){ localStorage.setItem('fleet-live-ui', ${JSON.stringify(JSON.stringify(ui))}); sessionStorage.setItem('seeded', '1'); }`});
+  if (native) await send('Page.addScriptToEvaluateOnNewDocument', {source: `window.nativePosts = []; window.webkit = {messageHandlers: {fleet: {postMessage: m => window.nativePosts.push(JSON.parse(JSON.stringify(m)))}}};`});
   const page = {
     errors, send, url: server.url, on: (method, fn) => cdp.on(method, s, fn),
-    async goto(){ const loaded = new Promise(r => { const off = cdp.on('Page.loadEventFired', s, () => { off(); r(); }); }); await send('Page.navigate', {url: server.url}); await loaded; },
+    async goto(){ const loaded = new Promise(r => { const off = cdp.on('Page.loadEventFired', s, () => { off(); r(); }); }); await send('Page.navigate', {url: start}); await loaded; },
     async reload(){ const loaded = new Promise(r => { const off = cdp.on('Page.loadEventFired', s, () => { off(); r(); }); }); await send('Page.reload', {ignoreCache: true}); await loaded; },
     async eval(expr){
       const r = await send('Runtime.evaluate', {expression: `(async () => (${expr}))()`, awaitPromise: true, returnByValue: true});

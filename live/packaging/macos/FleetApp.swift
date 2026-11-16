@@ -39,12 +39,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     var web: FleetWebView!
     var server: Process?
     var tries = 0
+    var quitting = false
+    let log = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/Fleet.log")
 
     func applicationDidFinishLaunching(_ note: Notification) {
         buildMenu()
         if !serverAnswers() { startServer() }
         let cfg = WKWebViewConfiguration()
         cfg.websiteDataStore = .default()
+        cfg.preferences.javaScriptCanOpenWindowsAutomatically = false  // macOS lets script open windows without a click by default
         cfg.userContentController.add(self, name: "fleet")
         web = FleetWebView(frame: .zero, configuration: cfg)
         web.navigationDelegate = self
@@ -106,7 +109,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         if tries == 6 && server == nil && !serverAnswers() { startServer() }  // ~3 s without a server: run our own
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { self.load() }
     }
-    func webView(_ w: WKWebView, didFinish n: WKNavigation!) { tries = 0 }
+    func webView(_ w: WKWebView, didFinish n: WKNavigation!) { tries = 0; tellZoom() }
+    // The page measures its bar in CSS px, and a CSS px is pageZoom points: it reports the title bar in points
+    // and keeps the traffic lights' room once it knows the zoom.
+    func tellZoom() { web.evaluateJavaScript("window.fleetNativeZoom && window.fleetNativeZoom(\(Double(web.pageZoom)))", completionHandler: nil) }
 
     func serverAnswers() -> Bool {
         var ok = false
@@ -153,24 +159,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         var env = ProcessInfo.processInfo.environment  // apps opened from Finder get a short PATH
         env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:" + (env["PATH"] ?? "")
         p.environment = env
-        let log = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/Fleet.log")
         FileManager.default.createFile(atPath: log.path, contents: nil)
         if let h = try? FileHandle(forWritingTo: log) { p.standardOutput = h; p.standardError = h }
+        p.terminationHandler = { q in DispatchQueue.main.async { self.serverStopped(q) } }
         if (try? p.run()) != nil { server = p }
+    }
+
+    // Our server stopped on its own (a machines.toml it can't read, the port taken, a crash): say why, from the
+    // end of its log, rather than reload an empty window forever (#190). Its restarts after a settings
+    // change exec in place, so they never get here.
+    func serverStopped(_ p: Process) {
+        guard !quitting, p === server else { return }
+        if serverAnswers() { server = nil; return }  // another Fleet Live answers on the port: use that one
+        let a = NSAlert()
+        a.messageText = "Fleet's server stopped"
+        let tail = logTail((try? String(contentsOf: log, encoding: .utf8)) ?? "", lines: 6)
+        a.informativeText = (tail.isEmpty ? "" : tail + "\n\n") + "The whole log is in ~/Library/Logs/Fleet.log."
+        a.addButton(withTitle: "Start Again")
+        a.addButton(withTitle: "Quit")
+        if a.runModal() == .alertFirstButtonReturn {
+            tries = 0
+            startServer()
+        } else {
+            NSApp.terminate(nil)
+        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ s: NSApplication) -> Bool { true }
     func applicationWillTerminate(_ n: Notification) {
+        quitting = true  // the server we stop now isn't one that stopped on its own
         guard let p = server, p.isRunning else { return }
         p.terminate()  // SIGTERM: the server saves its state and stops its SSH sessions
         let deadline = Date().addingTimeInterval(3)
         while p.isRunning && Date() < deadline { usleep(50_000) }
     }
 
-    // Links that want a new window open in the default browser.
+    // Links that want a new window open in the default browser, web links only: handed a file: URL or an app's
+    // own scheme, NSWorkspace would launch a program, and Fleet's page never needs that (#191).
     func webView(_ w: WKWebView, createWebViewWith c: WKWebViewConfiguration, for a: WKNavigationAction,
                  windowFeatures f: WKWindowFeatures) -> WKWebView? {
-        if let u = a.request.url { NSWorkspace.shared.open(u) }
+        if let u = a.request.url, opensInBrowser(u) { NSWorkspace.shared.open(u) }
         return nil
     }
 
@@ -194,15 +222,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         if how == "in" { next = steps.first(where: { $0 > cur + 0.001 }) ?? steps.last! }
         if how == "out" { next = steps.last(where: { $0 < cur - 0.001 }) ?? steps.first! }
         web.pageZoom = next
+        tellZoom()
         UserDefaults.standard.set(Double(next), forKey: "FleetZoom")
     }
     @objc func zoomIn(_ s: Any?) { zoom("in") }
     @objc func zoomOut(_ s: Any?) { zoom("out") }
     @objc func zoomReset(_ s: Any?) { zoom("reset") }
-    // Menu commands the page carries out (the same ones as its keyboard shortcuts).
+    // Menu commands the page carries out (the same ones as its keyboard shortcuts), refused where the keys are:
+    // behind Settings, and ⌘T while typing. A key the page leaves alone comes back here as the menu item.
     @objc func pageCommand(_ s: NSMenuItem) {
         guard let c = s.representedObject as? String else { return }
-        web.evaluateJavaScript("window.fleetCommand && window.fleetCommand(\(c))", completionHandler: nil)
+        web.evaluateJavaScript("window.fleetMenu && window.fleetMenu(\(c))", completionHandler: nil)
     }
     func cmdItem(_ title: String, _ js: String, _ key: String, _ mods: NSEvent.ModifierFlags = [.command]) -> NSMenuItem {
         let i = NSMenuItem(title: title, action: #selector(pageCommand(_:)), keyEquivalent: key)
@@ -285,6 +315,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         NSApp.helpMenu = help
         NSApp.windowsMenu = win
     }
+}
+
+/// Only web links leave the app for the default browser.
+func opensInBrowser(_ u: URL) -> Bool {
+    ["http", "https"].contains(u.scheme?.lowercased() ?? "") && !(u.host ?? "").isEmpty
+}
+
+/// The last `lines` lines of a log that have anything on them.
+func logTail(_ text: String, lines n: Int) -> String {
+    text.split(separator: "\n").filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }.suffix(n).joined(separator: "\n")
 }
 
 extension NSColor {

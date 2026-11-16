@@ -420,7 +420,7 @@ button.lcell:hover{border-color:color-mix(in srgb, var(--ink) 25%, transparent)}
 .gcell .gm{position:absolute;left:10px;top:45px;font-size:11.5px;color:var(--ink-3)}
 html.native .lights{display:none}
 /* Native macOS window: the space bar is the title bar (traffic lights sit in it, like herdr) */
-html.native .spacebar{height:52px;padding:0 12px 0 84px;border-bottom:1px solid var(--edge);-webkit-user-select:none;user-select:none}
+html.native .spacebar{height:52px;padding:0 12px 0 calc(84px / var(--nz, 1));border-bottom:1px solid var(--edge);-webkit-user-select:none;user-select:none}
 html.native .space{height:34px}
 html.native .space .tile{width:24px;height:24px;border-radius:7px}
 html.native .space .tile svg{width:14px;height:14px}

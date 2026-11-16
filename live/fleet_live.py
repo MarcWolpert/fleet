@@ -13,7 +13,7 @@ connection closes. Nothing is installed on any machine and nothing is changed.
 Usage: python3 fleet_live.py [--port 4518] [--config PATH] [--open]
 """
 import argparse, base64, collections, ctypes, ctypes.util, glob, http.server, json, os, platform, plistlib, shlex
-import re, shutil, subprocess, sys, tempfile, threading, time, tomllib, urllib.parse, webbrowser, zlib
+import re, shutil, subprocess, sys, tempfile, threading, time, tomllib, urllib.parse, urllib.request, webbrowser, zlib
 
 VERSION = "0.0.1"
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -2466,6 +2466,13 @@ def main():
     ap.add_argument("--open-if-unseen", action="store_true", help="open the app window only if no Fleet window connects within a few seconds")
     ap.add_argument("--no-watch", action="store_true", help="don't restart or reopen the window when Fleet's own files change")
     a = ap.parse_args()
+    url = "http://127.0.0.1:%d/" % a.port
+    if a.open and fleet_answers(url):
+        # closing the window leaves its server running: open a window on that one instead of a second server
+        # that would start a collector per machine and then fail to bind the port (issue #186)
+        print("Fleet Live already on %s; opening a window on it" % url, flush=True)
+        open_app_window(url)
+        return
     if not os.path.exists(a.config):
         os.makedirs(os.path.dirname(a.config), exist_ok=True)
         shutil.copy(os.path.join(HERE, "machines.example.toml"), a.config)
@@ -2485,7 +2492,6 @@ def main():
     signal.signal(signal.SIGTERM, bye)
     signal.signal(signal.SIGINT, bye)
     srv = http.server.ThreadingHTTPServer(("127.0.0.1", a.port), Handler)
-    url = "http://127.0.0.1:%d/" % a.port
     print("Fleet Live on %s" % url, flush=True)
     if a.open:
         open_app_window(url)
@@ -2494,6 +2500,15 @@ def main():
     if not a.no_watch:
         threading.Thread(target=watch_own_files, args=(url,), daemon=True, name="fleet-watch").start()
     srv.serve_forever()
+
+
+def fleet_answers(url, timeout=1.5):
+    """True when a Fleet Live already serves `url` (as Fleet.app asks: /api/fleet answers 200)."""
+    try:
+        with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(url + "api/fleet", timeout=timeout) as r:  # never via a proxy
+            return r.status == 200
+    except Exception:
+        return False
 
 
 def reopen_if_unseen(url, since, wait=8.0):
