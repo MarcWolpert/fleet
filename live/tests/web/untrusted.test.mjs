@@ -54,6 +54,25 @@ test('the same columns for ordinary rows: numbers, and — when there are none',
   }
 });
 
+test('Which GPU shows what the host sent as text, and the GPUs of ordinary rows', async () => {
+  // #307: 'Which GPU' is one of the GPU layout's default columns
+  const fx = fixture();
+  fx.procs.lx.procs[0][13] = [IMG];   // nginx 101
+  const p = await browser.page(fx, {ui: ui({sel: 'lx', metric: 'gpu', view: 'details'})});
+  try {
+    await p.waitFor(`document.querySelectorAll('.ptbl tbody tr[data-pid]').length === ${fx.procs.lx.procs.length}`);
+    await sleep(300);   // an injected image's onerror would have fired by now
+    const gpus = await p.eval(`(() => {
+      const i = [...document.querySelectorAll('.ptbl thead th')].findIndex(th => th.dataset.colk === 'gpus');
+      return Object.fromEntries([...document.querySelectorAll('.ptbl tbody tr[data-pid]')].map(tr => [tr.dataset.pid, tr.children[i].textContent]));
+    })()`);
+    const none = Object.fromEntries(fx.procs.lx.procs.map(r => [String(r[0]), '—']));
+    assert.deepEqual(gpus, Object.assign(none, {101: 'GPU' + IMG, 104: 'GPU0', 105: 'GPU1', 106: 'GPU0+1', 109: 'GPU0'}));
+    assert.deepEqual(await p.eval(`[document.querySelectorAll('.ptbl tbody img, .ptbl tbody svg').length, window.__xss || []]`), [0, []]);
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
 // ---- the names of a host's GPUs (#91)
 const H = 60, flat = v => new Array(H).fill(v);
 const EVIL0 = 'NVIDIA <img src=x onerror="window.__xss=(window.__xss||0)+1">';

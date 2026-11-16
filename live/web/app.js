@@ -1158,7 +1158,7 @@ function detailsView(n, docked){
     {k:'cmd', label:'Command line', l:true, cls:'cmd', get:p => p[9] || '', show:p => `<span title="${esc(p[9])}">${esc(p[9])}</span>`},
     {k:'ppid', label:'Parent PID', get:p => p[11] || 0, show:p => esc(p[11] || '—')},
     {k:'lastcpu', label:'Last CPU', get:p => p[12], show:p => p[12] >= 0 ? esc('cpu' + p[12]) : '—'},
-    {k:'gpus', label:'Which GPU', l:true, get:p => (p[13] || []).join(','), show:p => (p[13] || []).length ? 'GPU' + p[13].join('+') : '—'},
+    {k:'gpus', label:'Which GPU', l:true, get:p => (p[13] || []).join(','), show:p => (p[13] || []).length ? esc('GPU' + p[13].join('+')) : '—'},
     {k:'disks', label:'Disks used', l:true, get:p => (p[14] || []).join(','), show:p => esc((p[14] || []).join(', ') || '—')},
     {k:'ifaces', label:'Interfaces', l:true, get:p => (p[15] || []).join(','), show:p => esc((p[15] || []).join(', ') || '—')}
   ];

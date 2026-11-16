@@ -96,6 +96,15 @@ class UntrustedProcessRows(unittest.TestCase):
         out = api_procs({"t": 1000.0, "procs": [row(1, 0, 1), row(2, 1, 4.0), row(3, self.HOSTILE[0], self.HOSTILE[1]), row(4, None, [5])]})
         self.assertEqual({p[0]: (p[11], p[8]) for p in out["procs"]}, {1: (0, 1), 2: (1, 4.0), 3: (0, 0), 4: (0, 0)})
 
+    def test_which_gpu_is_gpu_numbers_only(self):
+        # #307: p[13] names the GPUs a process uses by their places in the machine's GPU list, and Details shows it
+        # as "GPU0+1"; anything else a host sends there is dropped.
+        row = lambda pid, gpus: [pid, 0, "sh", "root", "S", 0.0, 0.0, 0.0, 0.0, 1, "/bin/sh", "base", 0, gpus, [], [], 0.0]
+        out = api_procs({"t": 1000.0, "procs": [row(1, [0]), row(2, [0, 1]), row(3, []), row(4, [self.HOSTILE[1]]),
+                                                row(5, [1, self.HOSTILE[0], True, 1.5, None]), row(6, self.HOSTILE[0]), row(7, None),
+                                                [8, 0, "sh", "root", "S", 0.0, 0.0, 0.0, 0.0, 1, "/bin/sh", "base", 0]]})
+        self.assertEqual({p[0]: p[13] for p in out["procs"]}, {1: [0], 2: [0, 1], 3: [], 4: [], 5: [1], 6: [], 7: [], 8: []})
+
 
 MIB = 2 ** 20
 L4080, LA2000 = "0x00000000_0x0000c1d2", "0x00000000_0x0000e4f2"

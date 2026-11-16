@@ -1954,6 +1954,7 @@ class Fleet:
             return {"procs": [], "ready": m.status == "disabled"}
         own = spec.get("procs_owner", {"cont": {}, "vm": {}})
         num = lambda x: x if isinstance(x, (int, float)) and not isinstance(x, bool) else 0   # what a host sends is data: numbers only
+        gpus = lambda xs: [i for i in xs if isinstance(i, int) and not isinstance(i, bool)] if isinstance(xs, list) else []   # GPU places
         jids = job_ids(mid, view.get("jobs", []))   # job:<n> is a place in this view's own job list
         out = []
         for p in view["procs"]:
@@ -1970,7 +1971,7 @@ class Fleet:
             else:
                 node = mid + "/base"
             out.append([p[0], p[2], p[3], p[4], round(p[5], 4), round(p[6], 5), round(p[7], 4), round(p[8], 2), num(p[9]), p[10], node, num(p[1]),
-                        p[12] if len(p) > 12 else -1, p[13] if len(p) > 13 else [], p[14] if len(p) > 14 else [],
+                        p[12] if len(p) > 12 else -1, gpus(p[13] if len(p) > 13 else []), p[14] if len(p) > 14 else [],
                         p[15] if len(p) > 15 else [], round(p[16], 4) if len(p) > 16 else -1])
         # p[13]: the GPUs the process uses (positions in this machine's gpus); gpu_procs says whether the
         # host reports that at all (macOS doesn't), so an empty p[13] isn't taken for "on no GPU".
