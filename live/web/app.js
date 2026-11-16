@@ -1767,7 +1767,7 @@ async function importTheme(file){
 // One keymap for every window: ⌘ on a Mac, Ctrl elsewhere. Fleet.app's menus call fleetCommand() for the
 // same commands, and zoom there is native (the page asks for it when the menu didn't take the key).
 const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
-const MODK = IS_MAC ? '⌘' : 'Ctrl+', ALTK = IS_MAC ? '⌥' : 'Alt+', SHIFTK = IS_MAC ? '⇧' : 'Shift+';
+const MODK = IS_MAC ? '⌘' : 'Ctrl+', ALTK = IS_MAC ? '⌥' : 'Alt+', SHIFTK = IS_MAC ? '⇧' : 'Shift+', CTRLK = IS_MAC ? '⌃' : 'Ctrl+', TABK = IS_MAC ? '⇥' : 'Tab';
 const METRIC_KEYS = ['cpu', 'mem', 'gpu', 'disk', 'net'];
 const SHORTCUTS = [
   ['Go to anything: machines, containers, jobs, commands', [MODK + 'K']],
@@ -1778,6 +1778,7 @@ const SHORTCUTS = [
   ['CPU, Memory, GPU, Disk I/O, Network', [ALTK + '1 … ' + ALTK + '5']],
   ['Go to a space (1 is All machines)', [MODK + '1 … ' + MODK + '9']],
   ['Previous or next space', [MODK + SHIFTK + '[', MODK + SHIFTK + ']']],
+  ['Cycle through the spaces, or the other way', [CTRLK + TABK, CTRLK + SHIFTK + TABK]],
   ['Move through the tree', ['↑', '↓']],
   ['Collapse or expand; go to the parent', ['←', '→']],
   ['New space: pick a grouping to pin', [MODK + 'N']],
@@ -1867,6 +1868,8 @@ document.addEventListener('keydown', e => {
     if (e.target.id === 'pfilter'){ e.preventDefault(); if (e.target.value){ e.target.value = ''; S.filter = ''; save(); renderMain(); } else e.target.blur(); return; }
     return;
   }
+  // Ctrl+Tab and Ctrl+Shift+Tab cycle through the spaces, like tabs, on every OS (where Ctrl is the main modifier too)
+  if (e.key === 'Tab' && e.ctrlKey && !e.metaKey && !e.altKey) return run('space-step', e.shiftKey ? -1 : 1);
   if (mod && !e.altKey){
     const k = e.key.toLowerCase();
     // text size: Fleet.app zooms natively; a browser does it itself

@@ -127,3 +127,21 @@ test('⌘N opens the dialog to pin a new space, and the shortcut list says so', 
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
 });
+
+test('⌃Tab cycles through the spaces and ⌃⇧Tab the other way, round and round', async () => {
+  const fx = fixture(); fx.fleet.pins = ['lx', 'mac'];
+  const p = await open({sel: 'fleet', space: 'fleet'}, fx);
+  const ctrlTab = shift => p.eval(`(() => { const t = document.activeElement || document.body; const e = new KeyboardEvent('keydown', {key: 'Tab', code: 'Tab', ctrlKey: true, shiftKey: ${!!shift}, bubbles: true, cancelable: true}); t.dispatchEvent(e); return e.defaultPrevented; })()`);
+  try {
+    await p.waitFor(`document.querySelector('[data-space="mac"]')`);
+    const seen = [];
+    for (let i = 0; i < 3; i++){ assert.equal(await ctrlTab(false), true); seen.push(await p.eval(`S.space`)); }
+    assert.deepEqual(seen, ['lx', 'mac', 'fleet']);
+    assert.equal(await ctrlTab(true), true);
+    assert.equal(await p.eval(`S.space`), 'mac');
+    await press(p, '?');
+    await p.waitFor(`document.getElementById('keys')`);
+    assert.ok(await p.eval(`[...document.querySelectorAll('#keys .keytbl tr')].some(r => /Tab|⇥/.test(r.textContent) && /space/i.test(r.textContent))`), 'listed');
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});

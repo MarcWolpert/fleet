@@ -55,7 +55,7 @@ plus an app window.
 | ✅ | Dock the Details process list beside the overview (drag the Details pill to the right) |
 | ✅ | Details columns: right-click a column header to hide, move or add columns, a layout per detail type |
 | ✅ | Themes: Fleet's own, Monokai Dimmed and 20 more built in (Dracula, Nord, Solarized, Gruvbox, Tokyo Night, Catppuccin, GitHub, …), or **Import theme** from any VS Code colour theme |
-| ✅ | Keyboard: ⌘K goes to any machine, container, job, command or theme; ⌘F finds in the panel you're in; ⌘[ ⌘] back and forward; ⌘1–9 spaces, ⌘N a new space, ⌥1–5 metrics, arrows in the tree, ⌘+/⌘− text size; `?` lists them all |
+| ✅ | Keyboard: ⌘K goes to any machine, container, job, command or theme; ⌘F finds in the panel you're in; ⌘[ ⌘] back and forward; ⌘1–9 spaces, ⌃⇥ cycles them, ⌘N a new space, ⌥1–5 metrics, arrows in the tree, ⌘+/⌘− text size; `?` lists them all |
 | ✅ | Details drop-down: click a process to see what it mostly waits on (CPU, disk, memory, GPU, locks, network…), its cache misses, limits, sockets, files and threads; the list holds still while it's open |
 | ✅ | macOS app and Linux package, with the Fleet icon |
 | ✅ | Right-click anything (a process, a tree row, a CPU, CCD, GPU, disk or interface tile, a space) for what fits it: details, show it in the tree, pin, open a terminal, copy its PID, name, command line or SSH destination; ⇧F10 does the same from the keyboard |
@@ -169,6 +169,7 @@ Fleet keeps what you arrange in the app beside it, so it survives restarts:
 | ⌘D, ⌘⇧D | Details on and off; dock it beside the overview |
 | ⌥1 … ⌥5 | CPU, Memory, GPU, Disk I/O, Network |
 | ⌘1 … ⌘9, ⌘⇧[ ⌘⇧] | Go to a space; previous or next space |
+| ⌃⇥, ⌃⇧⇥ | Cycle through the spaces, or the other way, round and round (Ctrl+Tab on Linux and Windows too) |
 | ↑ ↓ ← → | Move through the tree; collapse, expand, go to the parent |
 | ⌘N | New space: opens the dialog to pick a grouping to pin (same as the + in the space bar) |
 | P | Pin or unpin the selection as a space |

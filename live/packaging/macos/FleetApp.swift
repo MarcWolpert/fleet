@@ -257,6 +257,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         let spaces = NSMenu(title: "Spaces")
         spaces.addItem(cmdItem("Previous Space", "'space-step', -1", "{"))
         spaces.addItem(cmdItem("Next Space", "'space-step', 1", "}"))
+        // ⌃⇥ and ⌃⇧⇥ cycle through the spaces, like Safari's tabs (hidden: one menu line per command)
+        for (title, step, mods) in [("Next Space", 1, NSEvent.ModifierFlags.control), ("Previous Space", -1, NSEvent.ModifierFlags([.control, .shift]))] {
+            let i = cmdItem(title, "'space-step', \(step)", "\t", mods)
+            i.isHidden = true
+            i.allowsKeyEquivalentWhenHidden = true
+            spaces.addItem(i)
+        }
         spaces.addItem(.separator())
         spaces.addItem(cmdItem("All Machines", "'space', 0", "1"))
         for n in 2...9 { spaces.addItem(cmdItem("Space \(n)", "'space', \(n - 1)", "\(n)")) }
