@@ -1276,20 +1276,35 @@ class Fleet:
         for name, mm in nested.items():
             if name not in listed:
                 spec["vms"].append(self.machine_spec(mm, record, vm_parent=m))
+        # Which GPUs each owner's processes run on (p[13]), and how much of each GPU goes to anything but Base itself
+        # (a process on several GPUs counts evenly on each, as the web model splits it).
+        on_gpu = collections.defaultdict(set)
+        not_base = [0.0] * len(view["gpus"])
+        for p in view["procs"]:
+            gl = [i for i in (p[13] if len(p) > 13 else []) if i < len(not_base)]
+            on_gpu[p[11]].update(gl)
+            if gl and p[11] not in ("base", "dockervm"):
+                for i in gl:
+                    not_base[i] += p[8] / len(gl)
         # Scheduled jobs under Base system; their usage is a breakdown of Base.
         jsum = [0.0] * 5
         jobs = []
-        for jid, j in zip(job_ids(mid, view["jobs"]), view["jobs"]):
+        for n, (jid, j) in enumerate(zip(job_ids(mid, view["jobs"]), view["jobs"])):
             for k in range(5):
                 jsum[k] += j["u"][k]
+            on = ["gpu%d" % i for i in sorted(on_gpu["job:%d" % n] | on_gpu["unit:" + j.get("cmd", "")])] or dflt_g  # dflt_g: the host doesn't name them
             jobs.append({"id": jid, "name": j["name"], "sched": j["sched"], "human": j.get("human", ""), "cmd": j.get("cmd", ""),
                          "last": j.get("last", "") or ("next " + j["next"] if j.get("next") else ""), "running": j["running"],
-                         "state": j.get("state", ""), "src": j.get("src", ""), "g": dflt_g if j["u"][2] else [], "h": self.leaf(jid, j["u"], record)})
+                         "state": j.get("state", ""), "src": j.get("src", ""), "g": on if j["u"][2] else [], "h": self.leaf(jid, j["u"], record)})
         spec["baseCron"] = jobs
         base_u = [max(0.0, host[i] - csum[i] - vsum[i] - jsum[i]) for i in range(5)]
         if view["gpus"]:
             base_u[2] = max(0.0, host[2] - csum[2] - vsum[2] - jsum[2])
-        spec["base"] = {"id": mid + "/base", "h": self.leaf(mid + "/base", base_u, record), "g": dflt_g}
+        # Base on each GPU: what's left there, scaled to Base's own GPU total.
+        left = [max(0.0, g.get("util", 0.0) - not_base[i]) for i, g in enumerate(view["gpus"])]
+        base_g = [base_u[2] * x / sum(left) if sum(left) else 0.0 for x in left]
+        spec["base"] = {"id": mid + "/base", "h": self.leaf(mid + "/base", base_u, record), "g": ["gpu%d" % i for i, x in enumerate(base_g) if x > 0],
+                        "gh": {"gpu%d" % i: self.leaf("%s/base/gpu%d" % (mid, i), [x], record)["cpu"] for i, x in enumerate(base_g)}}
         spec["procs_owner"] = {"cont": cont_ids, "vm": vm_ids}
         if record:
             HIST.push(mid + "/__host", host)

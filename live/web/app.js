@@ -99,6 +99,7 @@ function machineFrom(s, isVm){
   const gks = g => (g || []).filter(k => gpus.some(x => x.key === k));
   const b = attach(m, leaf(s.base.id, 'Base system', 'base', 'base', s.base.h));
   b.gk = gks(s.base.g);
+  if (s.base.gh) b.gh = Object.fromEntries(gks(Object.keys(s.base.gh)).map(k => [k, s.base.gh[k]]));   // the server's count of Base on each GPU
   addCron(b, s.baseCron, m.cronLabel);
   if (s.compose && s.compose.length){
     const g = attach(m, mk(s.id + '/compose', {name:'Docker Compose', kind:'group', type:'compose'}));
@@ -124,6 +125,7 @@ function addCron(owner, list, label){
 }
 function sumSeries(list){ const o = {}; METRICS.forEach(m => { const a = zero(); list.forEach(c => { const s = c.series[m.id]; for (let i = 0; i < H; i++) a[i] += s[i]; }); o[m.id] = a; }); return o; }
 function splitG(series, keys){ const o = {}; (keys || []).forEach(k => { o[k] = series.map(v => v / keys.length); }); return o; }
+function perG(gh){ const o = {}; for (const k in gh) o[k] = gh[k] && gh[k].length === H ? gh[k].slice() : zero(); return o; }
 function addG(t, src, map){ for (const k in src){ const kk = map ? map[k] : k; if (kk == null) continue; const a = t[kk] || (t[kk] = zero()), s = src[k]; for (let i = 0; i < H; i++) a[i] += s[i]; } return t; }
 function compute(n){
   n.children.forEach(compute);
@@ -132,7 +134,7 @@ function compute(n){
   if (n.hist){
     const f = n.children.find(c => c.kind === 'cronfolder');
     n.series = {}; METRICS.forEach(m => { n.series[m.id] = n.hist[m.id].map((v, i) => v + (f ? f.series[m.id][i] : 0)); });
-    n.gseries = splitG(n.hist.gpu, n.gk); if (f) addG(n.gseries, f.gseries);
+    n.gseries = n.gh ? perG(n.gh) : splitG(n.hist.gpu, n.gk); if (f) addG(n.gseries, f.gseries);
     return;
   }
   n.series = sumSeries(n.children);

@@ -129,5 +129,87 @@ class JobIds(TreeTest):
                          {501: jid("mac", "rotate.sh", "crontab", "*/5 * * * *", "/usr/local/bin/rotate.sh"), 502: "mac/base"})
 
 
+def prow(pid, comm, owner, gpu=0.0, on=(), cpu=0.1):
+    """A process row as the derive_* functions give it; `on` is the GPUs it runs on (positions in the machine's list)."""
+    return [pid, 1, comm, "root", "S", cpu, 0.05, 0.0, gpu, 2, "/usr/bin/" + comm, owner, 0, list(on), [], [], 0.0]
+
+
+def gpu(name, util):
+    return {"name": name, "mem": "", "util": util, "m": {"util": util}, "lim": {}}
+
+
+def container(cid, name, u, gkeys=(), project="", service=""):
+    return {"id": cid, "name": name, "image": name + ":1", "status": "Up 1 hour", "project": project, "service": service,
+            "file": "", "networks": "", "u": list(u), "gkeys": list(gkeys)}
+
+
+TWO_GPUS = [gpu("RTX A4000", 50.0), gpu("RTX A2000", 100.0)]
+
+
+class GpuTags(TreeTest):
+    """#116: Base and scheduled jobs name the GPUs they run on, and Base is counted on each GPU by what's left there."""
+
+    def gpu_view(self, gpus, procs, containers=(), jobs=(), gpu_procs=True):
+        host_gpu = sum(g["util"] for g in gpus)
+        return view(gpus=gpus, procs=procs, containers=list(containers), jobs=list(jobs), gpu_procs=gpu_procs,
+                    host=[2.0, 6.0, host_gpu, 1.0, 0.5], cap=[4, 16.0, 100.0 * len(gpus), 500.0, 125.0])
+
+    def tags(self, spec):
+        return {"base": spec["base"]["g"], "gh": {k: v[-1] for k, v in spec["base"].get("gh", {}).items()}, "base_gpu": spec["base"]["h"]["gpu"][-1],
+                "jobs": {j["name"]: j["g"] for j in spec["baseCron"]},
+                "containers": {c["name"]: c["g"] for c in spec["containers"]}}
+
+    def test_base_on_two_gpus_is_counted_on_each_by_what_it_uses_there(self):
+        f = make_fleet({"id": "lx", "name": "lx", "ssh": "lx", "os": "linux"})
+        give(f, "lx", self.gpu_view(TWO_GPUS, [prow(10, "python3", "base", 50.0, [0]), prow(11, "ffmpeg", "base", 100.0, [1]),
+                                               prow(12, "sshd", "base")]))
+        self.assertEqual(self.tags(self.record(f, "lx")),
+                         {"base": ["gpu0", "gpu1"], "gh": {"gpu0": 50.0, "gpu1": 100.0}, "base_gpu": 150.0, "jobs": {}, "containers": {}})
+
+    def test_containers_and_jobs_are_taken_off_the_gpu_they_run_on(self):
+        f = make_fleet({"id": "lx", "name": "lx", "ssh": "lx", "os": "linux"})
+        procs = [prow(10, "python3", "base", 50.0, [0]), prow(11, "ffmpeg", "base", 20.0, [1]), prow(20, "trainer", "c:abc123", 60.0, [1]),
+                 prow(30, "encode.sh", "job:0", 20.0, [1]), prow(31, "rotate.sh", "job:1"), prow(32, "scrub", "unit:scrub.service", 0.0, [])]
+        jobs = [job("encode.sh", u=[0.1, 0.05, 20.0, 0, 0]), job("rotate.sh", u=[0.1, 0.05, 0, 0, 0]), timer("scrub")]
+        give(f, "lx", self.gpu_view(TWO_GPUS, procs, [container("abc123", "trainer", [0.1, 0.05, 60.0, 0, 0], ["gpu1"])], jobs))
+        self.assertEqual(self.tags(self.record(f, "lx")),
+                         {"base": ["gpu0", "gpu1"], "gh": {"gpu0": 50.0, "gpu1": 20.0}, "base_gpu": 70.0,
+                          "jobs": {"encode.sh": ["gpu1"], "rotate.sh": [], "scrub": []}, "containers": {"trainer": ["gpu1"]}})
+
+    def test_a_timer_names_the_gpu_its_unit_runs_on(self):
+        f = make_fleet({"id": "lx", "name": "lx", "ssh": "lx", "os": "linux"})
+        procs = [prow(32, "scrub", "unit:scrub.service", 30.0, [1]), prow(10, "python3", "base", 50.0, [0])]
+        give(f, "lx", self.gpu_view([gpu("RTX A4000", 50.0), gpu("RTX A2000", 30.0)], procs, jobs=[timer("scrub", u=[0.1, 0.05, 30.0, 0, 0])]))
+        self.assertEqual(self.tags(self.record(f, "lx")),
+                         {"base": ["gpu0"], "gh": {"gpu0": 50.0, "gpu1": 0.0}, "base_gpu": 50.0, "jobs": {"scrub": ["gpu1"]}, "containers": {}})
+
+    def test_base_names_no_gpu_when_a_container_uses_all_of_it(self):
+        f = make_fleet({"id": "lx", "name": "lx", "ssh": "lx", "os": "linux"})
+        give(f, "lx", self.gpu_view([gpu("RTX A4000", 30.0)], [prow(20, "trainer", "c:abc123", 30.0, [0]), prow(12, "sshd", "base")],
+                                    [container("abc123", "trainer", [0.1, 0.05, 30.0, 0, 0], ["gpu0"])]))
+        self.assertEqual(self.tags(self.record(f, "lx")),
+                         {"base": [], "gh": {"gpu0": 0.0}, "base_gpu": 0.0, "jobs": {}, "containers": {"trainer": ["gpu0"]}})
+
+    def test_a_host_that_does_not_name_each_process_gpu_counts_base_by_each_gpu_use(self):
+        f = make_fleet({"id": "mac", "name": "mac", "kind": "local"})
+        give(f, "mac", self.gpu_view([gpu("Apple GPU", 15.0)], [prow(10, "WindowServer", "base", cpu=0.2)], gpu_procs=False))
+        self.assertEqual(self.tags(self.record(f, "mac")),
+                         {"base": ["gpu0"], "gh": {"gpu0": 15.0}, "base_gpu": 15.0, "jobs": {}, "containers": {}})
+
+    def test_a_machine_with_no_gpu_names_none(self):
+        f = make_fleet({"id": "lx", "name": "lx", "ssh": "lx", "os": "linux"})
+        give(f, "lx", self.gpu_view([], [prow(10, "python3", "base"), prow(30, "encode.sh", "job:0")], jobs=[job("encode.sh", u=[0.1, 0.05, 0, 0, 0])],
+                                    gpu_procs=False))
+        self.assertEqual(self.tags(self.record(f, "lx")), {"base": [], "gh": {}, "base_gpu": 0.0, "jobs": {"encode.sh": []}, "containers": {}})
+
+    def test_base_gpu_history_per_gpu_follows_the_readings(self):
+        f = make_fleet({"id": "lx", "name": "lx", "ssh": "lx", "os": "linux"})
+        m = give(f, "lx", self.gpu_view(TWO_GPUS, [prow(10, "python3", "base", 50.0, [0]), prow(11, "ffmpeg", "base", 100.0, [1])]))
+        self.record(f, "lx")
+        m.view = self.gpu_view([gpu("RTX A4000", 10.0), gpu("RTX A2000", 0.0)], [prow(10, "python3", "base", 10.0, [0])])
+        gh = self.record(f, "lx")["base"]["gh"]
+        self.assertEqual({k: v[-3:] for k, v in gh.items()}, {"gpu0": [0.0, 50.0, 10.0], "gpu1": [0.0, 100.0, 0.0]})
+
+
 if __name__ == "__main__":
     unittest.main()

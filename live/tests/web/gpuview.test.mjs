@@ -80,3 +80,22 @@ test('clicking a GPU\'s tile picks that GPU, as before; a pinned metric goes fir
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
 });
+
+test('Base is counted on each GPU by what it uses there, not all on GPU 0 (#116)', async () => {
+  const fx = fx2(), lx = fx.fleet.machines.find(m => m.id === 'lx'), lx2 = fx.fleet.machines.find(m => m.id === 'lx2');
+  const h = g => ({cpu: flat(1), mem: flat(2), gpu: flat(g), disk: flat(0), net: flat(0)});
+  lx.base = {id: 'lx/base', h: h(150), g: ['gpu0', 'gpu1'], gh: {gpu0: flat(50), gpu1: flat(100)}};
+  lx2.base = {id: 'lx2/base', h: h(150), g: ['gpu0']};   // the control: without gh, Base is split over its tags as before
+  const p = await open(fx);
+  try {
+    const on = (mid, k) => p.eval(`gpuConsumers(nodes['${mid}'], '${k}').map(c => [c.n.id, c.v])`);
+    assert.deepEqual([await on('lx', 'gpu0'), await on('lx', 'gpu1')], [[['lx/base', 50]], [['lx/base', 100]]]);
+    assert.equal(await p.eval(`whichGpu(nodes['lx/base'])`), 'GPU0+1');
+    assert.deepEqual([await on('lx2', 'gpu0'), await on('lx2', 'gpu1')], [[['lx2/base', 150]], []]);
+    assert.equal(await p.eval(`whichGpu(nodes['lx2/base'])`), 'GPU0');
+    // GPUs: what runs on which
+    assert.deepEqual(await p.eval(`[...document.querySelectorAll('.gpus > .gpu')].map(g => [g.querySelector('.v').textContent, [...g.querySelectorAll('.rank .namebtn')].map(b => [b.dataset.select, b.nextElementSibling.nextElementSibling.textContent])])`),
+      [['50%', [['lx/base', '50%']]], ['100%', [['lx/base', '100%']]]]);
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
