@@ -27,20 +27,24 @@ git fetch -q origin
 ! git ls-remote --exit-code --tags origin "$TAG" >/dev/null 2>&1 || die "$TAG already exists on origin"
 
 "$LIVE/tests/run.sh"
-if [ "$(uname)" = Darwin ]; then "$HERE/macos/build_macos.sh"; else echo "release: not on a Mac, so no macOS app from here" >&2; fi
+# macOS for Apple silicon; Linux for x64 and arm64 (Python and HTML, the same package under each name)
+if [ "$(uname)" = Darwin ]; then "$HERE/macos/build_macos.sh" --arch arm64; else echo "release: not on a Mac, so no macOS app from here" >&2; fi
 "$HERE/linux/build_linux.sh"
-MAC="$LIVE/dist/Fleet-$WANT-macos.zip" LINUX="$LIVE/dist/fleet-$WANT-linux.tar.gz"
-[ -f "$LINUX" ] || die "no $LINUX"
+MAC="$LIVE/dist/Fleet-$WANT-macos-arm64.zip"
+LINUX_X64="$LIVE/dist/fleet-$WANT-linux-x64.tar.gz"
+LINUX_ARM64="$LIVE/dist/fleet-$WANT-linux-arm64.tar.gz"
+[ -f "$LIVE/dist/fleet-$WANT-linux.tar.gz" ] || die "no Linux package"
+cp "$LIVE/dist/fleet-$WANT-linux.tar.gz" "$LINUX_X64" && cp "$LIVE/dist/fleet-$WANT-linux.tar.gz" "$LINUX_ARM64"
 NOTES=$(mktemp)
 awk -v v="## Fleet $WANT" '$0 == v {on = 1; next} /^## / && on {exit} on' "$LIVE/CHANGELOG.md" > "$NOTES"
 
 if [ "$PUBLISH" != "--publish" ]; then
   echo "release: all checks passed. With --publish this tags $TAG at $(git rev-parse --short HEAD) and publishes \"Fleet $WANT\" with:"
-  ls -1 "$MAC" "$LINUX" 2>/dev/null | sed 's/^/  /'
+  ls -1 "$MAC" "$LINUX_X64" "$LINUX_ARM64" 2>/dev/null | sed 's/^/  /'
   exit 0
 fi
 [ -f "$MAC" ] || die "no $MAC: publish from a Mac so the release has both packages"
 git tag -a "$TAG" -m "Fleet $WANT"
 git push origin "$TAG"
-gh release create "$TAG" "$MAC" "$LINUX" --title "Fleet $WANT" --notes-file "$NOTES" --latest
+gh release create "$TAG" "$MAC" "$LINUX_X64" "$LINUX_ARM64" --title "Fleet $WANT" --notes-file "$NOTES" --latest
 echo "release: published Fleet $WANT ($TAG)"
