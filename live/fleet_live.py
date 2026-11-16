@@ -222,6 +222,12 @@ def docker_pct(s):
         return 0.0
 
 
+def netio(s):
+    """docker stats NetIO, "received / sent", as bytes: (received, sent)."""
+    rx, _, tx = (s or "").partition("/")
+    return size_bytes(rx), size_bytes(tx)
+
+
 GB = 2**30
 MB = 1e6
 # Every collector SSH session starts with exactly these options, so leftovers from an
@@ -557,8 +563,9 @@ class Machine:
         containers = []
         for c in r["containers"]:
             u = cont_u.get(c["id"], [0.0] * 5)
-            u[4] = self.rate("c.%s.net" % c["id"], c["rx"] + c["tx"], t) / MB
-            containers.append(dict(c, u=u, gu=cont_g.get(c["id"], [0.0] * len(gpus))))
+            rx, tx = self.rate("c.%s.rx" % c["id"], c["rx"], t) / MB, self.rate("c.%s.tx" % c["id"], c["tx"], t) / MB
+            u[4] = rx + tx
+            containers.append(dict(c, u=u, gu=cont_g.get(c["id"], [0.0] * len(gpus)), netrx=rx, nettx=tx))
         vmmap = {v["name"]: v for v in r.get("vms", [])}
         vms = []
         for name, v in vmmap.items():
@@ -893,11 +900,10 @@ class Machine:
             cpu = s.get("CPUPerc", "0%").rstrip("%")
             if not re.match(r"^\d+(\.\d+)?$", cpu):
                 continue   # "--": docker stats couldn't read it in time; idle this reading, its I/O counters wait for the next
-            nio = s.get("NetIO", "0B / 0B").split("/")
             bio = s.get("BlockIO", "0B / 0B").split("/")
             stats[s.get("ID", "")[:12]] = (docker_pct(s.get("CPUPerc")),
                                            size_bytes(s.get("MemUsage", "0B").split("/")[0]) / GB,
-                                           sum(size_bytes(x) for x in bio), sum(size_bytes(x) for x in nio))
+                                           sum(size_bytes(x) for x in bio)) + netio(s.get("NetIO"))
         for line in r.get("containers", []):
             try:
                 c = json.loads(line)
@@ -906,10 +912,16 @@ class Machine:
             labels = dict(kv.split("=", 1) for kv in c.get("Labels", "").split(",") if "=" in kv)
             cid = c.get("ID", "")[:12]
             st = stats.get(cid)
-            u = [st[0], st[1], 0.0, self.rate("cb." + cid, st[2], td) / MB, self.rate("cn." + cid, st[3], td) / MB] if st else [0.0] * 5
+            if st:   # received and sent at docker stats' own stamp (#145, #177)
+                rx, tx = self.rate("cnr." + cid, st[3], td) / MB, self.rate("cnt." + cid, st[4], td) / MB
+                u = [st[0], st[1], 0.0, self.rate("cb." + cid, st[2], td) / MB, rx + tx]
+            else:    # docker stats couldn't read it: idle this reading, its counters untouched (#160)
+                rx = tx = 0.0
+                u = [0.0] * 5
             containers.append({"id": cid, "name": c.get("Names", ""), "image": c.get("Image", ""), "status": c.get("Status", ""),
                                "project": labels.get("com.docker.compose.project", ""), "service": labels.get("com.docker.compose.service", ""),
-                               "file": labels.get("com.docker.compose.project.config_files", ""), "networks": c.get("Networks", ""), "u": u})
+                               "file": labels.get("com.docker.compose.project.config_files", ""), "networks": c.get("Networks", ""), "u": u,
+                               "netrx": rx, "nettx": tx})
         # The WSL utility VM also runs Docker Desktop's containers: they are listed on their own, the rest is the VM's.
         for i in range(5):
             vm_u[i] = max(0.0, vm_u[i] - sum(c["u"][i] for c in containers))
@@ -1381,13 +1393,15 @@ class MacCollector:
             labels = dict(kv.split("=", 1) for kv in c.get("Labels", "").split(",") if "=" in kv)
             cid = c.get("ID", "")[:12]
             s = stats.get(cid, {})
-            nio = s.get("NetIO", "0B / 0B").split("/")
+            nrx, ntx = netio(s.get("NetIO"))
             bio = s.get("BlockIO", "0B / 0B").split("/")
+            rx, tx = self.rate("cnr" + cid, nrx, t) / MB, self.rate("cnt" + cid, ntx, t) / MB
             u = [docker_pct(s.get("CPUPerc")), size_bytes(s.get("MemUsage", "0B").split("/")[0]) / GB, 0.0,
-                 self.rate("cb" + cid, sum(size_bytes(x) for x in bio), t) / MB, self.rate("cn" + cid, sum(size_bytes(x) for x in nio), t) / MB]
+                 self.rate("cb" + cid, sum(size_bytes(x) for x in bio), t) / MB, rx + tx]
             containers.append({"id": cid, "name": c.get("Names", ""), "image": c.get("Image", ""), "status": c.get("Status", ""),
                                "project": labels.get("com.docker.compose.project", ""), "service": labels.get("com.docker.compose.service", ""),
-                               "file": labels.get("com.docker.compose.project.config_files", ""), "networks": c.get("Networks", ""), "u": u})
+                               "file": labels.get("com.docker.compose.project.config_files", ""), "networks": c.get("Networks", ""), "u": u,
+                               "netrx": rx, "nettx": tx})
         jobs = [dict(j, u=[0.0] * 5, running=False) for j in self.jobs_cache]
         launch = {}
         for line in run(["launchctl", "list"]).splitlines()[1:]:
@@ -1797,7 +1811,7 @@ class Fleet:
             conts = []
             if view:
                 for c in view.get("containers", []):
-                    conts.append({"name": c["name"], "networks": c.get("networks", ""), "net": c["u"][4]})
+                    conts.append({"name": c["name"], "networks": c.get("networks", ""), "net": c["u"][4], "rx": c.get("netrx", 0.0), "tx": c.get("nettx", 0.0)})
             vms = [{"name": v["name"], "ifs": v.get("ifs", []), "net": v["u"][4]} for v in (view or {}).get("vms", [])]
             machines.append({"id": m.id, "name": m.name, "status": status, "error": error, "vm_on": m.cfg.get("vm_on", ""),
                              "tailscale": tsinfo, "ifs": ifs, "containers": conts, "vms": vms,

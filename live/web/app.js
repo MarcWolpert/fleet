@@ -233,9 +233,10 @@ function isLive(n){ return n.status === 'ok'; }
 // a machine Fleet reaches over SSH has a connection you can turn off and on (this computer needs none)
 function switchable(n){ return n.kind === 'machine' && /^ssh /.test(n.agent || ''); }
 function hasData(n){ return n.kind !== 'machine' || n.hasData || n.status === 'ok' || n.status === 'hostonly'; }
-function isStale(n){ return n.kind === 'machine' && n.status !== 'ok' && n.status !== 'hostonly' && n.hasData; }
+function isStale(n){ return n.kind === 'machine' && n.status !== 'ok' && n.status !== 'hostonly' && n.status !== 'off' && n.hasData; }   // a VM that is off isn't reconnecting
 function staleFor(n){ return n.lastOk ? Math.max(0, Date.now() / 1000 - n.lastOk) : 0; }
 function statusClass(n){ return isLive(n) ? 'ok' : n.status === 'hostonly' ? 'hostonly' : isStale(n) ? 'stale' : n.status === 'off' ? 'off' : n.status === 'connecting' ? 'connecting' : 'offline'; }
+const STATUSES = ['ok', 'hostonly', 'stale', 'off', 'connecting', 'offline'];   // every class statusClass gives
 function statusText(n){ return n.status === 'ok' ? 'live' : n.status === 'off' || n.status === 'disabled' ? 'off' : n.status === 'hostonly' ? 'seen from host' : isStale(n) ? 'reconnecting' : n.status === 'connecting' ? 'connecting' : 'offline'; }
 function stalePill(n){ return isStale(n) ? `<span class="spill" title="Showing the last reading until ${esc(n.name)} answers again">reconnecting · ${ago(staleFor(n)).replace(' ago', '')}</span>` : ''; }
 function pinBtn(id){ const on = PINS.includes(id); return `<button type="button" class="pinbtn${on ? ' on' : ''}" data-pin="${esc(id)}" aria-pressed="${on}" aria-label="${on ? 'Unpin' : 'Pin'} ${esc(nodes[id] ? nodes[id].name : id)} as a space" title="${on ? 'Unpin from the space bar' : 'Pin to the space bar'}">${icon('pin')}</button>`; }
@@ -482,11 +483,12 @@ function renderGroupsTree(){
   treeHeader();
 }
 function updateTree(){
-  if (S.tree === 'network') return renderNetTree();
+  if (S.tree === 'network') return updateNetTree();
   document.querySelectorAll('[data-val]').forEach(e => { const n = nodes[e.dataset.val]; if (n) e.textContent = rowVal(n); });
   document.querySelectorAll('[data-spark]').forEach(e => { const n = nodes[e.dataset.spark]; if (n) e.firstElementChild.setAttribute('points', sparkPts(n.series[S.metric], 60, 16)); });
   document.querySelectorAll('[data-dot]').forEach(e => { const n = nodes[e.dataset.dot]; if (n) e.classList.toggle('on', !!n.running); });
-  document.querySelectorAll('[data-sdot]').forEach(e => { const n = nodes[e.dataset.sdot]; if (n){ e.className = 'sdot ' + statusClass(n); e.title = statusText(n) + (e.dataset.conn ? (n.on ? ' · click to disconnect' : ' · click to connect') : ''); if (e.dataset.conn){ e.setAttribute('aria-pressed', String(n.on)); e.setAttribute('aria-label', (n.on ? 'Disconnect ' : 'Connect ') + n.name); } } });
+  // the row's status class greys its name or value (index.html): it changes with the dot (#129)
+  document.querySelectorAll('[data-sdot]').forEach(e => { const n = nodes[e.dataset.sdot]; if (n){ const c = statusClass(n), r = e.closest('.row.machine'); e.className = 'sdot ' + c; e.title = statusText(n) + (e.dataset.conn ? (n.on ? ' · click to disconnect' : ' · click to connect') : ''); if (e.dataset.conn){ e.setAttribute('aria-pressed', String(n.on)); e.setAttribute('aria-label', (n.on ? 'Disconnect ' : 'Connect ') + n.name); } if (r) STATUSES.forEach(k => r.classList.toggle(k, k === c)); } });
   document.querySelectorAll('[data-val]').forEach(e => { const n = nodes[e.dataset.val]; if (n && n.kind === 'machine') e.classList.toggle('dim', !isLive(n)); });
 }
 
@@ -514,7 +516,7 @@ function buildNet(){
     Object.values(ifn).forEach(n => {
       if (!n.dnet) return;
       (m.containers || []).filter(c => (c.networks || '').split(',').includes(n.dnet)).forEach(c => {
-        n.children.push(mkn('net:c:' + m.id + ':' + c.name, {name:c.name, kind:'ncontainer', rx:c.net, tx:0, dnet:n.dnet}));
+        n.children.push(mkn('net:c:' + m.id + ':' + c.name, {name:c.name, kind:'ncontainer', rx:c.rx, tx:c.tx, dnet:n.dnet}));   // received, sent (#177)
       });
     });
     mn.children.sort((a, b) => COLL.compare(a.name, b.name));
@@ -525,27 +527,39 @@ function buildNet(){
   return [root];
 }
 function netOpen(n){ return S.open[n.id] !== undefined ? S.open[n.id] : (n.kind === 'tailnet' || (n.kind === 'nmachine' && n.status === 'ok' && n.children.length < 12)); }
-function renderNetTree(){
+// The rows are drawn without their rates. A poll that brings the same rows only fills in the rates, so focus and a
+// click in progress survive it (#157); any other change, and every renderTree, draws the rows anew.
+let netDrawn = null;
+function netTreeHTML(){
   const rootsN = buildNet();
   const rows = [];
   const keep = TF.q ? treeMatches(rootsN, TF.q) : null;
   const entries = groupedWalk(rootsN, n => n.children, n => keep ? n.children.some(c => keep.has(c.id)) : netOpen(n), n => !keep || keep.has(n.id), 'network');
   entries.forEach(e => { if (e.n) rows.push(e); });
-  $('tree').innerHTML = rows.length ? entries.map(e => e.open ? tgroupOpen(e) : e.close ? '</div>' : netRow(e)).join('') : '<div class="side-note">Loading the network…</div>';
+  return rows.length ? entries.map(e => e.open ? tgroupOpen(e) : e.close ? '</div>' : netRow(e)).join('') : '<div class="side-note">Loading the network…</div>';
   function netRow({n, d, pk}){
     const kids = n.children.length > 0, open = kids && netOpen(n);
     const ic = n.kind === 'tailnet' ? 'net' : n.kind === 'nmachine' ? 'desktop' : n.kind === 'ncontainer' ? 'cube' : n.ifkind === 'bridge' ? 'bridge' : n.vm ? 'vm' : 'nic';
     const sub = n.kind === 'nmachine' ? `<i class="sdot ${n.status}" title="${esc(n.status)}"></i>` : n.vm ? `<span class="count">${esc(n.vm)}</span>` : n.dnet && n.kind === 'if' ? `<span class="count">${esc(n.dnet)}</span>` : '';
-    const rate = `<span>↓ ${rateText(n.rx)}</span><span>↑ ${n.kind === 'ncontainer' ? '—' : rateText(n.tx)}</span>`;
     return `<div class="row${S.netSel===n.id?' sel':''}" style="--d:${d}" role="treeitem" aria-level="${d+1}" ${kids?`aria-expanded="${open}"`:''} data-netsel="${esc(n.id)}" data-pk="${esc(pk)}">`
       + `<span class="tdrag" draggable="true" title="Drag into a group" aria-hidden="true">${icon('grip')}</span>`
       + `<button type="button" class="chev${open?' open':''}${kids?'':' leaf'}" ${kids?`data-toggle="${esc(n.id)}" aria-label="${open?'Collapse':'Expand'} ${esc(n.name)}"`:'tabindex="-1" aria-hidden="true"'}>${icon('chev', 2.4)}</button>`
-      + `<span class="ico" style="color:var(--ink-2)">${icon(ic)}</span><button type="button" class="nm" data-netsel="${esc(n.id)}">${esc(n.name)}</button>${sub}<span class="nrate">${rate}</span></div>`;
+      + `<span class="ico" style="color:var(--ink-2)">${icon(ic)}</span><button type="button" class="nm" data-netsel="${esc(n.id)}">${esc(n.name)}</button>${sub}<span class="nrate" data-nrate="${esc(n.id)}"></span></div>`;
   }
+}
+function renderNetTree(html = netTreeHTML()){
+  $('tree').innerHTML = html; netDrawn = {html, first:$('tree').firstElementChild};
+  netRates();
   $('tree-title').innerHTML = 'Network';
   $('tree-col').textContent = '↓ in · ↑ out';
   $('side-note').innerHTML = '';
 }
+function updateNetTree(){
+  const html = netTreeHTML();
+  if (!netDrawn || html !== netDrawn.html || $('tree').firstElementChild !== netDrawn.first) return renderNetTree(html);
+  netRates();
+}
+function netRates(){ document.querySelectorAll('#tree [data-nrate]').forEach(e => { const n = netNodes[e.dataset.nrate]; if (n) e.innerHTML = `<span>↓ ${rateText(n.rx)}</span><span>↑ ${rateText(n.tx)}</span>`; }); }
 
 /* ---------- cards ---------- */
 function whereRows(key){
@@ -1186,8 +1200,8 @@ function netView(){
   if (n.kind === 'if'){ facts.push(n.ifkind); if (n.state) facts.push(n.state); if (n.speed && n.speed !== '-1') facts.push(/^\d+$/.test(n.speed) ? n.speed + ' Mb/s' : n.speed); facts.push(...n.addrs); if (n.desc) facts.push(n.desc); if (n.vm) facts.push('VM: ' + n.vm); if (n.dnet) facts.push('Docker network: ' + n.dnet); }
   let graph = '';
   if (n.hrx && n.htx) graph = graphCard('Traffic', '↓ received and ↑ sent, stacked', [{label:'received', color:'var(--t-compose)', data:n.hrx}, {label:'sent', color:'var(--t-vm)', data:n.htx}], graphMax(0, [{data:n.hrx}, {data:n.htx}], 'net'), 'net');
-  const rows = n.children.map(c => `<tr><td><button type="button" class="namebtn" data-netsel="${esc(c.id)}">${esc(c.name)}</button></td><td class="l">${esc(c.kind === 'if' ? c.ifkind : c.kind === 'nmachine' ? statusText({status:c.status}) : c.kind === 'ncontainer' ? 'container' : '')}</td><td class="l">${esc((c.addrs || []).join(', ') || (c.ts && c.ts.ip) || '')}</td><td>${rateText(c.rx)}</td><td>${c.kind === 'ncontainer' ? '—' : rateText(c.tx)}</td></tr>`).join('');
-  return `<div class="hero"><span class="tile fleet">${icon(n.kind === 'tailnet' ? 'net' : n.kind === 'if' ? (n.ifkind === 'bridge' ? 'bridge' : 'nic') : 'desktop')}</span><div><h1>${esc(n.name)}</h1><div class="facts">${facts.filter(Boolean).map(f => `<span>${esc(f)}</span>`).join('')}</div></div>${heroStats([{k:'In', v:rateText(n.rx), s:'received'}, {k:'Out', v:n.kind === 'ncontainer' ? '—' : rateText(n.tx), s:'sent'}])}</div>`
+  const rows = n.children.map(c => `<tr><td><button type="button" class="namebtn" data-netsel="${esc(c.id)}">${esc(c.name)}</button></td><td class="l">${esc(c.kind === 'if' ? c.ifkind : c.kind === 'nmachine' ? statusText({status:c.status}) : c.kind === 'ncontainer' ? 'container' : '')}</td><td class="l">${esc((c.addrs || []).join(', ') || (c.ts && c.ts.ip) || '')}</td><td>${rateText(c.rx)}</td><td>${rateText(c.tx)}</td></tr>`).join('');
+  return `<div class="hero"><span class="tile fleet">${icon(n.kind === 'tailnet' ? 'net' : n.kind === 'if' ? (n.ifkind === 'bridge' ? 'bridge' : 'nic') : 'desktop')}</span><div><h1>${esc(n.name)}</h1><div class="facts">${facts.filter(Boolean).map(f => `<span>${esc(f)}</span>`).join('')}</div></div>${heroStats([{k:'In', v:rateText(n.rx), s:'received'}, {k:'Out', v:rateText(n.tx), s:'sent'}])}</div>`
     + (n.error ? noteHTML(`<b>${esc(statusText({status:n.status}))}.</b> ${esc(n.error)}`, 'warn') : '')
     + graph
     + (rows ? `<section class="card"><div class="card-h"><h2>${n.kind === 'tailnet' ? 'Machines' : n.kind === 'nmachine' ? 'Interfaces' : 'Attached'}</h2></div><div class="scroll-x"><table class="tbl"><thead><tr><th>Name</th><th style="text-align:left">Kind</th><th style="text-align:left">Address</th><th>In</th><th>Out</th></tr></thead><tbody>${rows}</tbody></table></div></section>` : '');
@@ -1303,10 +1317,15 @@ async function api(path, body){
   if (!r.ok) throw new Error('HTTP ' + r.status);
   return r.json();
 }
+// Pins (~/.config/fleet/pins.json) are saved whole. An answer older than the latest save, from a poll that overlapped
+// a save or from an earlier save, never replaces PINS: the next pin would build on it and drop this one (#95).
+let pinsSeq = 0, pinsSaves = 0;
 async function setPins(pins){
+  const seq = ++pinsSeq; pinsSaves++;
   PINS = pins;
-  renderSpaces(); renderTree(); renderMain(); renderPickerList();
-  try { const d = await api('/api/pins', pins); PINS = d.pins || pins; } catch (e) {}
+  renderSpaces(); renderTree(); renderMain(); renderPickerList(); lastSig = sigOf();   // drawn with these pins: a poll that brings others redraws
+  try { const d = await api('/api/pins', pins); if (seq === pinsSeq) PINS = d.pins || pins; } catch (e) {}
+  pinsSaves--;
   renderSpaces(); renderPickerList();
 }
 function togglePin(id){ setPins(PINS.includes(id) ? PINS.filter(x => x !== id) : PINS.concat([id])); }
@@ -1420,13 +1439,23 @@ function takeProcs(mid, d){
   PROCS = {machine:mid, list:(d && d.procs) || [], gpuProcs:!!(d && d.gpu_procs)};
 }
 function sigOf(){ return Object.keys(nodes).join('|') + '#' + PINS.join('|'); }
+// The Network tree's data comes on its own: the server runs tailscale status for /api/net, which can take seconds,
+// and the fleet's numbers never wait for it. One is on its way at a time (#144).
+let netBusy = false;
+function refreshNet(){
+  if (netBusy || S.tree !== 'network') return; netBusy = true;
+  fetch('/api/net', {cache:'no-store'}).then(r => r.json()).then(d => { NET = d; if (S.tree === 'network'){ updateTree(); renderMain(); } })
+    .catch(() => null).finally(() => { netBusy = false; });
+}
 async function refreshNow(){
   inspectTick();
+  refreshNet();
   if (busy) return; busy = true;
   try {
+    const pinsAt = pinsSaves ? -1 : pinsSeq;   // a pin save on its way now or made before the answer: keep PINS (#95)
     const r = await fetch('/api/fleet', {cache:'no-store'});
     DATA = await r.json();
-    INTERVAL = DATA.interval || 3; WINDOW = DATA.window_s || INTERVAL * H; PINS = DATA.pins || []; if (!prefsBusy){ PREFS = DATA.prefs || {}; applyTheme(currentTheme()); } if (!tpinBusy) TPINS = DATA.tilepins || {};
+    INTERVAL = DATA.interval || 3; WINDOW = DATA.window_s || INTERVAL * H; if (pinsAt === pinsSeq) PINS = DATA.pins || []; if (!prefsBusy){ PREFS = DATA.prefs || {}; applyTheme(currentTheme()); } if (!tpinBusy) TPINS = DATA.tilepins || {};
     build(DATA);
     renderAutoConn();
     if (S.sel !== 'fleet' && !nodes[S.sel]) { /* keep selection; it may come back */ }
@@ -1439,7 +1468,6 @@ async function refreshNow(){
     if (nm && S.metric === 'net' && S.view !== 'details') jobs.push(fetch('/api/ifs?machine=' + encodeURIComponent(nm.id), {cache:'no-store'}).then(r => r.json()).then(d => { IFS[nm.id] = d; }));
     if (nm && S.metric === 'disk' && S.view !== 'details') jobs.push(fetch('/api/disks?machine=' + encodeURIComponent(nm.id), {cache:'no-store'}).then(r => r.json()).then(d => { DISKS[nm.id] = d; }));
     if (nm && S.view !== 'details' && !S.detailsDocked && ((S.metric === 'disk' && diskSel(nm).length) || (S.metric === 'gpu' && gpuSel(nm).length) || (S.metric === 'net' && ifSel(nm).length)) && nm.status === 'ok') jobs.push(fetch('/api/procs?machine=' + encodeURIComponent(nm.id), {cache:'no-store'}).then(r => r.json()).then(d => takeProcs(nm.id, d)));
-    if (S.tree === 'network') jobs.push(fetch('/api/net', {cache:'no-store'}).then(r => r.json()).then(d => { NET = d; }));
     await Promise.all(jobs.map(p => p.catch(() => null)));
     fails = 0; $('conn').hidden = true; $('live').hidden = false;
     const sig = sigOf();
