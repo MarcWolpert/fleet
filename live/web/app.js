@@ -2433,12 +2433,20 @@ function goNode(id, view){ S.view = view; select(id); if (view === 'details'){ S
 // button stands for, not the button: the one the menu opened on is usually gone by the time a person picks (#292).
 // a tile's own pin button, as a menu item
 function pinItem(scope, label){ const b = scope && scope.querySelector('[data-tpin]'); if (!b) return null; const on = b.getAttribute('aria-pressed') === 'true', spec = b.dataset.tpin; return {label:(on ? 'Unpin ' : 'Pin ') + label, run:() => toggleTilePin(spec)}; }
+// whether the selection is that tile's and nothing else (a plain click on it would then let it go). Judged from the
+// selection, not by counting pressed buttons: in Each GPU one GPU has a pressed button in its header and in each metric.
+function onlyPicked(attr, v){
+  const m = nodes[S.sel]; if (!m) return false;
+  const cur = (attr === 'data-lcpu' || attr === 'data-lgroup' ? cpuSel(m) : attr === 'data-gsel' ? gpuSel(m) : attr === 'data-dsel' ? diskSel(m) : ifSel(m)).map(String);
+  const want = attr === 'data-lgroup' ? v.split(',') : [v];
+  return cur.length === want.length && want.every(x => cur.includes(x));
+}
 // a tile's own select button: pick just it, or add it to (take it out of) the selection
 function selItems(btn, what){
   if (!btn) return [];
   const on = btn.getAttribute('aria-pressed') === 'true', attr = [...btn.attributes].find(a => /^data-(lcpu|lgroup|gsel|dsel|isel)$/.test(a.name)).name, v = btn.getAttribute(attr);
   const live = () => document.querySelector(`[${attr}="${CSS.escape(v)}"]`);
-  return [{label:`See what runs on ${what}`, run:() => { const b = live(); if (b && (!on || document.querySelectorAll(`[aria-pressed="true"][${attr}]`).length > 1)) b.click(); }},
+  return [{label:`See what runs on ${what}`, run:() => { const b = live(); if (b && !onlyPicked(attr, v)) b.click(); }},
     ...(btn.matches('[data-lgroup], .lgbtn') ? [] : [{label:on ? `Take ${what} out of the selection` : `Add ${what} to the selection`, run:() => { const b = live(); if (b) b.dispatchEvent(new MouseEvent('click', {bubbles:true, metaKey:true, ctrlKey:true})); }}])];
 }
 function ctxFor(t){

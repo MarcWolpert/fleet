@@ -188,3 +188,35 @@ test('a disk tile and an interface tile: every item still works after a poll red
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
 });
+
+// 'See what runs on X' picks just X: when X is already all that's picked it leaves it be, and never lets it go.
+// In Each GPU a GPU has a select button in its header and one per metric tile, all pressed together (#292).
+test('See what runs on: keeps a tile that is already the only one picked, and narrows a wider pick to it', async () => {
+  const fx = fixture(), lx = fx.fleet.machines.find(m => m.id === 'lx');
+  lx.gpus = lx.gpus.map(g => Object.assign({}, g, {m: [['util', null, new Array(60).fill(3)], ['temp', null, new Array(60).fill(50)]]}));
+  const p = await open({sel: 'lx', metric: 'gpu', gpuView: 'each'}, fx);
+  try {
+    await p.waitFor(`document.querySelector('.ggroup[data-gpu="gpu0"] [data-gm="temp"]')`);
+    const sel = k => p.eval(`JSON.stringify(S.${k} || null)`).then(JSON.parse);
+    await p.click('.ggroup[data-gpu="gpu0"] .lgh [data-gsel]');
+    await p.waitFor(`document.querySelectorAll('[aria-pressed="true"][data-gsel="gpu0"]').length === 3`);
+    await rclick(p, '.ggroup[data-gpu="gpu0"] [data-gm="temp"]'); await pick(p, 'See what runs on GPU 0');
+    assert.deepEqual(await sel('gpuSel'), {mid: 'lx', keys: ['gpu0']});
+    await rclick(p, '.ggroup[data-gpu="gpu0"] .lgh'); await pick(p, 'See what runs on GPU 0');
+    assert.deepEqual(await sel('gpuSel'), {mid: 'lx', keys: ['gpu0']});
+    await p.eval(`(() => { S.gpuSel = {mid: 'lx', keys: ['gpu0', 'gpu1']}; renderMain(); return true; })()`);
+    await rclick(p, '.ggroup[data-gpu="gpu1"] [data-gm="util"]'); await pick(p, 'See what runs on GPU 1');
+    assert.deepEqual(await sel('gpuSel'), {mid: 'lx', keys: ['gpu1']});
+    await p.eval(`(() => { S.metric = 'cpu'; S.cpuView = 'logical'; S.cpuSel = {mid: 'lx', cpus: [4]}; save(); renderAll(); refreshNow(); return true; })()`);
+    await p.waitFor(`document.querySelector('[data-lcpu="4"][aria-pressed="true"]')`);
+    await rclick(p, '[data-lcpu="4"]'); await pick(p, 'See what runs on CPU 4');
+    assert.deepEqual(await sel('cpuSel'), {mid: 'lx', cpus: [4]});
+    await rclick(p, '[data-lgroup="4,5,6,7,12,13,14,15"]'); await pick(p, 'See what runs on CCD 1');
+    assert.deepEqual(await sel('cpuSel'), {mid: 'lx', cpus: [4, 5, 6, 7, 12, 13, 14, 15]});
+    await rclick(p, '[data-lgroup="4,5,6,7,12,13,14,15"]'); await pick(p, 'See what runs on CCD 1');
+    assert.deepEqual(await sel('cpuSel'), {mid: 'lx', cpus: [4, 5, 6, 7, 12, 13, 14, 15]});
+    await rclick(p, '[data-lcpu="5"]'); await pick(p, 'See what runs on CPU 5');
+    assert.deepEqual(await sel('cpuSel'), {mid: 'lx', cpus: [5]});
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
