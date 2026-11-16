@@ -18,7 +18,7 @@ done
 lipo -create -output "$APP/Contents/MacOS/Fleet" "$WORK/Fleet-arm64" "$WORK/Fleet-x86_64"
 
 cp "$LIVE/fleet_live.py" "$LIVE/collect_linux.py" "$LIVE/collect_windows.ps1" "$LIVE/machines.example.toml" "$APP/Contents/Resources/live/"
-cp "$LIVE/web/index.html" "$LIVE/web/app.js" "$LIVE/web/icon.svg" "$APP/Contents/Resources/live/web/"
+cp "$LIVE/web/index.html" "$LIVE/web/app.js" "$LIVE/web/themes.js" "$LIVE/web/icon.svg" "$APP/Contents/Resources/live/web/"
 cp "$LIVE/packaging/icon/Fleet.icns" "$APP/Contents/Resources/Fleet.icns"
 cp "$LIVE/../COPYING" "$APP/Contents/Resources/COPYING"
 sed "s/@VERSION@/$VERSION/g" "$HERE/Info.plist" > "$APP/Contents/Info.plist"

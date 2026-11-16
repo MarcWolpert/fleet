@@ -79,5 +79,6 @@ export function ui(over = {}){
 }
 
 // The PIDs listed in the Details table, top to bottom.
-export const PIDS = `[...document.querySelectorAll('.ptbl tbody tr:not(.gh):not(.empty)')].map(r => +r.children[1].textContent)`;
+// Rows carry data-pid: Details columns can be reordered or hidden, so PID isn't always the 2nd cell.
+export const PIDS = `[...document.querySelectorAll('.ptbl tbody tr[data-pid]')].map(r => +r.dataset.pid)`;
 export const byCpuDesc = rows => rows.slice().sort((a, b) => b[4] - a[4]).map(p => p[0]);

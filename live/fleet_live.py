@@ -23,6 +23,7 @@ CONFIG_PATH = os.path.expanduser("~/.config/fleet/machines.toml")
 LAST_CLIENT = [0.0]   # when a Fleet window last asked for data
 PINS_PATH = os.path.expanduser("~/.config/fleet/pins.json")
 TILEPINS_PATH = os.path.expanduser("~/.config/fleet/tilepins.json")  # pinned tiles and CPU groups, per machine
+PREFS_PATH = os.path.expanduser("~/.config/fleet/ui.json")  # UI layout (Details columns per detail type)
 PINS_LOCK = threading.Lock()
 
 
@@ -42,6 +43,24 @@ def load_tilepins():
         return {str(k)[:200]: [str(x)[:200] for x in v][:200] for k, v in d.items() if isinstance(v, list)} if isinstance(d, dict) else {}
     except Exception:
         return {}
+
+
+def load_prefs():
+    try:
+        with open(PREFS_PATH) as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def save_prefs(d):
+    with PINS_LOCK:
+        os.makedirs(os.path.dirname(PREFS_PATH), exist_ok=True)
+        tmp = PREFS_PATH + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(d, f, indent=1)
+        os.replace(tmp, PREFS_PATH)
 
 
 def save_tilepins(d):
@@ -1167,7 +1186,7 @@ class Fleet:
             if s:
                 machines.append(strip_procs(s))
         return {"t": time.time(), "interval": self.interval, "window_s": self.interval * H, "machines": machines,
-                "pins": load_pins(), "tilepins": load_tilepins()}
+                "pins": load_pins(), "tilepins": load_tilepins(), "prefs": load_prefs()}
 
     def find_machine(self, mid):
         return self.machines.get(mid)
@@ -1679,6 +1698,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 return self.send_json({"ok": True, "terminal": used, "title": title})
             except Exception as e:
                 return self.send_json({"ok": False, "error": str(e)[:300]})
+        if u.path == "/api/prefs":
+            d = self.read_json()
+            if not isinstance(d, dict) or len(json.dumps(d)) > 65536:
+                self.send_error(400)
+                return
+            save_prefs(d)
+            return self.send_json({"prefs": load_prefs()})
         if u.path == "/api/tilepins":
             d = self.read_json()
             if not isinstance(d, dict) or len(d) > 500 or not all(isinstance(v, list) and len(v) <= 200 for v in d.values()):
@@ -1755,7 +1781,7 @@ def watch_own_files(url):
     """Fleet updates itself: server or collector changes restart the server (the page reconnects);
     UI changes reload the open page on their own. Either way, a closed window is reopened."""
     server_files = [os.path.join(HERE, f) for f in ("fleet_live.py", "collect_linux.py", "collect_windows.ps1")]
-    ui_files = [os.path.join(HERE, "web", f) for f in ("index.html", "app.js")]
+    ui_files = [os.path.join(HERE, "web", f) for f in ("index.html", "app.js", "themes.js")]
     def stamp(files):
         out = []
         for f in files:

@@ -63,7 +63,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         toolbar.showsBaselineSeparator = false
         window.toolbar = toolbar
         window.toolbarStyle = .unified
-        window.backgroundColor = NSColor(calibratedRed: 0.078, green: 0.078, blue: 0.086, alpha: 1)
+        // the theme's frame colour (the page sends it whenever the theme changes), so nothing flashes
+        window.backgroundColor = NSColor(fleetHex: UserDefaults.standard.string(forKey: "FleetThemeBG") ?? "")
+            ?? NSColor(calibratedRed: 0.078, green: 0.078, blue: 0.086, alpha: 1)
+        if UserDefaults.standard.object(forKey: "FleetThemeDark") != nil {
+            window.appearance = NSAppearance(named: UserDefaults.standard.bool(forKey: "FleetThemeDark") ? .darkAqua : .aqua)
+        }
         window.minSize = NSSize(width: 760, height: 520)
         window.contentView = web
         window.setFrameAutosaveName("FleetMainWindow")
@@ -76,6 +81,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     func userContentController(_ c: WKUserContentController, didReceive m: WKScriptMessage) {
         guard let d = m.body as? [String: Any] else { return }
         if let b = d["band"] as? Double { web.band = CGFloat(b) }
+        if let bg = d["bg"] as? String, let c = NSColor(fleetHex: bg) {
+            window.backgroundColor = c
+            UserDefaults.standard.set(bg, forKey: "FleetThemeBG")
+        }
+        if let dark = d["dark"] as? Bool {
+            window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)  // traffic lights, scroll bars, file panels
+            UserDefaults.standard.set(dark, forKey: "FleetThemeDark")
+        }
         if let rs = d["regions"] as? [[Double]] {
             web.regions = rs.filter { $0.count == 4 }.map { NSRect(x: $0[0], y: $0[1], width: $0[2], height: $0[3]) }
         }
@@ -159,6 +172,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         return nil
     }
 
+    // <input type="file"> (Settings → Import theme): WebKit asks the app to show the open panel.
+    func webView(_ w: WKWebView, runOpenPanelWith p: WKOpenPanelParameters, initiatedByFrame f: WKFrameInfo,
+                 completionHandler done: @escaping ([URL]?) -> Void) {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = p.allowsMultipleSelection
+        panel.beginSheetModal(for: window) { r in done(r == .OK ? panel.urls : nil) }
+    }
+
     @objc func reloadPage(_ s: Any?) { web.reload() }
 
     func buildMenu() {
@@ -192,6 +215,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         winItem.submenu = win
         NSApp.mainMenu = main
         NSApp.windowsMenu = win
+    }
+}
+
+extension NSColor {
+    /// "#rrggbb" → a colour; anything else → nil
+    convenience init?(fleetHex s: String) {
+        let h = s.hasPrefix("#") ? String(s.dropFirst()) : s
+        guard h.count == 6, let v = UInt32(h, radix: 16) else { return nil }
+        self.init(srgbRed: CGFloat((v >> 16) & 0xff) / 255, green: CGFloat((v >> 8) & 0xff) / 255, blue: CGFloat(v & 0xff) / 255, alpha: 1)
     }
 }
 

@@ -36,6 +36,8 @@ const IC = {
   search2:'<circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5M8.5 11h5"/>',
   refresh:'<path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4.5V11h-6.5"/>',
   check:'<path d="M5 12.5l4.5 4.5L19 7.5"/>',
+  upload:'<path d="M12 15V4.5M7.5 9L12 4.5 16.5 9"/><path d="M5 14.5v3a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3"/>',
+  palette:'<path d="M12 3.5a8.5 8.5 0 1 0 0 17c1.2 0 1.8-.8 1.8-1.7 0-.5-.2-.9-.5-1.2-.3-.4-.5-.8-.5-1.3 0-1 .8-1.8 1.8-1.8h2.1a3.8 3.8 0 0 0 3.8-3.8C20.5 6.9 16.7 3.5 12 3.5z"/><circle cx="7.5" cy="11.5" r="1"/><circle cx="10" cy="7.5" r="1"/><circle cx="14.5" cy="7.5" r="1"/>',
   trash:'<path d="M4.5 7h15M10 11v6M14 11v6M6.5 7l1 12.5a2 2 0 0 0 2 1.8h5a2 2 0 0 0 2-1.8l1-12.5M9.5 7V4.5h5V7"/>',
   search:'<circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/>',
   grip:'<circle cx="9" cy="6.5" r="1.3" fill="currentColor" stroke="none"/><circle cx="15" cy="6.5" r="1.3" fill="currentColor" stroke="none"/><circle cx="9" cy="12" r="1.3" fill="currentColor" stroke="none"/><circle cx="15" cy="12" r="1.3" fill="currentColor" stroke="none"/><circle cx="9" cy="17.5" r="1.3" fill="currentColor" stroke="none"/><circle cx="15" cy="17.5" r="1.3" fill="currentColor" stroke="none"/>',
@@ -66,7 +68,7 @@ if (S.tree === 'pins'){ S.tree = 'machines'; S.pinsOnly = true; }  // pins-only 
 function save(){ try { const {hover, mx, my, ...keep} = S; localStorage.setItem('fleet-live-ui', JSON.stringify(keep)); } catch (e) {} }
 
 /* ---------- model ---------- */
-let TPINS = {};
+let TPINS = {}, PREFS = {}, prefsBusy = false;
 let DATA = null, PINS = [], WINDOW = 180, INTERVAL = 3, CPUS = {}, PROCS = {machine:null, list:[]}, NET = null, DISKS = {}, IFS = {};
 const nodes = {}, roots = [];
 const zero = () => new Array(H).fill(0);
@@ -827,7 +829,7 @@ function leafView(n){
 function cronFolderView(f){
   const owner = f.parent, host = hostOf(f);
   const series = [{label:f.name, color:colOf(owner), data:f.series[S.metric]}];
-  return `<div class="hero"><span class="tile" style="background:#ffffff10;color:var(--ink-2)">${icon('clock')}</span><div><h1>${esc(f.name)} in ${esc(owner.name)}</h1><div class="facts"><span>${f.children.length} jobs</span><span>on ${esc(host.name)}</span></div></div>${heroStats([{k:'running now', v:String(f.children.filter(c => c.running).length), s:`of ${f.children.length}`}])}</div>`
+  return `<div class="hero"><span class="tile" style="background:var(--track);color:var(--ink-2)">${icon('clock')}</span><div><h1>${esc(f.name)} in ${esc(owner.name)}</h1><div class="facts"><span>${f.children.length} jobs</span><span>on ${esc(host.name)}</span></div></div>${heroStats([{k:'running now', v:String(f.children.filter(c => c.running).length), s:`of ${f.children.length}`}])}</div>`
     + noteHTML(`${esc(f.name)} run inside <b>${esc(owner.name)}</b>, so their usage is already part of its numbers.`)
     + cronTableCard(f, 'Jobs')
     + graphCard(`${mlabel(S.metric)} from ${esc(f.name.toLowerCase())}`, 'all jobs here', series, graphMax(0, series, S.metric), S.metric);
@@ -836,7 +838,7 @@ function cronView(n){
   const j = n.job, owner = ownerOf(n), host = hostOf(n);
   const tiles = METRICS.map(m => { const v = cur(n, m.id); return `<div class="st" data-tip="child|${esc(n.id)}|${m.id}"><div class="k">${m.label}</div><div class="v">${n.running ? fmt(v, m.id) : '—'}</div><div class="s">${m.id === 'gpu' ? gpuSub(n) : n.running ? `${pct(v/capOf(host, m.id)*100)} of host · ${pct(v/(cur(owner, m.id)||1)*100)} of ${esc(owner.name)}` : 'idle'}</div>${sparkSVG(n.series[m.id], colOf(owner), 120, 34)}</div>`; }).join('');
   const series = [{label:n.name, color:colOf(owner), data:n.series[S.metric]}];
-  return `<div class="hero"><span class="tile" style="background:#ffffff10;color:var(--ink-2)">${icon('clock')}</span><div><h1>${esc(n.name)}</h1><div class="facts"><span>${n.parent.name === 'Scheduled tasks' ? 'scheduled task' : 'scheduled job'}</span><span>in ${esc(owner.name)}</span><span>on ${esc(host.name)}</span></div></div><div class="hero-stats"><span class="pill${n.running?' on':''}"><i></i>${n.running ? 'running now' : esc(j.state || 'idle')}</span></div></div>`
+  return `<div class="hero"><span class="tile" style="background:var(--track);color:var(--ink-2)">${icon('clock')}</span><div><h1>${esc(n.name)}</h1><div class="facts"><span>${n.parent.name === 'Scheduled tasks' ? 'scheduled task' : 'scheduled job'}</span><span>in ${esc(owner.name)}</span><span>on ${esc(host.name)}</span></div></div><div class="hero-stats"><span class="pill${n.running?' on':''}"><i></i>${n.running ? 'running now' : esc(j.state || 'idle')}</span></div></div>`
     + `<div class="tiles">${tiles}</div>`
     + `<div class="grid2"><section class="card"><div class="card-h"><h2>Schedule</h2></div><dl class="dl"><dt>Schedule</dt><dd><code>${esc(j.sched)}</code>${j.human && j.human !== j.sched ? ' · ' + esc(j.human) : ''}</dd><dt>Command</dt><dd><code>${esc(j.cmd)}</code></dd><dt>Source</dt><dd><code>${esc(j.src || '')}</code></dd><dt>Runs inside</dt><dd>${esc(owner.name)} on ${esc(host.name)}</dd><dt>Last / next</dt><dd>${esc(j.last || '—')}</dd></dl></section>`
     + graphCard(mlabel(S.metric), 'spikes are runs', series, graphMax(0, series, S.metric), S.metric) + `</div>`;
@@ -961,15 +963,23 @@ function detailsView(n, docked){
     {k:'net', label:'Network', get:p => p[16] || 0, show:p => p[16] > 0 ? rateText(p[16]) : p[16] === 0 ? '0' : '—'},
     {k:'threads', label:'Threads', get:p => p[8], show:p => p[8] || '—'},
     {k:'cpugroup', label:'CPU group', l:true, get:p => groupOf(p), show:p => esc(p[12] >= 0 ? groupOf(p) + ' · cpu' + p[12] : '—')},
-    {k:'cmd', label:'Command line', l:true, cls:'cmd', get:p => p[9] || '', show:p => `<span title="${esc(p[9])}">${esc(p[9])}</span>`}
+    {k:'cmd', label:'Command line', l:true, cls:'cmd', get:p => p[9] || '', show:p => `<span title="${esc(p[9])}">${esc(p[9])}</span>`},
+    {k:'ppid', label:'Parent PID', get:p => p[11] || 0, show:p => p[11] || '—'},
+    {k:'lastcpu', label:'Last CPU', get:p => p[12], show:p => p[12] >= 0 ? 'cpu' + p[12] : '—'},
+    {k:'gpus', label:'Which GPU', l:true, get:p => (p[13] || []).join(','), show:p => (p[13] || []).length ? 'GPU' + p[13].join('+') : '—'},
+    {k:'disks', label:'Disks used', l:true, get:p => (p[14] || []).join(','), show:p => esc((p[14] || []).join(', ') || '—')},
+    {k:'ifaces', label:'Interfaces', l:true, get:p => (p[15] || []).join(','), show:p => esc((p[15] || []).join(', ') || '—')}
   ];
-  const col = COLS.find(c => c.k === S.sort.k) || COLS[5];
-  const dir = S.sort.dir;
+  const ALLCOLS = COLS.splice(0), SORT = detailSort();
+  colLayout().forEach(k => { const c = ALLCOLS.find(x => x.k === k); if (c) COLS.push(c); });
+  if (!COLS.length) COLS.push(ALLCOLS[0]);
+  const col = ALLCOLS.find(c => c.k === SORT.k) || COLS[0];
+  const dir = SORT.dir;
   list = list.slice().sort((a, b) => { const x = col.get(a), y = col.get(b); return (x < y ? -1 : x > y ? 1 : 0) * dir || b[4] - a[4]; });
   const groupBy = {none:null, cpugroup:groupOf, owner:p => ownerName(p[10]) || '—', user:p => p[2] || '—', state:p => stateLabel(p[3]) || '—'}[S.group];
   const LIMIT = 400;
   let body = '', shown = 0, more = '';
-  const rowHTML = p => `<tr>${COLS.map(c => `<td class="${c.l ? 'l' : ''} ${c.cls || ''}">${c.show(p)}</td>`).join('')}</tr>`;
+  const rowHTML = p => `<tr data-pid="${p[0]}">${COLS.map(c => `<td class="${c.l ? 'l' : ''} ${c.cls || ''}">${c.show(p)}</td>`).join('')}</tr>`;  // data-pid: columns can move or hide
   if (groupBy){
     // Groups start collapsed, each header a summary; open ones are remembered per Group-by mode (S.groupOpen)
     // and share the row limit.
@@ -1000,9 +1010,9 @@ function detailsView(n, docked){
   const groupNote = Object.keys(gnames).length && all && !all.some(p => p[12] >= 0) && S.group === 'cpugroup' && !FS.some(f => f.kind === 'cpu') ? noteHTML('This OS doesn’t report which processor a process last ran on, so CPU groups can’t be assigned per process here. The <b>Logical processors</b> view under CPU still shows each group.') : '';
   const head = docked
     ? `<div class="dhead"><div class="dtitle"><b>Details · ${esc(n.name)}${FS.length ? ' · ' + esc(FS.map(f => f.label).join(' · ')) : ''}</b><span>${all ? list.length + ' processes' : 'loading…'} on ${esc(m ? m.name : '')}</span></div><button type="button" class="iconbtn" data-undock="1" title="Pop out to the full Details view" aria-label="Pop out Details">${icon('layers')}</button><button type="button" class="iconbtn" data-closedock="1" title="Close the Details panel" aria-label="Close the Details panel">${icon('x', 2.2)}</button></div>`
-    : `<div class="hero"><span class="tile" style="background:#ffffff10;color:var(--ink-2)">${icon('chip')}</span><div><h1>Details · ${esc(n.name)}${FS.length ? ' · ' + esc(FS.map(f => f.label).join(' · ')) : ''}</h1><div class="facts"><span>${all ? list.length + ' processes' : 'loading…'}</span><span>on ${esc(m ? m.name : '')}</span>${hasGroups ? `<span>CPU groups: ${esc(m.groups.map(g => g.name).join(', '))}</span>` : ''}</div></div><button type="button" class="btn" data-dock="1" style="margin-left:auto" title="Or drag the Details pill onto the right side">${icon('layers')}Dock to the right</button></div>`;
+    : `<div class="hero"><span class="tile" style="background:var(--track);color:var(--ink-2)">${icon('chip')}</span><div><h1>Details · ${esc(n.name)}${FS.length ? ' · ' + esc(FS.map(f => f.label).join(' · ')) : ''}</h1><div class="facts"><span>${all ? list.length + ' processes' : 'loading…'}</span><span>on ${esc(m ? m.name : '')}</span>${hasGroups ? `<span>CPU groups: ${esc(m.groups.map(g => g.name).join(', '))}</span>` : ''}</div></div><button type="button" class="btn" data-dock="1" style="margin-left:auto" title="Or drag the Details pill onto the right side">${icon('layers')}Dock to the right</button></div>`;
   const tools = `<div class="dtools"><input type="search" id="pfilter" placeholder="Filter by name, PID, user or command" value="${esc(S.filter)}" aria-label="Filter processes"><label>Group by <select id="pgroup"><option value="none"${S.group==='none'?' selected':''}>Nothing</option><option value="cpugroup"${S.group==='cpugroup'?' selected':''}>CPU group (CCD, P-/E-cores)</option><option value="owner"${S.group==='owner'?' selected':''}>Where it runs (tree node)</option><option value="user"${S.group==='user'?' selected':''}>User</option><option value="state"${S.group==='state'?' selected':''}>Status</option></select></label>${groupBy ? `<span class="gall"><button type="button" class="btn" data-gall="open">Expand all</button><button type="button" class="btn" data-gall="close">Collapse all</button></span>` : ''}</div>`;
-  const thead = `<tr>${COLS.map(c => `<th class="${c.l ? 'l' : ''}" ${c.k === S.sort.k ? `aria-sort="${dir < 0 ? 'descending' : 'ascending'}"` : ''}><button type="button" data-sort="${c.k}">${c.label}${c.k === S.sort.k ? (dir < 0 ? ' ↓' : ' ↑') : ''}</button></th>`).join('')}</tr>`;
+  const thead = `<tr>${COLS.map(c => `<th class="${c.l ? 'l' : ''}" data-colk="${c.k}" ${c.k === SORT.k ? `aria-sort="${dir < 0 ? 'descending' : 'ascending'}"` : ''}><button type="button" data-sort="${c.k}" title="Sort; right-click to choose and arrange columns">${c.label}${c.k === SORT.k ? (dir < 0 ? ' ↓' : ' ↑') : ''}</button></th>`).join('')}</tr>`;
   const applied = FS.filter(f => f.apply);
   if (applied.length && all && !list.length) body = `<tr class="empty"><td colspan="${COLS.length}" class="l" style="padding:18px 10px;color:var(--ink-3)">No process matches ${esc(applied.map(f => f.short).concat(q ? ['“' + S.filter.trim() + '”'] : []).join(' + '))} right now.</td></tr>`;
   return head + groupNote + `<section class="card">${tools}${filterChips(FS)}<div class="pscroll"><table class="ptbl"><thead>${thead}</thead><tbody>${body}</tbody></table>${more ? `<div class="more">${more}</div>` : ''}</div></section>`;
@@ -1172,7 +1182,7 @@ document.addEventListener('click', e => {
   if (gt){ const g = gt.dataset.gtoggle, cur = (S.groupOpen && S.groupOpen[S.group]) || []; setGroupsOpen(S.group, cur.includes(g) ? cur.filter(x => x !== g) : cur.concat([g])); return; }
   const ga = e.target.closest('[data-gall]');
   if (ga){ setGroupsOpen(S.group, ga.dataset.gall === 'open' ? [...document.querySelectorAll('[data-gtoggle]')].map(b => b.dataset.gtoggle) : []); return; }
-  const so = e.target.closest('[data-sort]'); if (so){ const k = so.dataset.sort; S.sort = {k, dir:S.sort.k === k ? -S.sort.dir : (['name','owner','user','state','cpugroup','cmd'].includes(k) ? 1 : -1)}; save(); renderMain(); return; }
+  const so = e.target.closest('[data-sort]'); if (so){ const k = so.dataset.sort, cur0 = detailSort(); S.sorts = Object.assign({}, S.sorts, {[S.metric]:{k, dir:cur0.k === k ? -cur0.dir : (['name','owner','user','state','cpugroup','cmd','gpus','disks','ifaces'].includes(k) ? 1 : -1)}}); save(); lastMainHTML = ''; renderMain(); return; }
   const lc = e.target.closest('[data-lcpu]'), lg = e.target.closest('[data-lgroup]');
   if (lc || lg){
     const m = nodes[S.sel]; if (!m) return;
@@ -1227,7 +1237,7 @@ async function refreshNow(){
   try {
     const r = await fetch('/api/fleet', {cache:'no-store'});
     DATA = await r.json();
-    INTERVAL = DATA.interval || 3; WINDOW = DATA.window_s || INTERVAL * H; PINS = DATA.pins || []; if (!tpinBusy) TPINS = DATA.tilepins || {};
+    INTERVAL = DATA.interval || 3; WINDOW = DATA.window_s || INTERVAL * H; PINS = DATA.pins || []; if (!prefsBusy){ PREFS = DATA.prefs || {}; applyTheme(currentTheme()); } if (!tpinBusy) TPINS = DATA.tilepins || {};
     build(DATA);
     if (S.sel !== 'fleet' && !nodes[S.sel]) { /* keep selection; it may come back */ }
     const n = S.sel === 'fleet' ? null : nodes[S.sel];
@@ -1324,6 +1334,7 @@ function renderSettings(){
       <section><h3>Machines</h3><p class="sub">Fleet reaches each machine over SSH, read-only; nothing is installed on them. Destinations use your <code>~/.ssh/config</code>, keys and Tailscale as they are.</p>
         <div class="mcards">${d.machines.map(machineCard).join('')}</div>
         <button type="button" class="btn" data-addmachine="1">${icon('plus', 2)}Add a machine</button></section>
+      ${appearanceSection()}
       <section><h3>Terminal</h3><p class="sub">Used by <b>Open terminal</b> on a machine or container.</p><label class="inline">Open in <select data-field="-1:terminal" aria-label="Terminal app"><option value="auto"${d.terminal === 'auto' ? ' selected' : ''}>Automatic${SET.termAuto ? ' (' + esc(SET.termAuto) + ')' : ''}</option>${SET.terminals.map(([k, l]) => `<option value="${esc(k)}"${d.terminal === k ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select></label></section>
       <section><h3>Refresh</h3><label class="inline">Read every machine every <input type="number" min="1" max="60" step="1" data-field="-1:interval" value="${esc(d.interval)}" aria-label="Seconds between readings"> seconds</label></section>
       <p class="sub">Saved to <code>${esc(SET.path)}</code>; the previous version is kept beside it as <code>machines.toml.bak</code>.</p>
@@ -1354,6 +1365,9 @@ $('sheet').addEventListener('click', async e => {
   if (e.target.closest('[data-savesettings]')){ saveSettings(); return; }
   const tc = e.target.closest('[data-togglecard]'); if (tc){ const i = +tc.dataset.togglecard; SET.expanded.has(i) ? SET.expanded.delete(i) : SET.expanded.add(i); renderSettings(); const h = $('sheet').querySelector(`[data-togglecard="${i}"]`); if (h) h.focus(); return; }
   if (e.target.closest('[data-addmachine]')){ SET.draft.machines.push({id:'', name:'', ssh:'', os:'linux', tile:'terminal'}); SET.expanded.add(SET.draft.machines.length - 1); renderSettings(); const c = $('sheet').querySelector(`[data-field="${SET.draft.machines.length - 1}:name"]`); if (c) c.focus(); return; }
+  const th = e.target.closest('[data-themeid]'); if (th){ pickTheme(th.dataset.themeid); return; }
+  const rt = e.target.closest('[data-rmtheme]'); if (rt){ removeTheme(rt.dataset.rmtheme); return; }
+  if (e.target.closest('[data-importtheme]')){ const f = $('themefile'); if (f) f.click(); return; }
   const rm = e.target.closest('[data-rmmachine]'); if (rm){ const i = +rm.dataset.rmmachine; SET.draft.machines.splice(i, 1); SET.tests = {}; SET.expanded = new Set([...SET.expanded].filter(j => j !== i).map(j => j > i ? j - 1 : j)); renderSettings(); return; }
   const tb = e.target.closest('[data-testmachine]');
   if (tb){
@@ -1373,7 +1387,7 @@ function setField(t){
   if (card && k === 'name'){ const l = card.querySelector('.mlabel'); if (l) l.textContent = v || 'New machine'; }
 }
 $('sheet').addEventListener('input', e => setField(e.target));
-$('sheet').addEventListener('change', e => setField(e.target));
+$('sheet').addEventListener('change', e => { if (e.target.id === 'themefile'){ importTheme(e.target.files && e.target.files[0]); return; } setField(e.target); });
 $('sheet').addEventListener('keydown', e => { if (e.key === 'Escape'){ e.preventDefault(); closeSettings(); } });
 
 
@@ -1430,3 +1444,160 @@ document.addEventListener('pointerdown', e => {
   const up = () => { h.removeEventListener('pointermove', move); h.removeEventListener('pointerup', up); save(); lastMainHTML = ''; };
   h.addEventListener('pointermove', move); h.addEventListener('pointerup', up);
 });
+
+
+/* ---------- Details columns: a layout per detail type, arranged from a right-click menu ---------- */
+const COL_LABELS = {name:'Name', pid:'PID', owner:'Runs in', user:'User', state:'Status', cpu:'CPU', mem:'Memory', disk:'Disk', gpu:'GPU', net:'Network',
+  threads:'Threads', cpugroup:'CPU group', cmd:'Command line', ppid:'Parent PID', lastcpu:'Last CPU', gpus:'Which GPU', disks:'Disks used', ifaces:'Interfaces'};
+const COL_DEFAULTS = {
+  cpu:['name', 'pid', 'owner', 'user', 'state', 'cpu', 'mem', 'threads', 'cpugroup', 'cmd'],
+  mem:['name', 'pid', 'owner', 'user', 'mem', 'cpu', 'threads', 'cmd'],
+  gpu:['name', 'pid', 'owner', 'gpu', 'gpus', 'cpu', 'mem', 'cmd'],
+  disk:['name', 'pid', 'owner', 'disk', 'disks', 'cpu', 'mem', 'cmd'],
+  net:['name', 'pid', 'owner', 'net', 'ifaces', 'cpu', 'mem', 'cmd']
+};
+function colType(){ return COL_DEFAULTS[S.metric] ? S.metric : 'cpu'; }
+function colLayout(){ const l = ((PREFS.columns || {})[colType()] || []).filter(k => COL_LABELS[k]); return l.length ? l : COL_DEFAULTS[colType()]; }
+// A header click sorts that detail type; until then every type keeps the usual default (CPU, highest first).
+function detailSort(){ const s0 = (S.sorts || {})[colType()]; return s0 && COL_LABELS[s0.k] ? s0 : (S.sort && COL_LABELS[S.sort.k] ? S.sort : {k:'cpu', dir:-1}); }
+async function setColLayout(list){
+  PREFS = Object.assign({}, PREFS, {columns:Object.assign({}, PREFS.columns, {[colType()]:list})});
+  lastMainHTML = ''; renderMain(); if (COLMENU.open) renderColMenu();
+  await savePrefs('the column layout');
+}
+// PREFS (~/.config/fleet/ui.json) is saved whole; while a save is on its way, polls don't overwrite it.
+let prefsSaves = 0;
+async function savePrefs(what){
+  prefsSaves++; prefsBusy = true;
+  try { const d = await api('/api/prefs', PREFS); if (prefsSaves === 1 && d.prefs) PREFS = d.prefs; }
+  catch (e) { toast('Couldn’t save ' + what); }
+  if (--prefsSaves === 0) prefsBusy = false;
+}
+const COLMENU = {open:false, x:0, y:0, focus:''};
+function renderColMenu(){
+  let el = $('colmenu');
+  if (!el){ el = document.createElement('div'); el.id = 'colmenu'; el.className = 'colmenu'; el.setAttribute('role', 'dialog'); el.setAttribute('aria-label', 'Columns'); document.body.appendChild(el); }
+  const vis = colLayout(), hidden = Object.keys(COL_LABELS).filter(k => !vis.includes(k));
+  const f = COLMENU.focus && vis.includes(COLMENU.focus) ? COLMENU.focus : '';
+  const quick = f ? `<div class="cm-quick"><b>${esc(COL_LABELS[f])}</b><button type="button" data-colact="hide|${f}">Hide</button><button type="button" data-colact="left|${f}"${vis.indexOf(f) === 0 ? ' disabled' : ''}>Move left</button><button type="button" data-colact="right|${f}"${vis.indexOf(f) === vis.length - 1 ? ' disabled' : ''}>Move right</button></div>` : '';
+  const row = (k, on) => `<li class="cm-row${on ? '' : ' off'}" draggable="${on}" data-colrow="${k}"><span class="cm-grip" aria-hidden="true">${on ? icon('grip') : ''}</span><label><input type="checkbox" data-colvis="${k}"${on ? ' checked' : ''}${on && vis.length === 1 ? ' disabled' : ''}> ${esc(COL_LABELS[k])}</label>${on ? `<button type="button" class="iconbtn" data-colact="left|${k}" aria-label="Move ${esc(COL_LABELS[k])} earlier"${vis.indexOf(k) === 0 ? ' disabled' : ''}>↑</button><button type="button" class="iconbtn" data-colact="right|${k}" aria-label="Move ${esc(COL_LABELS[k])} later"${vis.indexOf(k) === vis.length - 1 ? ' disabled' : ''}>↓</button>` : ''}</li>`;
+  el.innerHTML = `<div class="cm-h">Columns · ${esc(mlabel(colType()))} details<span>each detail type keeps its own</span></div>${quick}<ul class="cm-list">${vis.map(k => row(k, true)).join('')}${hidden.map(k => row(k, false)).join('')}</ul><div class="cm-f"><button type="button" class="btn" data-colact="reset|">Reset to default</button><button type="button" class="btn primary" data-colact="close|">Done</button></div>`;
+  el.hidden = false;
+  const r = el.getBoundingClientRect();
+  el.style.left = Math.max(8, Math.min(COLMENU.x, innerWidth - r.width - 8)) + 'px';
+  el.style.top = Math.max(8, Math.min(COLMENU.y, innerHeight - r.height - 8)) + 'px';
+}
+function closeColMenu(){ COLMENU.open = false; const el = $('colmenu'); if (el) el.hidden = true; }
+document.addEventListener('contextmenu', e => {
+  const th = e.target.closest && e.target.closest('.ptbl thead th');
+  if (!th) return;
+  e.preventDefault();
+  Object.assign(COLMENU, {open:true, x:e.clientX, y:e.clientY, focus:th.dataset.colk || ''});
+  renderColMenu();
+});
+document.addEventListener('click', e => {
+  const el = $('colmenu'); if (!COLMENU.open || !el) return;
+  if (!el.contains(e.target)){ closeColMenu(); return; }
+  const a = e.target.closest('[data-colact]'); if (!a) return;
+  const [act, k] = a.dataset.colact.split('|'), vis = colLayout().slice(), i = vis.indexOf(k);
+  if (act === 'close') return closeColMenu();
+  if (act === 'reset') return setColLayout(COL_DEFAULTS[colType()].slice());
+  if (act === 'hide' && vis.length > 1){ vis.splice(i, 1); COLMENU.focus = ''; }
+  if (act === 'left' && i > 0) [vis[i - 1], vis[i]] = [vis[i], vis[i - 1]];
+  if (act === 'right' && i >= 0 && i < vis.length - 1) [vis[i + 1], vis[i]] = [vis[i], vis[i + 1]];
+  setColLayout(vis);
+}, true);
+document.addEventListener('change', e => {
+  const c = e.target.dataset && e.target.dataset.colvis; if (!c) return;
+  const vis = colLayout().slice();
+  if (e.target.checked && !vis.includes(c)) vis.push(c);
+  if (!e.target.checked && vis.length > 1) vis.splice(vis.indexOf(c), 1);
+  setColLayout(vis);
+});
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && COLMENU.open) closeColMenu(); });
+// Drag a row in the menu to reorder.
+let colDrag = '';
+document.addEventListener('dragstart', e => { const r = e.target.closest && e.target.closest('[data-colrow]'); if (r && COLMENU.open){ colDrag = r.dataset.colrow; e.dataTransfer.setData('text/plain', colDrag); } });
+document.addEventListener('dragover', e => { if (colDrag && e.target.closest && e.target.closest('[data-colrow]')) e.preventDefault(); });
+document.addEventListener('drop', e => {
+  const r = colDrag && e.target.closest && e.target.closest('[data-colrow]'); if (!r) return;
+  e.preventDefault();
+  const vis = colLayout().slice(), from = vis.indexOf(colDrag), to = vis.indexOf(r.dataset.colrow);
+  colDrag = '';
+  if (from < 0 || to < 0 || from === to) return;
+  vis.splice(to, 0, vis.splice(from, 1)[0]);
+  setColLayout(vis);
+});
+
+
+/* ---------- Themes (themes.js has the list and the colour maths) ---------- */
+// The theme is a UI pref (prefs.theme), so it follows you across restarts and into every Fleet window;
+// imported themes live in prefs.themes. The page applies the last one before its first paint (index.html).
+function customThemes(){ return (PREFS.themes || []).filter(t => t && typeof t.id === 'string' && t.c && typeof t.c === 'object'); }
+function allThemes(){ return FLEET_THEMES.concat(customThemes()); }
+function currentTheme(){ const id = PREFS.theme || 'fleet'; return allThemes().find(t => t.id === id) || FLEET_THEMES[0]; }
+let appliedTheme = '';
+function applyTheme(th){
+  const tk = themeTokens(th), key = th.id + JSON.stringify(tk);
+  if (key === appliedTheme) return;
+  appliedTheme = key;
+  const st = document.documentElement.style;
+  for (const [k, v] of Object.entries(tk.vars)) st.setProperty('--' + k, v);
+  st.colorScheme = tk.dark ? 'dark' : 'light';
+  document.documentElement.dataset.fleetTheme = th.id;
+  try { localStorage.setItem('fleet-theme', JSON.stringify({id:th.id, dark:tk.dark, vars:tk.vars})); } catch (e) {}
+  // Fleet.app paints its window (behind the page, and while it loads) in the same colour
+  try { window.webkit.messageHandlers.fleet.postMessage({bg:tk.vars.chrome, dark:tk.dark}); } catch (e) {}
+}
+const THEME_MSG = {text:'', bad:false};
+function themeSwatch(th, on){
+  const v = themeTokens(th).vars, custom = !FLEET_THEMES.some(t => t.id === th.id);
+  return `<div class="thsw${on ? ' on' : ''}"><button type="button" class="thsw-b" data-themeid="${esc(th.id)}" aria-pressed="${on}" title="${esc(th.name)}${custom ? ' (imported)' : ''}">`
+    + `<span class="thsw-p" style="background:${v.chrome}"><span class="thsw-a" style="background:${v['accent-bg']}"></span><span class="thsw-w" style="background:${v.win}">`
+    + `<span class="thsw-c" style="background:${v.card}"><i style="background:${v.ink}"></i><i style="background:${v['ink-3']}"></i></span>`
+    + `<span class="thsw-s">${SERIES_KEYS.map(k => `<i style="background:${v[k]}"></i>`).join('')}</span></span></span>`
+    + `<span class="thsw-n">${on ? icon('check', 2.4) : ''}${esc(th.name)}</span></button>`
+    + (custom ? `<button type="button" class="thsw-x" data-rmtheme="${esc(th.id)}" aria-label="Remove ${esc(th.name)}" title="Remove">${icon('x', 2.4)}</button>` : '') + `</div>`;
+}
+function appearanceSection(){
+  const cur = currentTheme().id;
+  return `<section><h3>Appearance</h3><p class="sub">Pick a theme; it applies right away and is kept for next time.</p>
+    <div class="thgrid" role="group" aria-label="Themes">${allThemes().map(t => themeSwatch(t, t.id === cur)).join('')}</div>
+    <div class="throw"><button type="button" class="btn" data-importtheme="1">${icon('upload')}Import theme</button><input type="file" id="themefile" accept=".json,.jsonc,application/json" hidden>
+    <span class="thmsg${THEME_MSG.bad ? ' bad' : ''}" role="status">${esc(THEME_MSG.text || 'A VS Code colour theme (.json), or a Fleet theme.')}</span></div></section>`;
+}
+function rerenderAppearance(focusSel){
+  if (!SET.open || !SET.draft) return;
+  const sec = $('sheet').querySelector('.thgrid'); if (!sec) return;
+  sec.closest('section').outerHTML = appearanceSection();
+  const f = focusSel && $('sheet').querySelector(focusSel); if (f) f.focus();
+}
+async function pickTheme(id){
+  if (!allThemes().some(t => t.id === id)) return;
+  PREFS = Object.assign({}, PREFS, {theme:id});
+  THEME_MSG.text = ''; THEME_MSG.bad = false;
+  applyTheme(currentTheme()); rerenderAppearance(`[data-themeid="${CSS.escape(id)}"]`);
+  await savePrefs('the theme');
+}
+async function removeTheme(id){
+  const list = customThemes().filter(t => t.id !== id);
+  PREFS = Object.assign({}, PREFS, {themes:list}, PREFS.theme === id ? {theme:'fleet'} : {});
+  applyTheme(currentTheme()); rerenderAppearance('[data-importtheme]');
+  await savePrefs('the theme list');
+}
+async function importTheme(file){
+  if (!file) return;
+  try {
+    if (file.size > 2e6) throw new Error('it’s too big to be a theme');
+    const th = readThemeFile(await file.text(), file.name);
+    if (FLEET_THEMES.some(t => t.id === th.id)) th.id += '-imported';
+    const list = customThemes().filter(t => t.id !== th.id).concat([th]).slice(-24);
+    PREFS = Object.assign({}, PREFS, {themes:list, theme:th.id});
+    THEME_MSG.text = `Imported ${th.name}.`; THEME_MSG.bad = false;
+    applyTheme(currentTheme()); rerenderAppearance(`[data-themeid="${CSS.escape(th.id)}"]`);
+    await savePrefs('the imported theme');
+  } catch (e) {
+    THEME_MSG.text = `Couldn’t import ${file.name}: ${e.message}.`; THEME_MSG.bad = true;
+    rerenderAppearance('[data-importtheme]');
+  }
+}
