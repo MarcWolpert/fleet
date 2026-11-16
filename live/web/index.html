@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fleet</title>
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  color-scheme: dark;
+  --chrome:#141416; --chrome-2:#1e1e21; --win:#1d1d20; --side:#222226; --card:#29292e; --card-2:#313137;
+  --hover:#ffffff0d; --sel:#3584e430; --line:#ffffff14; --line-2:#ffffff24;
+  --ink:#f3f3f5; --ink-2:#c6c6cd; --ink-3:#9e9ea7;
+  --accent:#78aeed; --accent-bg:#3584e4; --run:#33d17a;
+  --t-base:#8a8984; --t-compose:#3987e5; --t-container:#199e70; --t-vm:#d95926;
+  --track:#ffffff10; --panel:#1a1a1d; --edge:#000000; --rd:#8fc1ff; --wr:#ffab7a;
+  --chrome-hover:#252529; --chrome-act:#2b2b30; --pop:#18181b; --press:#3a3a41; --stale:#f6d32d; --warn:#ffa66b; --on-accent:#ffffff;
+  --mono:"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --sans:Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--chrome);color:var(--ink);font:14px/1.45 var(--sans);-webkit-font-smoothing:antialiased}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer;text-align:inherit}
+button:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:7px}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+
+.app{display:flex;flex-direction:column;height:100vh;min-height:560px}
+
+/* herdr-style spaces bar */
+.spacebar{display:flex;align-items:center;gap:14px;padding:9px 14px;background:var(--chrome);border-bottom:1px solid var(--edge)}
+.lights{display:flex;gap:8px;flex:none}
+.lights i{width:12px;height:12px;border-radius:50%;display:block}
+.spaces{display:flex;gap:8px;flex:1;min-width:0;overflow-x:auto;scrollbar-width:none;padding:2px}
+.spaces::-webkit-scrollbar{display:none}
+.space{flex:0 1 auto;min-width:0;max-width:330px;display:flex;align-items:center;gap:10px;height:40px;padding:0 13px 0 6px;border-radius:11px;background:var(--chrome-2);border:1px solid transparent;color:var(--ink-2);font:500 13px/1 var(--mono)}
+.space:hover{background:var(--chrome-hover)}
+.space.active{background:var(--chrome-act);border-color:color-mix(in srgb, var(--ink) 27%, transparent);color:var(--ink)}
+.space .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:84px}
+.space:not(.active) .mini{display:none}
+.space.active{flex-shrink:0}
+.space .pc{color:var(--ink-3);font-size:12px;flex:none}
+.mini{display:flex;width:32px;height:4px;border-radius:2px;overflow:hidden;background:var(--track);flex:none}
+.mini i{display:block;height:100%}
+.tile{width:28px;height:28px;border-radius:8px;display:grid;place-items:center;flex:none}
+.tile svg{width:16px;height:16px}
+.tile.fleet{background:var(--chrome-act);color:var(--ink-2)}
+.tile.laptop{background:#7a4a35;color:#ffe3d6}
+.tile.terminal{background:#15301c;color:#62e48f}
+.tile.server{background:#3a2416;color:var(--warn)}
+.tile.globe{background:#5b5fd6;color:#fff}
+.tile.desktop{background:#16365a;color:#8cc8ff}
+.tile.vm{background:#3d2215;color:var(--warn)}
+.addbtn{width:34px;height:34px;border-radius:9px;display:grid;place-items:center;color:var(--ink-3);flex:none}
+.addbtn svg{width:16px;height:16px}
+.addbtn:hover{background:var(--chrome-2);color:var(--ink)}
+
+/* toolbar */
+.toolbar{display:flex;align-items:center;gap:10px 14px;flex-wrap:wrap;padding:9px 16px;background:var(--win);border-bottom:1px solid var(--line)}
+.crumbs{display:flex;align-items:center;gap:2px;min-width:0;flex:1 1 300px;flex-wrap:wrap;font-size:13px;color:var(--ink-3)}
+.crumbs button{color:var(--ink-2);padding:4px 7px;border-radius:7px}
+.crumbs button:hover{background:var(--hover);color:var(--ink)}
+.crumbs .cur{color:var(--ink);font-weight:600;padding:4px 7px}
+.crumbs .sep{color:color-mix(in srgb, var(--ink) 25%, transparent)}
+.seg{display:inline-flex;background:var(--side);border:1px solid var(--line);border-radius:10px;padding:2px;gap:2px;flex-wrap:wrap}
+.seg button{padding:6px 11px;border-radius:8px;font-size:13px;color:var(--ink-2);font-weight:500;white-space:nowrap}
+.seg button:hover{color:var(--ink)}
+.seg button[aria-pressed="true"]{background:var(--press);color:var(--ink)}
+.badge{font:500 11px/1 var(--mono);color:var(--ink-3);border:1px solid var(--line-2);border-radius:999px;padding:6px 10px;white-space:nowrap;display:inline-flex;align-items:center;gap:6px}
+.badge i{width:7px;height:7px;border-radius:50%;background:var(--run)}
+#live{display:none}
+#live.on{display:inline-flex}
+
+/* body */
+.body{flex:1;display:flex;min-height:0}
+.side{width:390px;flex:none;background:var(--side);border-right:1px solid var(--line);display:flex;flex-direction:column;min-height:0}
+.side-h{display:flex;justify-content:space-between;align-items:baseline;gap:10px;padding:14px 16px 8px;font-size:12px;color:var(--ink-3)}
+.side-h b{font-size:13px;color:var(--ink);font-weight:600}
+.tree{flex:1;overflow:auto;padding:2px 6px 12px}
+.row{display:flex;align-items:center;gap:6px;min-height:32px;padding-right:8px;padding-left:calc(2px + var(--d) * 17px);border-radius:7px;cursor:pointer;color:var(--ink-2)}
+.row:hover{background:var(--hover)}
+.row.sel{background:var(--sel);color:var(--ink)}
+.row.machine .nm{color:var(--ink);font-weight:600}
+.row.cronfolder .nm{color:var(--ink-3);font-style:italic}
+.chev{width:22px;height:22px;display:grid;place-items:center;border-radius:6px;color:var(--ink-3);flex:none}
+.chev:hover{background:var(--hover);color:var(--ink)}
+.chev svg{width:12px;height:12px;transition:transform .15s}
+.chev.open svg{transform:rotate(90deg)}
+.chev.leaf{visibility:hidden}
+.ico{width:18px;height:18px;display:grid;place-items:center;flex:none}
+.ico svg{width:16px;height:16px}
+.row .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13.5px;text-align:left;padding:6px 0}
+.count{font:500 11px/1 var(--mono);color:var(--ink-3);background:color-mix(in srgb, var(--ink) 5%, transparent);border-radius:5px;padding:3px 5px;flex:none}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--run);flex:none;display:none}
+.dot.on{display:block}
+.spark{width:52px;height:16px;flex:none;overflow:visible}
+.val{width:46px;text-align:right;font:500 12px/1 var(--mono);color:var(--ink-2);flex:none}
+.side-note{margin:0 12px 12px;padding:10px 12px;border-radius:9px;background:color-mix(in srgb, var(--ink) 3%, transparent);border:1px dashed var(--line-2);font-size:12px;color:var(--ink-3)}
+.side-note b{color:var(--ink-2);font-weight:600}
+.gtag{font:500 10.5px/1 var(--mono);color:var(--ink-2);border:1px solid var(--line-2);border-radius:5px;padding:2px 5px;margin-left:4px;flex:none;white-space:nowrap}
+.conn{font:500 11px/1 var(--mono);color:var(--warn)}
+.side-note svg{width:12px;height:12px;vertical-align:-2px;display:inline-block}
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="spacebar">
+    <div class="lights" aria-hidden="true"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i></div>
+    <nav class="spaces" id="spaces" aria-label="Pinned spaces"></nav>
+  </header>
+  <div class="toolbar">
+    <nav class="crumbs" id="crumbs" aria-label="Path"></nav>
+    <div class="seg" id="metrics" role="group" aria-label="View"></div>
+    <span class="conn" id="conn" hidden>reconnecting…</span>
+    <span class="badge" id="live"><i></i>live</span>
+  </div>
+  <div class="body">
+    <aside class="side" aria-label="Trees">
+      <div class="side-h"><b id="tree-title">Machines</b><span id="tree-col"></span></div>
+      <div class="tree" id="tree" role="tree"></div>
+      <div id="side-note"></div>
+    </aside>
+    <main id="main"></main>
+  </div>
+</div>
+<script src="app.js"></script>
+</body>
+</html>
