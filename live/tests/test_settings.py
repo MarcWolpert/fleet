@@ -318,13 +318,13 @@ class ValidateConfig(unittest.TestCase):
             ({"machines": [dict(nas, ssh="-oProxyCommand=sh")]}, ssh_err),   # an option, not a destination
             ({"machines": [dict(nas, ssh="-Jjump.example")]}, ssh_err),
             ({"machines": [dict(nas, ssh="nas;reboot")]}, ssh_err),
-            ({"machines": [dict(nas, os="")]}, ["nas: choose Linux or Windows."]),
-            ({"machines": [dict(nas, os="macos")]}, ["nas: choose Linux or Windows."]),
+            ({"machines": [dict(nas, os="")]}, ["nas: choose Linux, Windows or macOS."]),
+            ({"machines": [dict(nas, os="freebsd")]}, ["nas: choose Linux, Windows or macOS."]),   # macOS is one since #181
             ({"machines": [dict(nas, domain="app vm")]}, ["nas: domain has characters Fleet can't use."]),
             ({"machines": [dict(nas, tailscale="nas$(id)")]}, ["nas: tailscale has characters Fleet can't use."]),
             ({"machines": [here, dict(here, id="this2")]}, ["Only one machine can be this computer."]),
             ({"machines": [{}]}, ["Machine 1: id must be 1–40 letters, digits, - or _.", "Machine 1: give it a name (up to 80 characters).",
-                              "Machine 1: SSH destination must look like host, user@host or a Tailscale name.", "Machine 1: choose Linux or Windows."]),
+                              "Machine 1: SSH destination must look like host, user@host or a Tailscale name.", "Machine 1: choose Linux, Windows or macOS."]),
         ]
         for data, want in cases:
             with self.subTest(data=data):
