@@ -146,6 +146,12 @@ test('inline as the default; ⌘T from the terminal opens another; it shows it h
   fx.onPost = p => p === '/api/inline-terminal' ? {ok: true, id: 's' + (++n), url: 'data:text/html,' + encodeURIComponent(page), title: 'lab-linux'} : p === '/api/inline-terminal/close' ? {ok: true} : null;
   const p = await browser.page(fx, {ui: ui({sel: 'lx'})});
   const cmdT = async () => { for (const type of ['keyDown', 'keyUp']) await p.send('Input.dispatchKeyEvent', {type, key: 't', code: 'KeyT', modifiers: 4, windowsVirtualKeyCode: 84}); };
+  // focus a terminal and wait until it says so itself (Fleet's script in its page): it runs in its own process
+  const intoTerminal = async sel => {
+    const n = await p.eval(`(window.__tf = window.__tf || 0, window.__tfOn || (window.__tfOn = addEventListener('message', e => { if (e.data && e.data.fleet === 'termFocus') __tf++; }) || 1), document.activeElement && document.activeElement.blur(), window.__tf)`);
+    await p.eval(`(document.querySelector(${JSON.stringify(sel)}).focus(), true)`);
+    await p.waitFor(`window.__tf > ${n}`);
+  };
   try {
     await p.waitFor(`document.querySelector('.hero [data-terminal="lx"]')`);
     await p.eval(`(openSettings(), true)`);
@@ -162,7 +168,7 @@ test('inline as the default; ⌘T from the terminal opens another; it shows it h
     assert.deepEqual(await p.eval(MENU), ['Ghostty', 'Terminal', '—', '✓ Open inline, below the page', 'Change the default…']);
     await p.key('Escape');
     // into the terminal: its outline, and nobody else's
-    await p.eval(`(document.querySelector('#tdrawer iframe').focus(), true)`);
+    await intoTerminal('#tdrawer iframe');
     await p.waitFor(`document.getElementById('tdrawer').classList.contains('pactive')`);
     assert.equal(await p.eval(`document.querySelector('.pactive:not(#tdrawer)')`), null);
     // ⌘T in a terminal asks which to open (#338): just what can have one, this terminal's machine first
@@ -193,7 +199,7 @@ test('inline as the default; ⌘T from the terminal opens another; it shows it h
     await ctrlTab(true);
     await p.waitFor(`${ACTIVE} === 2`);
     const space = await p.eval(`S.space`);
-    await p.eval(`(document.querySelector('#tdrawer .td-pane:not([hidden]) iframe').focus(), true)`);
+    await intoTerminal('#tdrawer .td-pane:not([hidden]) iframe');
     await ctrlTab(true);
     await p.waitFor(`${ACTIVE} === 1`);
     assert.equal(await p.eval(`S.space`), space, 'the spaces stay put');
@@ -201,7 +207,7 @@ test('inline as the default; ⌘T from the terminal opens another; it shows it h
     await p.eval(`(() => { const r = document.querySelector('#tree .row'); r.dispatchEvent(new PointerEvent('pointerdown', {bubbles: true})); r.focus(); return true; })()`);
     await p.waitFor(`!document.getElementById('tdrawer').classList.contains('pactive')`);
     // ⌘J typed in a terminal minimizes the terminals (#338)
-    await p.eval(`(document.querySelector('#tdrawer .td-pane:not([hidden]) iframe').focus(), true)`);
+    await intoTerminal('#tdrawer .td-pane:not([hidden]) iframe');
     for (const type of ['keyDown', 'keyUp']) await p.send('Input.dispatchKeyEvent', {type, key: 'j', code: 'KeyJ', modifiers: 4, windowsVirtualKeyCode: 74});
     await p.waitFor(`document.getElementById('tdrawer').hidden && PREFS.termMin === true`);
     assert.deepEqual(p.errors, []);

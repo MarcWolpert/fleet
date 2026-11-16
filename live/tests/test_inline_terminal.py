@@ -279,14 +279,17 @@ class Durable(unittest.TestCase):
     def tearDown(self):
         for sid in list(fl.INLINE):
             fl.close_inline(sid)
-        fl.subprocess.run([fl.tmux_path(), "-L", fl.TMUX_SOCKET, "kill-server"], capture_output=True)
+        for t in ("", os.path.join(self.dir.name, "elsewhere", "terminals.json")):
+            if t:
+                fl.TERMS_PATH = t
+            fl.subprocess.run([fl.tmux_path(), "-L", fl.tmux_socket(), "kill-server"], capture_output=True)
         fl.ttyd_path, fl.ttyd_index, fl.TERMS_PATH, fl.TMUX_SOCKET = self.saved
         self.dir.cleanup()
 
     def test_ttyd_attaches_to_its_own_session(self):
         tmux = fl.tmux_path()
         self.assertEqual(fl.session_argv("abc", ["ssh", "nas"], tmux),
-                         [tmux, "-L", fl.TMUX_SOCKET, "-f", fl.tmux_conf(), "new-session", "-A", "-s", "fleet-abc"] + fl.reconnecting(["ssh", "nas"]))
+                         [tmux, "-L", fl.tmux_socket(), "-f", fl.tmux_conf(), "new-session", "-A", "-s", "fleet-abc"] + fl.reconnecting(["ssh", "nas"]))
         with open(fl.tmux_conf()) as f:
             conf = f.read()
         for line in ("set -g prefix None", "set -g status off", "set -g mouse on"):
@@ -303,10 +306,33 @@ class Durable(unittest.TestCase):
         fl.close_inline(r["id"])
         self.assertNotIn("fleet-" + r["id"], fl.tmux_sessions(), "closing the tab ends the shell")
 
+    def test_another_fleet_setup_never_touches_these_shells(self):
+        # two setups on one computer (another config folder, e.g. a second Fleet or a test) share the user's tmux
+        # directory: each gets its own socket, so one starting up never ends the other's shells
+        r = fl.new_inline(self.f, "here", "exec sleep 120", {})
+        mine, here = fl.tmux_socket(), fl.TERMS_PATH
+        fl.TERMS_PATH = os.path.join(self.dir.name, "elsewhere", "terminals.json")
+        try:
+            self.assertNotEqual(fl.tmux_socket(), mine)
+            saved = dict(fl.INLINE); fl.INLINE.clear()
+            fl.load_terms(); fl.prune_tmux()   # the other setup starts: it keeps nothing
+            fl.INLINE.update(saved)
+        finally:
+            fl.TERMS_PATH = here
+        self.assertIn("fleet-" + r["id"], fl.tmux_sessions(), "still running")
+
+    def test_the_usual_setup_keeps_its_socket_name(self):
+        here = fl.TERMS_PATH
+        try:
+            fl.TERMS_PATH = fl.DEFAULT_TERMS_PATH
+            self.assertEqual(fl.tmux_socket(), fl.TMUX_SOCKET)
+        finally:
+            fl.TERMS_PATH = here
+
     def test_sessions_fleet_no_longer_knows_are_ended(self):
         tmux = fl.tmux_path()
-        fl.subprocess.run([tmux, "-L", fl.TMUX_SOCKET, "-f", fl.tmux_conf(), "new-session", "-d", "-s", "fleet-gone", "sleep", "120"], check=True)
-        fl.subprocess.run([tmux, "-L", fl.TMUX_SOCKET, "new-session", "-d", "-s", "yours", "sleep", "120"], check=True)
+        fl.subprocess.run([tmux, "-L", fl.tmux_socket(), "-f", fl.tmux_conf(), "new-session", "-d", "-s", "fleet-gone", "sleep", "120"], check=True)
+        fl.subprocess.run([tmux, "-L", fl.tmux_socket(), "new-session", "-d", "-s", "yours", "sleep", "120"], check=True)
         fl.prune_tmux()
         self.assertNotIn("fleet-gone", fl.tmux_sessions())
         self.assertIn("yours", fl.tmux_sessions(), "only Fleet's")

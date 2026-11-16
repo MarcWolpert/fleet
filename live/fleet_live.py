@@ -13,7 +13,7 @@ connection closes. Nothing is installed on any machine and nothing is changed.
 Usage: python3 fleet_live.py [--port 4518] [--config PATH] [--open]
 """
 import argparse, base64, collections, ctypes, ctypes.util, glob, http.server, json, os, platform, plistlib, shlex
-import re, secrets, shutil, subprocess, sys, tempfile, threading, time, tomllib, urllib.parse, urllib.request, webbrowser, zlib
+import hashlib, re, secrets, shutil, subprocess, sys, tempfile, threading, time, tomllib, urllib.parse, urllib.request, webbrowser, zlib
 
 VERSION = "0.0.1"
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -29,6 +29,13 @@ TILEPINS_PATH = os.path.expanduser("~/.config/fleet/tilepins.json")  # pinned ti
 PREFS_PATH = os.path.expanduser("~/.config/fleet/ui.json")  # UI layout (Details columns per detail type)
 CONNECT_PATH = os.path.expanduser("~/.config/fleet/connect.json")  # which machines Fleet connects to when it starts, and saved sets
 TERMS_PATH = os.path.expanduser("~/.config/fleet/terminals.json")  # the inline terminals: which, on what, named what (#337)
+def _real_home():
+    try:
+        import pwd
+        return pwd.getpwuid(os.getuid()).pw_dir
+    except Exception:
+        return os.path.expanduser("~")
+DEFAULT_TERMS_PATH = os.path.join(_real_home(), ".config", "fleet", "terminals.json")   # your own setup, whatever $HOME says
 BOOT = "%x" % int(time.time() * 1000)   # this server's start: the page notices a restart (#337)
 PINS_LOCK = threading.Lock()
 
@@ -2781,11 +2788,20 @@ def tmux_conf():
     return path
 
 
+def tmux_socket():
+    """Fleet's tmux socket for this setup. Every setup on a computer shares the user's tmux folder, so each gets its own
+    socket: your usual setup the usual name, another (a second config folder, a test, a $HOME set elsewhere) one named
+    after its folder. Then one starting up, which ends the shells its setup doesn't hold, never ends another's."""
+    if os.path.abspath(TERMS_PATH) == os.path.abspath(DEFAULT_TERMS_PATH):
+        return TMUX_SOCKET
+    return "%s-%s" % (TMUX_SOCKET, hashlib.sha1(os.path.abspath(TERMS_PATH).encode()).hexdigest()[:10])
+
+
 def tmux(*args):
     t = tmux_path()
     if not t:
         return None
-    return subprocess.run([t, "-L", TMUX_SOCKET] + list(args), capture_output=True, text=True, timeout=10, env=bundle_env())
+    return subprocess.run([t, "-L", tmux_socket()] + list(args), capture_output=True, text=True, timeout=10, env=bundle_env())
 
 
 def tmux_sessions():
@@ -2802,7 +2818,7 @@ def session_argv(sid, argv, tmux_bin):
     without tmux, argv itself (a page reload then starts a new shell)."""
     if not tmux_bin:
         return reconnecting(argv)
-    return [tmux_bin, "-L", TMUX_SOCKET, "-f", tmux_conf(), "new-session", "-A", "-s", "fleet-" + sid] + reconnecting(argv)
+    return [tmux_bin, "-L", tmux_socket(), "-f", tmux_conf(), "new-session", "-A", "-s", "fleet-" + sid] + reconnecting(argv)
 
 
 def save_terms():
