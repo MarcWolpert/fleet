@@ -2,25 +2,26 @@
 
 # Fleet
 
-**Every machine you manage, in one tree, and where each one's usage goes.**
+**Every machine you manage, live, in one tree, and where each one's usage goes.**
 
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](COPYING)
-[![Platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)](#quick-start)
+[![Platforms](https://img.shields.io/badge/runs%20on-macOS%20%7C%20Linux-lightgrey)](#install)
+[![Reads](https://img.shields.io/badge/reads-Linux%20%7C%20Windows%20%7C%20macOS-lightgrey)](#add-your-machines)
 [![Based on Mission Center](https://img.shields.io/badge/based%20on-Mission%20Center-3584e4)](https://gitlab.com/mission-center-devs/mission-center)
 
-[Features](#features) · [Quick start](#quick-start) · [Configuration](#configuration) · [How it works](#how-it-works) · [Roadmap](#roadmap) · [Building from source](#building-from-source) · [Contributing](#contributing)
+[What it shows](#what-it-shows) · [Install](#install) · [Add your machines](#add-your-machines) · [Configuration](#configuration) · [Keyboard](#keyboard-shortcuts) · [How it works](#how-it-works) · [Roadmap](#roadmap) · [Contributing](#contributing)
 
 </div>
 
 ---
 
-Fleet is a task manager for all your machines at once: laptops, servers, VMs,
-Compose projects, containers and the cron jobs inside them. It's a fork of
-[Mission Center](https://gitlab.com/mission-center-devs/mission-center), which
-shows one Linux machine; Fleet shows the whole fleet as a tree:
+Fleet is a task manager for all your machines at once: laptops, servers, VMs, Docker Compose projects,
+containers and the scheduled jobs inside them. It's a fork of
+[Mission Center](https://gitlab.com/mission-center-devs/mission-center), which shows one Linux machine;
+Fleet shows the whole fleet as a tree, live:
 
 ```
-home-server (Unraid)
+home-server (Linux)
 ├─ Base system                      the OS, daemons, apps
 │  └─ Cron jobs                     crontab, systemd timers, …
 ├─ Docker Compose
@@ -30,93 +31,85 @@ home-server (Unraid)
    └─ app-vm                        a machine again, all the way down
 ```
 
-## Features
+It reads each machine over SSH, **read-only**, and installs nothing on it. Everything stays on your
+computer: Fleet listens on `127.0.0.1` only.
 
-**Fleet Live** is the version you can use today: a small read-only collector
-plus an app window.
+## What it shows
 
-| | Feature |
+**The tree.** Machines, their base system, Docker Compose projects and services, containers, VMs (machines
+again, all the way down) and scheduled jobs (crontab, systemd timers, launchd, Windows Scheduled Tasks),
+each with a live sparkline. Every machine's tile shows its OS at a glance. A second tree shows the
+network: tailnet, machines, interfaces and bridges, VMs and containers, with traffic on each.
+
+**Where the usage goes.** CPU, memory, GPU, disk I/O and network for any machine, group or all of them,
+split by Base system, Compose, containers and VMs, as a share of capacity or of what's in use.
+
+**Hardware, up close.** Logical processors one graph each, grouped by CCD, P/E cores or Apple core
+clusters. Each GPU as a group of live tiles, like Task Manager: 3D, compute, copy, video encode and decode,
+VRAM and shared memory, temperature, power, clocks and fan, for NVIDIA, AMD, Intel and Apple GPUs. Each
+disk and each interface. Pick any of them to see just what runs there.
+
+**Details.** A sortable, filterable process list for any node, grouped by CPU group, owner, user or status,
+with the columns you choose, docked beside the overview if you like. Click a process for what it mostly
+waits on (CPU, disk, memory, GPU, locks, network), its cache misses over a lookback, limits, sockets, files
+and threads; the list holds still while it's open.
+
+**Containers and VMs, counted once.** A VM on its host costs what the host gives it (its QEMU process, as
+`htop` shows it); its own page shows what the guest reports, without a ballooned guest's balloon. On a Mac,
+Docker Desktop's VM folds into Base system, and Details lists each container's processes from inside it.
+Look inside one with a throwaway helper container or by running Fleet's inspector in its container.
+
+**Machines and connections.** **+ Add a machine** walks you through getting a Linux, Windows or Mac machine
+ready for SSH and tests it. Offline machines say why, in plain language, with the steps to fix it. The dot
+on a machine's row turns its connection off and on; **Auto** picks which machines Fleet connects to when
+it starts (none until you choose, all, or a set you tick), so a start at login asks for no key you didn't
+want. **Open terminal** sshes to a machine, or opens a shell in a container, in the terminal you pick.
+
+**Spaces and groups.** Pin any machine, VM, project, container or group to the space bar. Drag a box over
+items at the same level (or drag a row by its handle) to group them: a **fleet** of machines, a
+**flotilla** of VMs, a **division** of containers, a **section** of cron jobs, a **squadron** of Compose
+projects, a **task force** when mixed, each with its own colour and icon, its own all-up view, folding and
+pinning.
+
+**Yours to read.** 22 themes (Fleet's own, Monokai Dimmed, Dracula, Nord, Solarized, Catppuccin, …) or
+import any VS Code colour theme. A colour-blind mode for protanopia, deuteranopia, tritanopia or
+monochromacy (colours checked to stay apart for each; statuses also change shape), and higher contrast.
+Right-click anything for what fits it; a keyboard shortcut for everything.
+
+## Install
+
+Download Fleet from [Releases](https://github.com/MarcWolpert/fleet/releases/latest):
+
+| | |
 |---|---|
-| ✅ | Machine tree: Base system, Docker Compose (project → service), containers, VMs, recursively |
-| ✅ | Where usage goes: CPU, memory, GPU, disk I/O and network split by type, as a share of capacity or of what's in use |
-| ✅ | Which GPU: per-GPU rows, "what runs on which GPU", and `GPU0`/`GPU1` tags on every workload |
-| ✅ | Each GPU, like Task Manager: per GPU a group of live tiles for its engines (3D, compute, copy, video encode/decode), VRAM and shared memory, temperature, power, clocks and fan, from NVIDIA, AMD, Intel and Apple GPUs on Linux, Windows and macOS |
-| ✅ | Scheduled jobs under what runs them: crontab, systemd timers, launchd, Windows Scheduled Tasks, with usage while they run |
-| ✅ | Details: a sortable, filterable process list for any node, groupable by CPU group (CCD, P-cores, E-cores), owner, user or status |
-| ✅ | Logical processors: one live graph per CPU, grouped by CCD, P/E cores or Apple core clusters |
-| ✅ | Network tree: tailnet → machines → interfaces and bridges → VMs and containers, with traffic on each |
-| ✅ | Pinned spaces: pin any machine, VM, project, container or group from the tree; **All machines** is always there; **Pins only** shows just your pins, with their own all-up view |
-| ✅ | Groups in the trees: drag a box over items at the same level (or drag a row by its handle). A group is named and coloured by what's in it: a **fleet** of machines, a **flotilla** of VMs, a **division** of containers, a **section** of cron jobs, a **squadron** of Docker Compose, a **task force** when mixed; each kind has its own colour from the theme. Click a group's name to see its own all-up view (a fleet gets All machines for just its machines), or its chevron to fold it to one line and back, as it was; right-click to rename, pin or disband; pin any group as a space from **+**; Pins only keeps its own; click empty space for the all-up view |
-| ✅ | Offline machines explain why in plain language, with the steps to fix it and Retry; reconnecting machines keep their last reading |
-| ✅ | Settings: add and edit machines, test a connection, pick the terminal app and refresh rate |
-| ✅ | **+ Add a machine** at the bottom of the tree: how to get a machine ready for SSH (keys, python3 on Linux, OpenSSH on Windows, Tailscale names), then test and add it in one step |
-| ✅ | Open terminal: ssh to any machine, or a shell inside any container, in your preferred terminal |
-| ✅ | Pick processors, a CCD or a P/E-core group, or a GPU, and see just those, with what runs on them |
-| ✅ | Dock the Details process list beside the overview (drag the Details pill to the right) |
-| ✅ | Details columns: right-click a column header to hide, move or add columns, a layout per detail type |
-| ✅ | Colour vision and contrast (Settings › Appearance): a colour-blind mode for protanopia, deuteranopia, tritanopia or monochromacy (colours checked to stay apart for each, statuses also change shape), and Higher contrast (stronger text and lines, the faintest text 7:1 or more), on any theme |
-| ✅ | Themes: Fleet's own, Monokai Dimmed and 20 more built in (Dracula, Nord, Solarized, Gruvbox, Tokyo Night, Catppuccin, GitHub, …), or **Import theme** from any VS Code colour theme |
-| ✅ | Keyboard: ⌘K goes to any machine, container, job, command or theme; ⌘F finds in the panel you're in; ⌘[ ⌘] back and forward; ⌘1–9 spaces, ⌃⇥ cycles them, ⌘N a new space, ⌥1–5 metrics, arrows in the tree, ⌘+/⌘− text size; `?` lists them all |
-| ✅ | Docker Desktop on a Mac: its containers are listed directly and its Linux VM is folded into Base system (never counted twice); Details lists each container's processes from `docker top`, with the VM's PID tagged **VM**; open one and choose how to look inside it: a throwaway helper container (`docker run --rm --pid=host --network=none`, the `python:3.12-slim` image) or Fleet's inspector run in its own container (`docker exec`, needs python3 there) |
-| ✅ | Details drop-down: click a process to see what it mostly waits on (CPU, disk, memory, GPU, locks, network…), its cache misses, limits, sockets, files and threads; the list holds still while it's open |
-| ✅ | Connections: the dot on a machine's row (or its right-click menu) turns its SSH connection off and on. **Auto** beside + Add a machine picks which machines Fleet connects to when it starts (None until you choose; a restart Fleet does itself keeps what's connected): All, None, or a set you save: tick machines in *Choose machines…* (VMs listed under their hosts), or *Save what's connected now as a set…*, so a start at login opens no session and asks for no key you didn't want. Kept in `~/.config/fleet/connect.json` |
-| ✅ | Machine tiles show the OS at a glance: a strip in the OS colour (Linux amber, Windows blue, macOS in the theme's ink) with a penguin, four panes or an apple, beside the machine's kind icon; in the tree, beside its line icon. Tiles take their colours from the theme |
-| ✅ | macOS app and Linux package, with the Fleet icon |
-| ✅ | Right-click anything (a process, a tree row, a CPU, CCD, GPU, disk or interface tile, a space) for what fits it: details, show it in the tree, pin, open a terminal, copy its PID, name, command line or SSH destination; ⇧F10 does the same from the keyboard |
-| ⬜ | Native app (the Mission Center fork) on macOS, Linux and Windows |
-| ⬜ | Actions (kill, stop, restart, run a job now), each confirmed and logged |
+| **macOS** (Apple silicon) | `Fleet-<version>-macos-arm64.zip`: unzip, drag **Fleet.app** to Applications, open it. It needs Python 3.11 or newer on the Mac (`brew install python`). |
+| **Linux** (x64 or arm64) | `fleet-<version>-linux-x64.tar.gz` or `-linux-arm64.tar.gz`: `tar -xzf fleet-*.tar.gz && fleet-*/install.sh`, then open Fleet from your app menu or run `fleet`. It needs Python 3.11+; the window is Chrome, Chromium or Edge in app mode when one is installed, otherwise your browser. `uninstall.sh` removes it. |
 
-## Quick start
-
-Fleet needs **Python 3.11+** on the computer you run it on, and SSH access to
-the machines you want to see. Nothing is installed on those machines.
-
-<details>
-<summary><b>macOS</b>: Fleet.app</summary>
+Or run it from source, anywhere with Python 3.11+:
 
 ```bash
-git clone https://github.com/MarcWolpert/fleet.git && cd fleet
-live/packaging/macos/build_macos.sh          # → live/dist/Fleet.app (Apple silicon + Intel)
-ditto live/dist/Fleet.app ~/Applications/Fleet.app && open ~/Applications/Fleet.app
+git clone https://github.com/MarcWolpert/fleet.git && cd fleet/live
+./fleet-live          # fleet-live.cmd on Windows; then open http://127.0.0.1:4518/
 ```
 
-Fleet.app is a native window with its own Dock icon. It starts the collector
-itself and stops it when you quit; its log is `~/Library/Logs/Fleet.log`.
+The first run writes `~/.config/fleet/machines.toml` with just this computer. Add the rest from the app.
 
-</details>
+## Add your machines
 
-<details>
-<summary><b>Linux</b>: menu entry and <code>fleet</code> command</summary>
+Use **+ Add a machine** at the bottom of the tree. It tests the connection before it adds anything. What
+each machine needs:
 
-```bash
-git clone https://github.com/MarcWolpert/fleet.git && cd fleet
-live/packaging/linux/build_linux.sh          # → live/dist/fleet-<version>-linux.tar.gz
-tar -xzf live/dist/fleet-*-linux.tar.gz && fleet-*-linux/install.sh
-fleet                                        # or open Fleet from your app menu
-```
-
-The window is Chrome, Chromium or Edge in app mode when one is installed,
-otherwise your default browser. `uninstall.sh` removes it again.
-
-</details>
-
-<details>
-<summary><b>Windows</b>, or anywhere without installing</summary>
-
-```powershell
-git clone https://github.com/MarcWolpert/fleet.git
-cd fleet\live
-.\fleet-live.cmd        # ./fleet-live on macOS and Linux
-```
-
-</details>
-
-The first run writes a starter `~/.config/fleet/machines.toml` with just this
-computer. Add your machines from **Settings** in the app (or edit the file).
+| | |
+|---|---|
+| **Any** | You can `ssh` to it without a password (`ssh-copy-id user@host` if it asks). A name from `~/.ssh/config` or a Tailscale name works too. |
+| **Linux** | `python3` (most have it). |
+| **Windows** | OpenSSH Server (Settings › System › Optional features) and your key in `C:\Users\you\.ssh\authorized_keys`, or for an administrator account in `C:\ProgramData\ssh\administrators_authorized_keys`. |
+| **macOS** | Remote Login on (System Settings › General › Sharing) and `python3` from the Command Line Tools: `xcode-select --install`. |
+| **A VM** | Add it like any machine, then set **Runs on** in Settings to nest it under its host. |
 
 ## Configuration
 
-`~/.config/fleet/machines.toml`, one `[[machine]]` per machine:
+Machines live in `~/.config/fleet/machines.toml`; **Settings** edits it for you:
 
 ```toml
 interval = 3                      # seconds between readings
@@ -129,7 +122,7 @@ tile = "laptop"
 
 [[machine]]
 id = "nas"
-name = "my-unraid-box"
+name = "home-server"
 ssh = "root@nas.example.ts.net"   # any ssh destination: a Host alias, user@host, a Tailscale name
 os = "linux"
 tile = "globe"
@@ -142,97 +135,79 @@ os = "linux"
 vm_on = "nas"                     # nests under that host's VMs
 
 [[machine]]
-id = "gaming-pc"
-name = "gaming-pc"
-ssh = "me@gaming-pc"
-os = "windows"
+id = "studio"
+name = "studio"
+ssh = "me@studio.local"
+os = "macos"
 tile = "desktop"
 ```
 
 | Key | Meaning |
 |---|---|
-| `kind = "local"` | the computer running Fleet Live (macOS, Linux or Windows) |
+| `kind = "local"` | the computer running Fleet |
 | `ssh` | how to reach it; uses your `~/.ssh/config`, keys and Tailscale as they are |
-| `os` | `linux` (the host needs `python3`), `windows` (OpenSSH + PowerShell) or `macos` (Remote Login on, and `python3` from the Command Line Tools: `xcode-select --install`) |
+| `os` | `linux`, `windows` or `macos` (see [Add your machines](#add-your-machines)) |
 | `vm_on`, `domain` | this machine is a VM on another one; `domain` is its libvirt name when it differs |
-| `tile` | icon: `laptop`, `desktop`, `terminal`, `server`, `globe`, `vm` |
+| `tile` | its icon: `laptop`, `desktop`, `terminal`, `server`, `globe`, `vm` |
 
-Fleet keeps what you arrange in the app beside it, so it survives restarts:
-`pins.json` (pinned spaces), `tilepins.json` (pinned tiles and CPU groups) and
-`ui.json` (Details column layouts, the theme, imported themes, tree groups).
+What you arrange in the app is kept beside it, so it survives restarts: `ui.json` (theme, colour vision,
+contrast, Details columns, tree groups), `pins.json` (spaces), `tilepins.json` (pinned tiles and CPU groups)
+and `connect.json` (which machines connect when Fleet starts, and your saved sets).
 
 ## Keyboard shortcuts
 
-⌘ on a Mac, Ctrl elsewhere. Press `?` in the app for the full list.
+⌘ on a Mac, Ctrl elsewhere. Press `?` in the app for the list.
 
 | Keys | Does |
 |---|---|
-| ⌘K | Go to anything: machines, VMs, projects, containers, jobs, groups (by name or kind: type "squadron"), commands, themes; the pin on a result (or ⇧Enter) pins it |
+| ⌘K | Go to anything: machines, VMs, projects, containers, jobs, groups (by name or kind), commands, themes |
 | ⌘F or `/` | Find in the panel you're in: filter the tree, find on the page, or filter Details |
 | ⌘[ ⌘] | Back, forward (also the ‹ › buttons and the mouse's side buttons) |
 | ⌘D, ⌘⇧D | Details on and off; dock it beside the overview |
 | ⌥1 … ⌥5 | CPU, Memory, GPU, Disk I/O, Network |
-| ⌘1 … ⌘9, ⌘⇧[ ⌘⇧] | Go to a space; previous or next space |
-| ⌃⇥, ⌃⇧⇥ | Cycle through the spaces, or the other way, round and round (Ctrl+Tab on Linux and Windows too) |
-| ↑ ↓ ← → | Move through the tree; collapse, expand, go to the parent |
-| ⌘N | New space: opens the dialog to pick a grouping to pin (same as the + in the space bar) |
+| ⌘1 … ⌘9 | Go to a space (⌘1 is All machines) |
+| ⌃⇥, ⌃⇧⇥ (or ⌘⇧] ⌘⇧[) | Next or previous space, round and round |
+| ⌘N | New space: pick a grouping to pin |
 | P | Pin or unpin the selection as a space |
+| ↑ ↓ ← → | Move through the tree; collapse, expand, go to the parent |
 | ⌘T | Open a terminal on the selection |
-| ⌘+ ⌘− ⌘0 | Text bigger, smaller, actual size |
+| ⌘+ ⌘− ⌘0 | Bigger, smaller, actual size (the zoom shows by Settings when it isn't 100%) |
 | ⌘, | Settings |
-
-## Themes
-
-Settings → Appearance has Fleet's own theme (the default), Monokai Dimmed and
-20 more. Their chart colours were re-tuned where needed so the four kinds of
-workload stay distinct for colour-blind readers. **Import theme** reads a VS Code
-colour theme (`.json`, comments allowed) or a Fleet theme:
-
-```json
-{"name": "Paper", "type": "light", "colors": {"chrome": "#eeeeee", "ink": "#222222", "accent": "#0055cc"}}
-```
-
-Any token in `live/web/themes.js` (`THEME_KEYS`) can be set; the rest are derived.
+| ⇧F10 | The right-click menu, from the keyboard |
 
 ## How it works
 
-- Each machine gets one SSH session that runs a small collector streamed over
-  stdin (`collect_linux.py` with `python3 -`, `collect_windows.ps1` with a
-  short `powershell -EncodedCommand` that reads it, so it also works when the
-  Windows OpenSSH server keeps cmd.exe as its shell). It loops, sending one reading every few
-  seconds, and ends when the connection closes. It only reads `/proc`, `/sys`,
-  performance counters and listing commands (`docker ps`, `virsh list`,
+- **One SSH session per machine**, running a small collector sent over stdin (`collect_linux.py` with
+  `python3 -`; `collect_windows.ps1` read by a short `powershell -EncodedCommand`, so it also works when
+  Windows OpenSSH keeps cmd.exe as its shell; for a Mac, the same reader Fleet uses for the Mac it runs on). It sends a reading every few seconds and ends when the connection closes.
+  It only reads: `/proc`, `/sys`, performance counters and listing commands (`docker ps`, `virsh list`,
   `crontab -l`, `systemctl list-timers`, `nvidia-smi`, …).
-- Compose projects come from Docker's `com.docker.compose.*` labels;
-  container usage comes from each container's cgroup; VMs are matched by their
-  QEMU process or the WSL utility VM.
-- A VM Fleet also reads over SSH (`vm_on`) is counted twice over. As part of
-  its host it costs what the host gives it: its QEMU process's CPU, resident
-  memory, disk and network, which is what `htop` and the hypervisor's own UI
-  show. Its own page shows what the guest reports.
-- A scheduled job's usage is a breakdown of what runs it, never added on top.
-- Everything stays on your computer: the server listens on `127.0.0.1` only.
+- **Compose projects** come from Docker's `com.docker.compose.*` labels; a container's usage from its
+  cgroup; **VMs** are matched by their QEMU process or WSL's utility VM.
+- **A VM Fleet also reads over SSH** (`vm_on`) is counted once on its host, as what the host gives it, and
+  on its own page as what the guest reports.
+- **A scheduled job's usage** is a breakdown of what runs it, never added on top.
+- **Looking inside a process** (the Details drop-down) runs a one-shot inspector the same way, for a couple
+  of seconds. On a Mac with Docker Desktop, you choose a helper container or the container itself.
 
 ## Roadmap
 
-1. **Fleet Live** (now): the read-only web app above.
-2. **Native app:** Mission Center's GTK4/libadwaita UI on macOS, Linux and
-   Windows, with Fleet's tree and spaces, and collectors for macOS and Windows
-   alongside Mission Center's Linux daemon.
-3. **Actions:** kill, stop, restart and run-now everywhere, each confirmed and
-   audit-logged, with protected objects that need a typed confirmation.
+1. **Fleet Live** (now): the read-only app above, for macOS and Linux.
+2. **Native app:** Mission Center's GTK4/libadwaita UI on macOS, Linux and Windows, with Fleet's tree and
+   spaces.
+3. **Actions:** kill, stop, restart and run-now everywhere, each confirmed and logged.
 
 ## Building from source
 
-Fleet Live is plain Python and HTML; there is nothing to build. The native app
-currently builds exactly like Mission Center on Linux: see [BUILD.md](BUILD.md).
-Mission Center's own README is kept at
+Fleet Live is plain Python and HTML; there is nothing to compile. `live/packaging/macos/build_macos.sh`
+builds Fleet.app, `live/packaging/linux/build_linux.sh` the Linux package, and `live/tests/run.sh` runs
+every test (Python's unittest and a dependency-free browser harness). Releases are cut as in
+[docs/fleet/RELEASING.md](docs/fleet/RELEASING.md). The native app builds exactly like Mission Center on
+Linux: see [BUILD.md](BUILD.md); Mission Center's own README is at
 [docs/mission-center/README.md](docs/mission-center/README.md).
 
 ## Contributing
 
-How work is run here (tests first, small stacked PRs, extending upstream
-without editing it) is in [CLAUDE.md](CLAUDE.md) and [AGENTS.md](AGENTS.md);
-the few upstream lines Fleet changes are listed in
-[docs/fleet/HOOKS.md](docs/fleet/HOOKS.md). Fleet is GPL-3.0-or-later, like
-Mission Center.
+How work is run here (an issue per change, tests first, small stacked PRs, extending upstream without
+editing it) is in [CLAUDE.md](CLAUDE.md) and [AGENTS.md](AGENTS.md); the few upstream lines Fleet changes
+are listed in [docs/fleet/HOOKS.md](docs/fleet/HOOKS.md). Fleet is GPL-3.0-or-later, like Mission Center.
