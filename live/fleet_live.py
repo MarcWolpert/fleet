@@ -291,6 +291,8 @@ class Machine:
             script = "$FleetInterval=%s\n" % self.interval + ps_compact(open(os.path.join(HERE, "collect_windows.ps1"), encoding="utf-8").read())
             enc = base64.b64encode(script.encode("utf-16-le")).decode()
             return base + ["powershell -NoProfile -NonInteractive -EncodedCommand " + enc], None
+        if self.cfg.get("os") == "macos":   # the same Mac reader as this Mac's, built from this file's source
+            return base + ["python3 -"], mac_collector_script(self.interval).encode()
         script = "INTERVAL=%s\n" % self.interval + open(os.path.join(HERE, "collect_linux.py"), encoding="utf-8").read()
         return base + ["python3 -"], script.encode()
 
@@ -318,7 +320,7 @@ class Machine:
                     view = self.derive_windows(raw)
                 else:
                     raw = json.loads(zlib.decompress(base64.b64decode(line)))
-                    view = self.derive_linux(raw)
+                    view = self.derive_generic(raw) if self.cfg.get("os") == "macos" else self.derive_linux(raw)
             except Exception as e:
                 err_tail.append("bad reading: %s" % e)
                 continue
@@ -1185,7 +1187,7 @@ class Fleet:
         cfg = m.cfg
         mid = m.id
         spec = {"id": mid, "name": m.name, "tile": cfg.get("tile", "vm" if cfg.get("vm_on") else "terminal"), "status": status,
-                "error": error, "os": cfg.get("os_label") or {"windows": "Windows", "linux": "Linux"}.get(cfg.get("os", ""), ""), "agent": "local" if cfg.get("kind") == "local" else "ssh " + cfg.get("ssh", ""),
+                "error": error, "os": cfg.get("os_label") or {"windows": "Windows", "linux": "Linux", "macos": "macOS"}.get(cfg.get("os", ""), ""), "agent": "local" if cfg.get("kind") == "local" else "ssh " + cfg.get("ssh", ""),
                 "cronLabel": "Cron jobs", "gpus": [], "cap": [1, 1, 0, 1, 1], "procs": [], "baseCron": [], "compose": [], "containers": [], "vms": []}
         spec["ssh"] = cfg.get("ssh", "")
         spec["has_data"] = view is not None
@@ -1505,8 +1507,8 @@ def validate_config(data):
             mm.pop("kind", None)
             if not SSH_DEST.match(mm.get("ssh", "")):
                 errors.append("%s: SSH destination must look like host, user@host or a Tailscale name." % (mm.get("name") or label))
-            if mm.get("os") not in ("linux", "windows"):
-                errors.append("%s: choose Linux or Windows." % (mm.get("name") or label))
+            if mm.get("os") not in ("linux", "windows", "macos"):
+                errors.append("%s: choose Linux, Windows or macOS." % (mm.get("name") or label))
         if mm.get("tile") and mm["tile"] not in TILES:
             mm.pop("tile")
         for k in ("domain", "tailscale"):
@@ -1622,6 +1624,50 @@ def inspect_mac(pid):
             "cache_error": "macOS only lets root tools read CPU cache counters"}
 
 
+# ---------------------------------------------------------------- Macs over SSH (#181)
+# A remote Mac runs exactly the reader this Mac runs: its source, with the helpers it calls, streamed to
+# `python3 -` (the system Python 3.9 of a Mac with the Command Line Tools is enough).
+MAC_HELPERS = ["run", "size_bytes", "parse_cputime", "fmt_secs", "human_cron", "job_name", "mac_gpu_stats"]
+MAC_IMPORTS = "import base64, collections, ctypes, ctypes.util, glob, json, os, platform, plistlib, re, shlex, shutil, subprocess, sys, threading, time, zlib\n"  # the server's own imports but tomllib (3.11+)
+
+
+def own_source(*names):
+    """The source of this file's top-level functions and classes by name, cut from the file itself (works
+    however the module was loaded, unlike inspect.getsource)."""
+    import ast
+    text = open(os.path.abspath(__file__), encoding="utf-8").read()
+    lines, found = text.splitlines(True), {}
+    for node in ast.parse(text).body:
+        if isinstance(node, (ast.FunctionDef, ast.ClassDef)) and node.name in names:
+            start = min([node.lineno] + [d.lineno for d in node.decorator_list])
+            found[node.name] = "".join(lines[start - 1:node.end_lineno])
+    return [found[n] for n in names]
+
+
+def mac_collector_script(interval):
+    parts = [MAC_IMPORTS, "MB = %r\nGB = %r\nINTERVAL = %s\n" % (MB, GB, interval)] + own_source(*(MAC_HELPERS + ["MacCollector"]))
+    parts.append('''
+ONCE = globals().get("ONCE", False)
+c = MacCollector()
+while True:
+    began = time.time()
+    try:
+        r = c.snapshot()
+        sys.stdout.write(base64.b64encode(zlib.compress(json.dumps(r).encode())).decode() + "\\n")
+        sys.stdout.flush()
+    except BrokenPipeError:
+        sys.exit(0)
+    if ONCE:
+        break
+    time.sleep(max(0.3, INTERVAL - (time.time() - began)))
+''')
+    return "\n\n".join(parts)
+
+
+def mac_inspect_script(pid, secs):
+    return MAC_IMPORTS + "INSPECT_SECS = %r\n\n" % secs + own_source("inspect_mac")[0] + "\n\nprint(json.dumps(inspect_mac(%d)))\n" % int(pid)
+
+
 def inspect_process(m, pid):
     key = (m.id, pid)
     with INSPECT_LOCK:
@@ -1644,6 +1690,8 @@ def inspect_process(m, pid):
         else:
             if cfg.get("kind") == "local":
                 cmd, stdin = [sys.executable, os.path.join(HERE, "inspect_linux.py"), str(pid), str(INSPECT_SECS)], None
+            elif cfg.get("os") == "macos":
+                cmd, stdin = ["ssh"] + SSH_MARK + [cfg["ssh"], "python3 -"], mac_inspect_script(pid, INSPECT_SECS).encode()
             elif cfg.get("os") == "windows":
                 script = "$FleetPid=%d\n$FleetSecs=%s\n" % (pid, INSPECT_SECS) + ps_compact(open(os.path.join(HERE, "inspect_windows.ps1"), encoding="utf-8").read())
                 enc = base64.b64encode(script.encode("utf-16-le")).decode()
