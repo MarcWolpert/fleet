@@ -58,7 +58,7 @@ async function retryComesBack(fx, sel, label){
     // and it works again
     await p.click('[data-retry]');
     await p.waitFor(`document.querySelector('[data-retry]') && !document.querySelector('[data-retry]').disabled`, 6000);
-    assert.deepEqual(fx.posts.filter(x => x.path === '/api/retry'), [{path: '/api/retry', body: JSON.stringify({machine: sel})}, {path: '/api/retry', body: JSON.stringify({machine: sel})}]);
+    assert.deepEqual(fx.posts.filter(x => x.path === '/api/retry').map(x => ({path: x.path, body: x.body})), [{path: '/api/retry', body: JSON.stringify({machine: sel})}, {path: '/api/retry', body: JSON.stringify({machine: sel})}]);
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
 }
@@ -153,7 +153,7 @@ const CASES = [
   ['a broken pipe', {error: 'client_loop: send disconnect: Broken pipe'}, {kind: ['down'], ...DOWN}],
   ['too many keys offered', {error: 'Received disconnect from nas port 22:2: Too many authentication failures'}, {kind: ['auth'], ...AUTH}],
   ['no python3 there', {error: 'bash: line 1: python3: command not found'}, {kind: ['py'], title: 'lab-linux needs Python 3',
-    text: 'Fleet reads Linux machines with a small read-only Python script and installs nothing, but it needs python3 there.',
+    text: 'Fleet reads Linux machines and Macs with a small read-only Python script and installs nothing, but it needs python3 there.',
     steps: ['Install Python 3 on that machine, e.g. sudo apt install python3.', RETRY]}],
   ['anything else', {error: 'bad reading: Incorrect padding'}, {kind: ['other'], title: 'Fleet can’t reach lab-linux', text: 'The connection ended before the first reading.',
     steps: ['Check the details below, or the machine’s entry in Settings.', RETRY]}]

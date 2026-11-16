@@ -42,7 +42,7 @@ for (const [what, sel, h1, want, over] of CASES) test(`terminal buttons on ${wha
     if (want.length){
       await p.click('[data-terminal]');
       await p.waitFor(`document.getElementById('toast') && document.getElementById('toast').textContent`);
-      assert.deepEqual(fx.posts.filter(x => x.path === '/api/terminal'), [{path: '/api/terminal', body: JSON.stringify({node: sel})}]);
+      assert.deepEqual(fx.posts.filter(x => x.path === '/api/terminal').map(x => ({path: x.path, body: x.body})), [{path: '/api/terminal', body: JSON.stringify({node: sel})}]);
     }
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
