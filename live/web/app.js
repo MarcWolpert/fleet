@@ -802,7 +802,7 @@ function offlineView(m){
   const pinned = PINS.includes(m.id);
   return `<div class="hero">${heroMachineTile(m)}<div><h1>${esc(m.name)} <span class="spill ${d.kind}">${esc(statusText(m))}</span>${termBtn(m)}</h1><div class="facts">${facts.map(f => `<span>${esc(f)}</span>`).join('')}</div></div><button type="button" class="btn${pinned ? ' on' : ''}" data-pin="${esc(m.id)}" aria-pressed="${pinned}" style="margin-left:auto">${icon('pin')}${pinned ? 'Pinned' : 'Pin as space'}</button></div>`
     + `<section class="state"><div class="state-ic ${d.kind}">${icon(d.ic)}</div><div class="state-body"><h2>${d.title}</h2><p>${d.text}</p>`
-    + (d.steps.length ? `<ol class="steps">${d.steps.map(x => `<li>${x}</li>`).join('')}</ol>` : '')
+    + (d.steps.length ? `<ol class="steps">${d.steps.map(x => `<li><span>${x}</span></li>`).join('')}</ol>` : '')
     + `<div class="state-actions">${m.status === 'off' ? '' : `<button type="button" class="btn primary" data-retry="${esc(m.id)}">${icon('refresh')}Retry now</button>`}<button type="button" class="btn" data-settings="1">${icon('gear')}Open Settings</button></div>`
     + (m.error ? `<details class="state-raw"${S.rawOpen ? ' open' : ''}><summary>Technical details</summary><code>${esc(m.error)}</code><div>${m.lastOk ? 'Last reading ' + ago(staleFor(m)) : 'No reading yet'} · retrying on its own</div></details>` : '')
     + `</div></section>`;
