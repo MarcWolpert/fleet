@@ -5,7 +5,7 @@ and host_processor_info from a fake libc. Every assertion is the exact result.
 
 Run: python3 -m unittest discover -s live/tests -p 'test_*.py'   (or live/tests/run.sh)
 """
-import contextlib, ctypes, importlib.util, json, os, plistlib, subprocess, sys, tempfile, types, unittest
+import contextlib, ctypes, importlib.util, json, os, plistlib, subprocess, sys, tempfile, threading, types, unittest
 from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -77,13 +77,38 @@ class FakeLibc:
         return 0
 
 
+class FakeProc:
+    """A command started with Popen: it runs until the test finishes it, printing `text` into its stdout."""
+
+    def __init__(self, mac, cmd, stdout):
+        self.cmd, self.stdout, self.done, self.killed = " ".join(cmd), stdout, False, False
+        mac.started.append(self)
+
+    def finish(self, text):
+        self.stdout.write(text.encode())
+        self.stdout.flush()
+        self.done = True
+
+    def poll(self):
+        return 0 if self.done else None
+
+    def kill(self):
+        self.killed = self.done = True
+
+    def wait(self, timeout=None):
+        return 0
+
+
 class Mac:
     """A Mac that exists only as command output. `out` maps each command line to what it prints (str or
-    bytes); a command that is not in it prints nothing, which is what run() makes of a failure."""
+    bytes); a command that is not in it prints nothing, which is what run() makes of a failure. A command
+    in `slow` waits for its event before it prints. Popen'd commands are in `started` (FakeProc)."""
 
     def __init__(self, out=None, now=10000.0, ticks=None, docker=True):
         self.out = dict(BASE, **(out or {}))
         self.calls = []
+        self.started = []
+        self.slow = {}
         self.now = now
         self.libc = FakeLibc(ticks or [[100, 50, 800, 0]] * 8)
         self.docker = docker
@@ -91,15 +116,20 @@ class Mac:
     def run(self, cmd, **kw):
         line = " ".join(cmd)
         self.calls.append(line)
+        if line in self.slow:
+            self.slow[line].wait(10)
         o = self.out.get(line, "")
         return types.SimpleNamespace(stdout=o if isinstance(o, bytes) else o.encode(), stderr=b"", returncode=0)
+
+    def popen(self, cmd, stdout=None, stderr=None, **kw):
+        return FakeProc(self, cmd, stdout)
 
     def collector(self, test):
         """A MacCollector reading this Mac; the fakes stay patched in until the test ends."""
         stack = contextlib.ExitStack()
         test.addCleanup(stack.close)
         self.home = stack.enter_context(tempfile.TemporaryDirectory())
-        stack.enter_context(mock.patch.object(fl, "subprocess", types.SimpleNamespace(run=self.run, PIPE=subprocess.PIPE, DEVNULL=subprocess.DEVNULL)))
+        stack.enter_context(mock.patch.object(fl, "subprocess", types.SimpleNamespace(run=self.run, Popen=self.popen, PIPE=subprocess.PIPE, DEVNULL=subprocess.DEVNULL)))
         stack.enter_context(mock.patch.object(fl, "shutil", types.SimpleNamespace(which=lambda n: "/usr/local/bin/docker" if self.docker and n == "docker" else None)))
         stack.enter_context(mock.patch.object(fl, "platform", types.SimpleNamespace(mac_ver=lambda: ("15.1", ("", "", ""), "arm64"),
                                                                                      machine=lambda: "arm64", system=lambda: "Darwin")))
@@ -377,6 +407,69 @@ class CoreGroups(unittest.TestCase):
     def test_no_clusters_in_ioreg_is_one_group(self):  # an Intel Mac
         mac = Mac({"sysctl -n hw.logicalcpu": "4\n", "ioreg -rd1 -c IOPlatformDevice -k cluster-type -a": b"", "sysctl -n hw.nperflevels": ""})
         self.assertEqual(mac.collector(self).groups, [{"name": "All processors", "cpus": [0, 1, 2, 3]}])
+
+
+NETTOP = "nettop -P -L 1 -x -J bytes_in,bytes_out"
+
+
+def nettop(*rows):
+    """nettop -P -L 1 -x -J bytes_in,bytes_out: a header, then process.pid, bytes in, bytes out since it started."""
+    return ",bytes_in,bytes_out,\n" + "".join("%s.%d,%d,%d,\n" % r for r in rows)
+
+
+class NetPerProcess(unittest.TestCase):
+    """#105: nettop takes about 5 s to print its one sample. It runs beside the readings, never inside one,
+    and each reading uses the per-process rates between the last two samples it finished."""
+
+    PROCS = ps((1, 0, "root", 20000, "1:00.00", "/sbin/launchd"), (100, 1, "someone", 50000, "0:01.00", "/usr/bin/curl"),
+               (200, 1, "someone", 60000, "0:02.00", "/usr/bin/rsync"), (300, 1, "someone", 10000, "0:00.10", "/usr/local/bin/new"),
+               (400, 1, "someone", 10000, "0:00.10", "/usr/local/bin/worker"))
+    A = nettop(("launchd", 1, 0, 0), ("curl", 100, 1000000, 500000), ("rsync", 200, 0, 30000000), ("worker", 400, 9000000, 0))
+    B = nettop(("launchd", 1, 0, 0), ("curl", 100, 4000000, 2000000), ("rsync", 200, 0, 60000000), ("new", 300, 500000, 0), ("worker", 400, 100, 0))
+
+    def net(self, snap):
+        return {p[0]: p[16] for p in snap["procs"]}
+
+    def test_a_reading_does_not_wait_for_nettop(self):
+        mac = Mac(self.PROCS)
+        mac.slow[NETTOP] = threading.Event()
+        c = mac.collector(self)
+        th = threading.Thread(target=c.snapshot, daemon=True)
+        th.start()
+        th.join(2)
+        waited = th.is_alive()
+        mac.slow[NETTOP].set()
+        th.join(10)
+        self.assertFalse(waited, "the reading waited for nettop")
+        self.assertEqual([(x.cmd, x.done) for x in mac.started], [(NETTOP, False)], "one nettop started, still running")
+        self.assertNotIn(NETTOP, mac.calls)
+
+    def test_each_process_gets_its_rate_from_the_last_two_samples(self):
+        mac = Mac(self.PROCS)
+        c = mac.collector(self)
+        self.assertEqual(self.net(c.snapshot()), {1: 0.0, 100: 0.0, 200: 0.0, 300: 0.0, 400: 0.0})  # t 10000: sample A starts
+        mac.started[0].finish(self.A)
+        mac.now += 5
+        self.assertEqual(self.net(c.snapshot()), {1: 0.0, 100: 0.0, 200: 0.0, 300: 0.0, 400: 0.0})  # t 10005: A is the first; B starts
+        mac.started[1].finish(self.B)
+        mac.now += 3
+        # t 10008: from A to B, started 5 s apart: curl moved 4.5 MB, rsync 30 MB; a new process and one whose counter went back are 0
+        rates = {1: 0.0, 100: 0.9, 200: 6.0, 300: 0.0, 400: 0.0}
+        self.assertEqual(self.net(c.snapshot()), rates)
+        mac.now += 3
+        self.assertEqual(self.net(c.snapshot()), rates, "while the next sample runs, the last rates hold")
+        self.assertEqual([(x.cmd, x.done) for x in mac.started], [(NETTOP, True), (NETTOP, True), (NETTOP, False)])
+
+    def test_a_nettop_that_hangs_is_stopped_and_started_again(self):
+        mac = Mac(self.PROCS)
+        c = mac.collector(self)
+        c.snapshot()
+        mac.now += 9
+        c.snapshot()
+        self.assertEqual([(x.cmd, x.killed) for x in mac.started], [(NETTOP, False)], "9 s is still a run")
+        mac.now += 2
+        c.snapshot()
+        self.assertEqual([(x.cmd, x.killed, x.done) for x in mac.started], [(NETTOP, True, True), (NETTOP, False, False)])
 
 if __name__ == "__main__":
     unittest.main()

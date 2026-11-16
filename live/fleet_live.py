@@ -13,7 +13,7 @@ connection closes. Nothing is installed on any machine and nothing is changed.
 Usage: python3 fleet_live.py [--port 4518] [--config PATH] [--open]
 """
 import argparse, base64, collections, ctypes, ctypes.util, glob, http.server, json, os, platform, plistlib, shlex
-import re, shutil, subprocess, sys, threading, time, tomllib, urllib.parse, webbrowser, zlib
+import re, shutil, subprocess, sys, tempfile, threading, time, tomllib, urllib.parse, webbrowser, zlib
 
 VERSION = "0.0.1"
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -850,6 +850,9 @@ class MacCollector:
         self.gpu_info = self.read_gpus()
         self.disk_names = {}
         self.vz_owners = {}
+        self.nettop = None     # the nettop sample running beside the readings: (Popen, its output file, when it started)
+        self.net_last = None   # the last sample it finished: (bytes in + out per pid, when it started)
+        self.net_rates = {}    # MB/s per pid between the last two samples
 
     def disk_info(self, dn, rid=None):
         """diskutil's facts about a disk, kept per disk and registry entry (a disk name is reused when an image is ejected)."""
@@ -879,6 +882,41 @@ class MacCollector:
                 return ""
             self.vz_owners[pid] = own
         return self.vz_owners[pid]
+
+    def net_rates_now(self):
+        """Each process's network rate (MB/s, in + out) from nettop. nettop takes about 5 s to print its one
+        sample, so it runs beside the readings: a reading that finds it done starts the next one, and every
+        reading uses the rates between the last two samples. A sample still running after 10 s is stopped."""
+        t = time.time()
+        if self.nettop:
+            p, out, began = self.nettop
+            if p.poll() is None and t - began <= 10:
+                return self.net_rates
+            if p.poll() is None:
+                p.kill()
+                p.wait()
+                self.net_rates = {}
+            else:
+                out.seek(0)
+                b = {}
+                for line in out.read().decode("utf-8", "replace").splitlines()[1:]:
+                    f = line.split(",")
+                    if len(f) >= 3:
+                        _name, _, pid = f[0].rpartition(".")
+                        if pid.isdigit() and f[1].isdigit() and f[2].isdigit():
+                            b[int(pid)] = int(f[1]) + int(f[2])
+                if self.net_last and began > self.net_last[1]:
+                    prev, dt = self.net_last[0], began - self.net_last[1]
+                    self.net_rates = {pid: (v - prev[pid]) / dt / MB for pid, v in b.items() if pid in prev and v >= prev[pid]}
+                self.net_last = (b, began)
+            out.close()
+        out = tempfile.TemporaryFile()  # a file, not a pipe, so nettop never waits on a full pipe
+        try:
+            self.nettop = (subprocess.Popen(["nettop", "-P", "-L", "1", "-x", "-J", "bytes_in,bytes_out"], stdout=out, stderr=subprocess.DEVNULL), out, t)
+        except Exception:
+            out.close()
+            self.nettop = None
+        return self.net_rates
 
     def read_gpus(self):
         """Every GPU in this Mac (Apple silicon's, or an Intel Mac's integrated and discrete ones), in IOAccelerator order."""
@@ -1022,16 +1060,12 @@ class MacCollector:
         gpus = [{"name": gi["name"], "mem": gi["mem"], "util": stats[i]["util"] if i < len(stats) else 0.0, "m": stats[i] if i < len(stats) else {}, "lim": {}}
                 for i, gi in enumerate(self.gpu_info)]
         gpu = sum(g["util"] for g in gpus)
-        # Network per process: nettop has each process's bytes in/out; lsof says which local address
-        # (and so which interface) its connections use. (netstat prints nothing when run from Python.)
+        # Network per process: nettop has each process's bytes in/out (it runs beside the readings, see
+        # net_rates_now); lsof says which local address (and so which interface) its connections use.
+        # (netstat prints nothing when run from Python.)
         ip_if = {a.split("/")[0]: x["name"] for x in ifs for a in x["addrs"] + x.get("addrs6", [])}
+        net_rates = self.net_rates_now()
         mac_net = {}
-        for line in run(["nettop", "-P", "-L", "1", "-x", "-J", "bytes_in,bytes_out"], timeout=10).splitlines()[1:]:
-            f = line.split(",")
-            if len(f) >= 3:
-                _name, _, pid = f[0].rpartition(".")
-                if pid.isdigit() and f[1].isdigit() and f[2].isdigit():
-                    mac_net.setdefault(int(pid), {"ifs": set(), "b": 0})["b"] = int(f[1]) + int(f[2])
         cur_pid = None
         for line in run(["lsof", "-nP", "-iTCP", "-sTCP:ESTABLISHED", "-F", "pn"], timeout=10).splitlines():
             if line.startswith("p"):
@@ -1040,7 +1074,7 @@ class MacCollector:
                 ip = line[1:].split("->")[0].rsplit(":", 1)[0].strip("[]")
                 ifn = ip_if.get(ip)
                 if ifn:
-                    mac_net.setdefault(cur_pid, {"ifs": set(), "b": 0})["ifs"].add(ifn)
+                    mac_net.setdefault(cur_pid, set()).add(ifn)
         # Processes: CPU from cumulative cpu time deltas.
         procs = []
         args = {}
@@ -1056,9 +1090,8 @@ class MacCollector:
             pid = int(f[0])
             secs = parse_cputime(f[5])
             c = self.rate("p%d" % pid, secs, t)
-            pn = mac_net.get(pid) or {}
             procs.append([pid, int(f[1]), os.path.basename(f[6]), f[2], f[3], c, int(f[4]) * 1024 / GB, 0.0, 0.0, 0, args.get(pid, f[6]), "base", -1, [], [],
-                          sorted(pn.get("ifs", ())), self.rate("pn%d" % pid, pn.get("b", 0), t) / MB if pn else 0.0])
+                          sorted(mac_net.get(pid, ())), net_rates.get(pid, 0.0)])
         if len(self.prev) > 20000:
             self.prev = {k: v for k, v in self.prev.items() if v[1] >= t - 30}
         # VMs: Virtualization.framework, QEMU and Parallels processes (Docker Desktop's VM is not a VM here).
