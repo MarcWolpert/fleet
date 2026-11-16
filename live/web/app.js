@@ -2511,7 +2511,11 @@ function openCtx(spec, x, y, origin){
   el.style.top = Math.max(8, Math.min(y, innerHeight - r.height - 8)) + 'px';
   const first = el.querySelector('[role=menuitem]'); if (first) first.focus();
 }
+// a menu whose items come from the server waits for them: Open terminal's terminals (#223) aren't fetched until asked for
+function ctxWait(t){ const tmb = t && t.closest && t.closest('[data-terminal], [data-termchoose]'); return tmb && !TERMS.list ? loadTerms() : null; }
 document.addEventListener('contextmenu', e => {
+  const t = e.target, wait = ctxWait(t);
+  if (wait){ e.preventDefault(); const x = e.clientX, y = e.clientY; wait.then(() => { const spec = ctxFor(t); if (spec) openCtx(spec, x, y, t.closest('button, [tabindex]') || t); }); return; }
   const spec = ctxFor(e.target);
   if (!spec || !spec.items.filter(x => x && x !== '—').length){ closeCtx(false); return; }
   e.preventDefault();
@@ -2526,8 +2530,11 @@ document.addEventListener('click', e => {
 addEventListener('keydown', e => {
   const el = $('ctxmenu'), open = el && !el.hidden;
   if (!open && ((e.key === 'F10' && e.shiftKey) || e.key === 'ContextMenu')){
-    const a = document.activeElement, spec = a && a !== document.body ? ctxFor(a) : null;
-    if (spec){ e.preventDefault(); e.stopPropagation(); const r = a.getBoundingClientRect(); openCtx(spec, r.left + 8, r.bottom + 2, a); }
+    const a = document.activeElement, wait = a && a !== document.body ? ctxWait(a) : null;
+    const at = spec => { const r = a.getBoundingClientRect(); openCtx(spec, r.left + 8, r.bottom + 2, a); };
+    if (wait){ e.preventDefault(); e.stopPropagation(); wait.then(() => { const spec = ctxFor(a); if (spec) at(spec); }); return; }
+    const spec = a && a !== document.body ? ctxFor(a) : null;
+    if (spec){ e.preventDefault(); e.stopPropagation(); at(spec); }
     return;
   }
   if (!open) return;
