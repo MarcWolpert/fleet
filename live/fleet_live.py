@@ -978,10 +978,10 @@ class MacCollector:
                 info = self.disk_info(dn, media.get("IORegistryEntryID")) if dn else {}
                 if not dn or info.get("image"):
                     continue
-                b = st.get("Bytes (Read)", 0) + st.get("Bytes (Write)", 0)
-                disk_b += b
+                r, w = st.get("Bytes (Read)", 0), st.get("Bytes (Write)", 0)
+                disk_b += r + w
                 mac_disks.append({"name": dn, "model": info.get("model", ""), "size": info.get("size", 0), "rot": info.get("rot", False), "role": "",
-                                  "mounts": [], "read": self.rate("dk." + dn, b, t) / MB, "write": 0.0, "busy": -1})
+                                  "mounts": [], "read": self.rate("dkr." + dn, r, t) / MB, "write": self.rate("dkw." + dn, w, t) / MB, "busy": -1})
         disk = self.rate("disk", disk_b, t) / MB
         self.disk_peak = max(self.disk_peak, disk * MB * 1.25)
         ifs, net = [], 0.0

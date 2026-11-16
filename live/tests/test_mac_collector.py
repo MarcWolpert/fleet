@@ -326,10 +326,16 @@ class EachDisk(unittest.TestCase):
     def test_every_drive_and_no_disk_image(self):
         mac = Mac(dict(DISKUTIL, **disk_readings(0)))
         c, snap = self.two_readings(mac)
-        self.assertEqual(snap["disks"], [self.disk("disk0", "APPLE SSD AP1024Z", 1000555581440, False, 30.0, 0.0),
+        self.assertEqual(snap["disks"], [self.disk("disk0", "APPLE SSD AP1024Z", 1000555581440, False, 20.0, 10.0),
                                          self.disk("disk4", "Extreme SSD", 2000398934016, False, 5.0, 0.0),
-                                         self.disk("disk6", "Backup HDD", 4000787030016, True, 4.0, 0.0)])
+                                         self.disk("disk6", "Backup HDD", 4000787030016, True, 0.0, 4.0)])
         self.assertEqual(snap["host"][3], 39.0, "MB/s over the drives: (60 + 10 + 8) MB in 2 s")
+
+    def test_reads_and_writes_are_each_their_own(self):
+        """#107: a disk that is only written shows writes, not reads; one only read shows no writes."""
+        mac = Mac(dict(DISKUTIL, **disk_readings(0)))
+        c, snap = self.two_readings(mac)
+        self.assertEqual({d["name"]: (d["read"], d["write"]) for d in snap["disks"]}, {"disk0": (20.0, 10.0), "disk4": (5.0, 0.0), "disk6": (0.0, 4.0)})
 
     def test_a_drive_that_takes_an_ejected_images_name_is_read(self):
         mac = Mac(dict(DISKUTIL, **disk_readings(0)))
