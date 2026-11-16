@@ -49,8 +49,10 @@ test('Settings › Terminal: the fonts Fleet carries, yours, or a list of your o
     // the preview is in the font itself, which Fleet's page loads from its own files
     assert.match(await p.eval(`getComputedStyle(document.querySelector('#sheet .tfont-prev')).fontFamily`), /^"Fira Code", "Fleet Symbols", monospace$/);
     await p.waitFor(`[...document.fonts].some(f => f.family.replace(/"/g, '') === 'Fira Code' && f.status === 'loaded')`, SLOW);
+    await p.eval(`(document.querySelector('#sheet .tfont-prev').scrollIntoView({block: 'center'}), true)`);
+    await p.shot('termfonts');
     // reopened, it shows what you chose
-    await p.eval(`(closeSheet(), openSettings(), true)`);
+    await p.eval(`(closeSettings(), openSettings(), true)`);
     await p.waitFor(`document.querySelector('#sheet [data-termfont]') && document.querySelector('#sheet [data-termfont]').value === 'Fira Code'`, SLOW);
     // a list of your own: the field to write it in
     await p.eval(pick('custom'));

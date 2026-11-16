@@ -104,8 +104,9 @@ inline, below the page.
 - **Templates:** save the terminals you have open (which, on what, named what, split how) and launch them again
   later from the bar's menu or ⌘K; **Reset** goes back to the default.
 - **Its own text:** a text size of its own (A− A+, or ⌘+ ⌘− ⌘0 while you're in the terminals), apart from Fleet's
-  zoom, and a font of your choosing in Settings › Terminal; Powerline and Nerd Font symbols draw even without a
-  Nerd Font installed.
+  zoom. Settings › Terminal picks the font, with a preview: Fira Code, JetBrains Mono, Source Code Pro or Hack, which
+  Fleet carries, or a font file of your own that you install there (.ttf, .otf, .woff, .woff2). Either way it works
+  without installing anything on the computer. Powerline and Nerd Font symbols draw even without a Nerd Font installed.
 - **What starts in it:** a login shell, tmux reattaching to a session, or your own command (Settings › Terminal).
 
 The packages carry ttyd and tmux, which the terminals use; running from source, install them

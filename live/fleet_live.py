@@ -13,7 +13,7 @@ connection closes. Nothing is installed on any machine and nothing is changed.
 Usage: python3 fleet_live.py [--port 4518] [--config PATH] [--open]
 """
 import argparse, base64, collections, ctypes, ctypes.util, glob, http.server, json, os, platform, plistlib, shlex
-import hashlib, re, secrets, shutil, subprocess, sys, tempfile, threading, time, tomllib, urllib.parse, urllib.request, webbrowser, zlib
+import hashlib, re, secrets, shutil, struct, subprocess, sys, tempfile, threading, time, tomllib, urllib.parse, urllib.request, webbrowser, zlib
 
 VERSION = "0.0.1-hotfix.1"
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -3018,6 +3018,144 @@ def term_font_family(asked):
     return ", ".join(parts[:i] + ['"Fleet Symbols"'] + parts[i:])
 
 
+# The terminals' fonts (#408): a few good ones Fleet carries (web/fonts, each with its licence) and the ones you install,
+# kept in FONTS_DIR. ttyd's page is on another port, so Fleet's page sends it a font's data (TTYD_BRIDGE_JS adds it).
+FONTS_DIR = os.path.expanduser("~/.config/fleet/fonts")
+CARRIED_FONTS = [("Fira Code", "FiraCode", "FiraCode-OFL.txt"), ("JetBrains Mono", "JetBrainsMono", "JetBrainsMono-OFL.txt"),
+                 ("Source Code Pro", "SourceCodePro", "SourceCodePro-OFL.txt"), ("Hack", "Hack", "Hack-LICENSE.txt")]
+FONT_TYPES = {".ttf": "font/ttf", ".otf": "font/otf", ".woff": "font/woff", ".woff2": "font/woff2"}
+FONT_FILE = re.compile(r"^\w[\w .()+\-]{0,99}\.(ttf|otf|woff2?)$", re.I)
+FONT_MAGIC = (b"\x00\x01\x00\x00", b"OTTO", b"true", b"wOFF", b"wOF2")
+MAX_FONT = 16 << 20
+FONT_WEIGHTS = {"thin": 100, "hairline": 100, "extralight": 200, "ultralight": 200, "light": 300, "regular": 400, "book": 400, "normal": 400,
+                "medium": 500, "semibold": 600, "demibold": 600, "bold": 700, "extrabold": 800, "ultrabold": 800, "black": 900, "heavy": 900}
+FONT_INFO = {}   # (path, mtime, size) -> what font_info read from it
+
+
+def font_tables(data):
+    """A font file's tables by tag: TrueType, OpenType, or WOFF (zlib-compressed tables); {} for anything else."""
+    out = {}
+    try:
+        if data[:4] == b"wOFF":
+            for i in range(int.from_bytes(data[12:14], "big")):
+                tag, off, clen, olen = struct.unpack_from(">4sIII", data, 44 + 20 * i)
+                raw = data[off:off + clen]
+                out[tag] = zlib.decompress(raw) if clen < olen else raw
+        elif data[:4] in FONT_MAGIC[:3]:
+            for i in range(int.from_bytes(data[4:6], "big")):
+                tag, _, off, length = struct.unpack_from(">4sIII", data, 12 + 16 * i)
+                out[tag] = data[off:off + length]
+    except (struct.error, zlib.error):
+        return {}
+    return out
+
+
+def font_info(name, data):
+    """(family, weight, style) of a font file, from its name and OS/2 tables where it has them (a WOFF2's are
+    Brotli-compressed, which Python can't read), else from its file name: Iosevka-BoldItalic.woff2 is Iosevka, 700, italic."""
+    stem = re.sub(r"(\.(ttf|otf))?\.(ttf|otf|woff2?)$", "", name, flags=re.I)
+    fam, tail = (stem.rsplit("-", 1) + [""])[:2] if "-" in stem else (stem, "")
+    t = tail.lower()
+    italic = t.endswith("italic") or t.endswith("oblique") or (t.endswith("it") and t[:-2] in FONT_WEIGHTS.keys() | {""})
+    w = re.sub(r"(italic|oblique|it)$", "", t) if italic else t
+    if w and w not in FONT_WEIGHTS:   # not a weight or a style: the name is all family
+        fam, w, italic = stem, "", False
+    weight = FONT_WEIGHTS.get(w, 400)
+    tb, names = font_tables(data), {}
+    nt = tb.get(b"name", b"")
+    try:
+        count, soff = struct.unpack_from(">2H", nt, 2) if len(nt) >= 6 else (0, 0)
+        for i in range(count):
+            pid, _, lid, nid, ln, off = struct.unpack_from(">6H", nt, 6 + 12 * i)
+            if nid not in (1, 16):
+                continue
+            raw = nt[soff + off:soff + off + ln]
+            got = (raw.decode("utf-16-be", "ignore") if pid in (0, 3) else raw.decode("mac_roman", "ignore")).strip()
+            rank = (pid == 3, lid == 0x409)   # Windows names first, in English
+            if got and (nid not in names or rank > names[nid][0]):
+                names[nid] = (rank, got)
+    except struct.error:
+        pass
+    if names:
+        fam = (names.get(16) or names.get(1))[1]   # the typographic family (Iosevka, not Iosevka Bold), else the family
+    os2 = tb.get(b"OS/2", b"")
+    if len(os2) >= 64:
+        weight = int.from_bytes(os2[4:6], "big") or weight
+        italic = bool(int.from_bytes(os2[62:64], "big") & 1)
+    fam = re.sub(r"[^A-Za-z0-9 _.\-]", "", fam).strip()[:80] or "Font"
+    return fam, str(max(1, min(1000, weight))), "italic" if italic else "normal"
+
+
+def own_fonts(folder):
+    """[(file, (family, weight, style))] of the fonts installed in folder."""
+    try:
+        files = sorted(n for n in os.listdir(folder) if FONT_FILE.match(n) and os.path.isfile(os.path.join(folder, n)))
+    except OSError:
+        return []
+    out = []
+    for n in files:
+        p = os.path.join(folder, n)
+        try:
+            st = os.stat(p)
+            key = (p, st.st_mtime_ns, st.st_size)
+            if key not in FONT_INFO:
+                with open(p, "rb") as f:
+                    FONT_INFO[key] = font_info(n, f.read(MAX_FONT))
+            out.append((n, FONT_INFO[key]))
+        except OSError:
+            continue
+    return out
+
+
+def font_catalog(folder=None):
+    """The fonts the terminals can use: the ones Fleet carries, then yours (one of yours by a carried one's name takes
+    its place), each with its faces' URLs, weights and styles."""
+    own = {}
+    for n, (fam, w, st) in own_fonts(folder or FONTS_DIR):
+        own.setdefault(fam, []).append({"url": "/api/font?f=" + urllib.parse.quote(n), "weight": w, "style": st})
+    out = []
+    for fam, base, lic in CARRIED_FONTS:
+        faces = [{"url": "/fonts/%s-%s.woff2" % (base, x), "weight": w, "style": "normal"} for x, w in (("Regular", "400"), ("Bold", "700"))
+                 if os.path.exists(os.path.join(HERE, "web", "fonts", "%s-%s.woff2" % (base, x)))]
+        if faces and fam not in own:
+            out.append({"family": fam, "own": False, "licence": lic, "faces": faces})
+    return out + [{"family": fam, "own": True, "faces": faces} for fam, faces in own.items()]
+
+
+def install_font(name, data, folder=None):
+    """Keeps a font file you chose in folder (only this user can read it) and returns its family. ValueError, saying
+    why, for what isn't a font file."""
+    folder = folder or FONTS_DIR
+    name = str(name or "")
+    if not FONT_FILE.match(name):
+        raise ValueError("A font is a .ttf, .otf, .woff or .woff2 file, named with letters, digits, spaces, dots and dashes.")
+    if not data:
+        raise ValueError("That file is empty.")
+    if len(data) > MAX_FONT:
+        raise ValueError("That file is over 16 MB, which is more than a font needs.")
+    if data[:4] not in FONT_MAGIC:
+        raise ValueError("That isn\u2019t a font file.")
+    os.makedirs(folder, mode=0o700, exist_ok=True)
+    tmp = os.path.join(folder, ".%s.part" % secrets.token_hex(6))
+    with open(tmp, "wb") as f:
+        f.write(data)
+    os.replace(tmp, os.path.join(folder, name))
+    return font_info(name, data)[0]
+
+
+def remove_font(family, folder=None):
+    """Removes every file of one of your fonts; returns how many. Fleet's own fonts aren't yours to remove."""
+    folder, n = folder or FONTS_DIR, 0
+    for f, (fam, _, _) in own_fonts(folder):
+        if fam == family:
+            try:
+                os.remove(os.path.join(folder, f))
+                n += 1
+            except OSError:
+                pass
+    return n
+
+
 def inline_opts(d, title):
     """ttyd's client options for a session: its text size (its own, apart from Fleet's zoom, #335), title, theme."""
     try:
@@ -3066,17 +3204,38 @@ TTYD_BRIDGE_JS = r"""
     if (!t || !t.options){ if (tries < 100) setTimeout(function(){ apply(n, tries + 1); }, 100); return; }
     if (t.options.fontSize !== n){ t.options.fontSize = n; if (typeof t.fit === 'function') t.fit(); }
   }
+  // a font's data, which Fleet sends with the font (#408: Fleet's page is on another port, so this one can't fetch it):
+  // each face added once; then the font is set again, so the terminal measures its cells with it
+  var FACES = {};
+  function addFaces(list){
+    var ps = [];
+    (Array.isArray(list) ? list : []).slice(0, 16).forEach(function(f){
+      if (!f || typeof f.family !== 'string' || !/^[\w .\-]{1,80}$/.test(f.family) || !(f.data instanceof ArrayBuffer) || !window.FontFace) return;
+      var w = /^\d{1,4}$/.test(String(f.weight)) ? String(f.weight) : '400', st = f.style === 'italic' ? 'italic' : 'normal', k = f.family + '|' + w + '|' + st;
+      if (FACES[k]) return;
+      try {
+        FACES[k] = new FontFace(f.family, f.data, {weight: w, style: st}).load().then(function(x){ document.fonts.add(x); }, function(){ delete FACES[k]; });
+        ps.push(FACES[k]);
+      } catch (x) {}
+    });
+    return ps.length ? Promise.all(ps) : null;
+  }
   window.addEventListener('message', function(e){
     if (e.source !== P) return;
     var d = e.data; if (d && d.fleet === 'termClear'){ if (window.term && window.term.clear) window.term.clear(); return; }
     if (!d || d.fleet !== 'termFont') return;
-    if (typeof d.family === 'string' && /^[\w ,"'.\-]{1,260}$/.test(d.family)) family(d.family, 0);
+    var fam = typeof d.family === 'string' && /^[\w ,"'.\-]{1,260}$/.test(d.family) ? d.family : null, added = addFaces(d.faces);
+    if (added) added.then(function(){ if (fam) family(fam, 0, true); });
+    else if (fam) family(fam, 0);
     var n = Number(d.size); if (n >= 6 && n <= 32) apply(n, 0);
   });
-  function family(f, tries){
+  function family(f, tries, again){
     var t = window.term;
-    if (!t || !t.options){ if (tries < 100) setTimeout(function(){ family(f, tries + 1); }, 100); return; }
-    if (t.options.fontFamily !== f){ t.options.fontFamily = f; if (typeof t.fit === 'function') t.fit(); }
+    if (!t || !t.options){ if (tries < 100) setTimeout(function(){ family(f, tries + 1, again); }, 100); return; }
+    if (t.options.fontFamily !== f || again){
+      if (t.options.fontFamily === f) t.options.fontFamily = 'monospace';
+      t.options.fontFamily = f; redraw(0); if (typeof t.fit === 'function') t.fit();
+    }
   }
   P.postMessage({fleet: 'termReady'}, '*');
 })();
@@ -3406,6 +3565,21 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return self.send_json({"path": f.config_path, "interval": f.interval, "machines": machines, "status": st,
                                    "terminal": f.cfg.get("terminal", "auto"), "terminals": have, "terminal_auto": dict(have).get(auto, auto)})
         q = urllib.parse.parse_qs(u.query)
+        if u.path == "/api/fonts":   # #408: the terminals' fonts, Fleet's and yours
+            return self.send_json({"fonts": font_catalog()})
+        if u.path == "/api/font":   # one of yours, by its file name
+            f = q.get("f", [""])[0]
+            p = os.path.join(FONTS_DIR, f)
+            if not FONT_FILE.match(f) or not os.path.isfile(p):
+                return self.send_error(404)
+            with open(p, "rb") as fh:
+                body = fh.read(MAX_FONT)
+            self.send_response(200)
+            self.send_header("Content-Type", FONT_TYPES[os.path.splitext(f)[1].lower()])
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if u.path == "/api/fleet":
             LAST_CLIENT[0] = time.time()
             return self.send_json(self.fleet.api_fleet())
@@ -3513,6 +3687,18 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             if m:
                 m.wake.set()
             return self.send_json({"ok": bool(m)})
+        if u.path == "/api/fonts/install":   # #408: ?name=<file name>, the file itself as the body
+            n = int(self.headers.get("Content-Length") or 0)
+            if n > MAX_FONT:
+                self.close_connection = True   # the rest of it isn't read
+            data = self.rfile.read(min(n, MAX_FONT + 1))
+            try:
+                return self.send_json({"ok": True, "family": install_font(urllib.parse.parse_qs(u.query).get("name", [""])[0], data)})
+            except (ValueError, OSError) as e:
+                return self.send_json({"ok": False, "error": str(e)[:300]})
+        if u.path == "/api/fonts/remove":   # {family}: one of yours
+            d = self.read_json()
+            return self.send_json({"ok": True, "removed": remove_font(str(d.get("family", ""))[:100]) if isinstance(d, dict) else 0})
         if u.path != "/api/pins":
             self.send_error(404)
             return

@@ -3625,11 +3625,14 @@ function termMenu(id){
 // Settings › Terminal: what an inline terminal starts (#329), kept in ui.json; a login shell when empty
 const INLINE_CMDS = [['', 'A login shell'], ['tmux new -A -s fleet', 'tmux, reattaching to the session named fleet']];
 function inlineCmdField(){
+  // the fonts as they are now (yours may have changed): drawn again only if they did, so a choice already made stays
+  const had = JSON.stringify(FONTS.list); FONTS.msg = '';
+  loadFonts(true).then(l => { if (JSON.stringify(l) !== had) renderTermFont(); });
   const cur = PREFS.inlineCmd || '', custom = !INLINE_CMDS.some(([v]) => v === cur);
   return `<label class="inline">Inline terminal starts <select data-inlinecmd aria-describedby="inline-help">${INLINE_CMDS.map(([v, l]) => `<option value="${esc(v)}"${!custom && cur === v ? ' selected' : ''}>${esc(l)}</option>`).join('')}<option value="custom"${custom ? ' selected' : ''}>A command of your own…</option></select></label>`
     + `<input type="text" class="inlinecmd" data-inlinecmdtext maxlength="300" placeholder="e.g. htop" aria-label="Inline terminal command" value="${custom ? esc(cur) : ''}"${custom ? '' : ' hidden'} spellcheck="false" autocomplete="off">`
-    + `<label class="inline tfam">Inline terminal font <input type="text" class="inlinecmd" data-termfontfamily maxlength="240" spellcheck="false" autocomplete="off" placeholder="${esc(TERM_FONT_DEFAULT)}" value="${esc(PREFS.termFontFamily || '')}" aria-describedby="tfam-help"></label>`
-    + `<p class="sub" id="tfam-help">A CSS font list; empty tries the common Nerd Fonts, then Menlo. Symbols your font lacks (a Powerline prompt’s, Nerd Font icons) come from the one Fleet carries.</p>`
+    + `<div class="tfont" data-tfontbox>${termFontField()}</div>`
+    + `<p class="sub" id="tfam-help">Fleet carries a few fonts made for code, and you can install your own (.ttf, .otf, .woff, .woff2): it works in every terminal here without installing it on the computer. Or write a CSS font list. Symbols your font lacks (a Powerline prompt’s, Nerd Font icons) come from the one Fleet carries.</p>`
     + `<p class="sub" id="inline-help"><b>Open inline</b> (the arrow by Open terminal) splits the pane: the page above, the terminal below, on the machine or in the container. It uses <code>ttyd</code> on this computer.</p>`;
 }
 document.addEventListener('change', e => {
@@ -3641,8 +3644,17 @@ document.addEventListener('change', e => {
     PREFS = Object.assign({}, PREFS, {inlineCmd:sel.value}); savePrefs('the inline terminal command');
     return;
   }
+  const tf = e.target.closest('#sheet [data-termfont]');
+  if (tf){
+    const txt = $('sheet').querySelector('[data-termfontfamily]');
+    if (tf.value === 'custom'){ txt.hidden = false; txt.focus(); return; }
+    txt.hidden = true; txt.value = '';
+    setTermFontFamily(tf.value ? `"${tf.value}", monospace` : ''); return;
+  }
   const ff = e.target.closest('#sheet [data-termfontfamily]');
-  if (ff){ PREFS = Object.assign({}, PREFS, {termFontFamily:ff.value.trim().slice(0, 240)}); savePrefs('the terminal font'); sendTermFont(); return; }
+  if (ff){ setTermFontFamily(ff.value.trim().slice(0, 240)); return; }
+  const fl = e.target.closest('#sheet [data-fontfile]');
+  if (fl){ const files = [...fl.files]; fl.value = ''; installFonts(files); return; }
   const txt = e.target.closest('#sheet [data-inlinecmdtext]');
   if (txt){ PREFS = Object.assign({}, PREFS, {inlineCmd:txt.value.replace(/[\r\n]+/g, ' ').trim().slice(0, 300)}); savePrefs('the inline terminal command'); }
 });
@@ -3673,15 +3685,110 @@ function termFontFamily(){   // Fleet's symbols before the first generic family:
 // so Fleet's symbols font drew boxes: there the terminals use ttyd's DOM renderer (#392). Chrome keeps the GPU one.
 function termFrameUrl(u){ return u && /^Apple/.test(navigator.vendor || '') ? u + (u.includes('?') ? '&' : '?') + 'rendererType=dom' : u; }
 function frameOrigin(f){ try { const u = new URL(f.src); return /^https?:$/.test(u.protocol) ? u.origin : '*'; } catch (e) { return '*'; } }
-function sendTermFont(f){
-  (f ? [f] : [...document.querySelectorAll('#tdrawer iframe')]).forEach(x => { try { x.contentWindow.postMessage({fleet:'termFont', size:termFontPx(), family:termFontFamily()}, frameOrigin(x)); } catch (e) {} });
+// The size and the font list go to every terminal now; the data of the fonts in the list that Fleet has (#408) follows,
+// to each terminal once (FONT_SENT), and again when its page reloads (fresh, on termReady)
+const FONT_SENT = new WeakMap();
+function sendTermFont(f, fresh){
+  const frames = f ? [f] : [...document.querySelectorAll('#tdrawer iframe')];
+  const post = (x, faces) => { try { x.contentWindow.postMessage({fleet:'termFont', size:termFontPx(), family:termFontFamily(), faces}, frameOrigin(x)); } catch (e) {} };
+  frames.forEach(x => { if (fresh) FONT_SENT.delete(x); post(x, []); });
+  loadFonts().then(() => Promise.all(termFaces().map(fc => faceData(fc.url).then(data => data && Object.assign({}, fc, {data})))))
+    .then(faces => frames.forEach(x => {
+      const had = FONT_SENT.get(x) || new Set(), more = faces.filter(fc => fc && !had.has(fc.url));
+      if (!more.length || !x.isConnected) return;
+      more.forEach(fc => had.add(fc.url)); FONT_SENT.set(x, had);
+      post(x, more.map(({family, weight, style, data}) => ({family, weight, style, data})));
+    })).catch(() => {});
 }
+
+// The terminals' font (#408): one Fleet carries, one you installed (both from /api/fonts), Fleet's default list, or a list
+// of your own; kept in ui.json as termFontFamily, a CSS font list ('"Fira Code", monospace' for a picked font). Fleet's
+// page loads the fonts for the preview through @font-face rules; the terminals get their data from sendTermFont.
+const FONTS = {list:[], p:null, data:{}, msg:''};
+const FONT_URL = /^\/(fonts\/[\w.\-]+|api\/font\?f=[\w.()+%\-]+)$/;
+function loadFonts(again){
+  if (!FONTS.p || again) FONTS.p = fetch('/api/fonts').then(r => r.ok ? r.json() : {fonts:[]}).then(d => {
+    FONTS.list = (Array.isArray(d.fonts) ? d.fonts : []).filter(f => f && /^[\w .\-]{1,80}$/.test(f.family) && Array.isArray(f.faces))
+      .map(f => Object.assign({}, f, {faces:f.faces.filter(x => x && FONT_URL.test(x.url))}));
+    fontFaceRules();
+    return FONTS.list;
+  }).catch(() => FONTS.list);
+  return FONTS.p;
+}
+function fontFaceRules(){
+  let st = document.getElementById('termfaces');
+  if (!st){ st = document.createElement('style'); st.id = 'termfaces'; document.head.appendChild(st); }
+  st.textContent = ['@font-face{font-family:"Fleet Symbols";src:url("/fonts/SymbolsNerdFontMono-Regular.ttf")}'].concat(FONTS.list.flatMap(f => f.faces.map(x =>
+    `@font-face{font-family:"${f.family}";src:url("${x.url}");font-weight:${/^\d{1,4}$/.test(x.weight) ? x.weight : 400};font-style:${x.style === 'italic' ? 'italic' : 'normal'};font-display:swap}`))).join('\n');
+}
+function termFaces(){
+  const want = termFontFamily().split(',').map(x => x.trim().replace(/^["']|["']$/g, ''));
+  return FONTS.list.filter(f => want.includes(f.family)).flatMap(f => f.faces.map(x => ({family:f.family, url:x.url, weight:String(x.weight || 400), style:x.style === 'italic' ? 'italic' : 'normal'})));
+}
+function faceData(url){ return FONTS.data[url] || (FONTS.data[url] = fetch(url).then(r => r.ok ? r.arrayBuffer() : null).catch(() => null)); }
+function fontPicked(){
+  const m = /^"([\w .\-]{1,80})", monospace$/.exec(PREFS.termFontFamily || '');
+  return m && FONTS.list.some(f => f.family === m[1]) ? m[1] : null;
+}
+const FONT_SAMPLE = '~/fleet \ue0a0 main \ue0b0 ls -la  0O il1| {} [] => != -> <= \uf418';
+function termFontField(){
+  const picked = fontPicked(), own = PREFS.termFontFamily || '', custom = !!own && !picked, mine = FONTS.list.filter(f => f.own), carried = FONTS.list.filter(f => !f.own);
+  const opt = (v, l, sel) => `<option value="${esc(v)}"${sel ? ' selected' : ''}>${esc(l)}</option>`;
+  return `<label class="inline tfam">Inline terminal font <select data-termfont aria-describedby="tfam-help">${opt('', 'Fleet’s default: a Nerd Font you have, or Menlo', !own)}`
+    + (carried.length ? `<optgroup label="Fleet carries">${carried.map(f => opt(f.family, f.family, picked === f.family)).join('')}</optgroup>` : '')
+    + (mine.length ? `<optgroup label="Yours">${mine.map(f => opt(f.family, f.family, picked === f.family)).join('')}</optgroup>` : '')
+    + `${opt('custom', 'A font list of your own…', custom)}</select></label>`
+    + `<input type="text" class="inlinecmd" data-termfontfamily maxlength="240" spellcheck="false" autocomplete="off" aria-label="Your font list" placeholder="${esc(TERM_FONT_DEFAULT)}" value="${custom ? esc(own) : ''}"${custom ? '' : ' hidden'}>`
+    + `<p class="tfont-prev" style="font-family:${esc(termFontFamily())};font-size:${termFont()}px" title="The terminals’ font">${esc(FONT_SAMPLE)}</p>`
+    + `<div class="tfont-acts"><button type="button" class="btn" data-fontinstall>Install a font…</button><input type="file" data-fontfile accept=".ttf,.otf,.woff,.woff2" multiple hidden>`
+    + `<button type="button" class="btn" data-fontremove${picked && mine.some(f => f.family === picked) ? '' : ' hidden'}>Remove ${esc(picked || '')}</button>`
+    + `<span class="sub" data-fontmsg role="status">${esc(FONTS.msg)}</span></div>`;
+}
+function renderTermFont(){ const b = $('sheet').querySelector('[data-tfontbox]'); if (b) b.innerHTML = termFontField(); }
+function setTermFontFamily(v){
+  PREFS = Object.assign({}, PREFS, {termFontFamily:v}); savePrefs('the terminal font'); sendTermFont();
+  // the preview and Remove follow; the select and the field stay as they are, so a change doesn't move your focus
+  const b = $('sheet').querySelector('[data-tfontbox]'); if (!b) return;
+  const pv = b.querySelector('.tfont-prev'); if (pv) pv.style.fontFamily = termFontFamily();
+  const rm = b.querySelector('[data-fontremove]'), picked = fontPicked();
+  if (rm){ rm.hidden = !(picked && FONTS.list.some(f => f.own && f.family === picked)); rm.textContent = 'Remove ' + (picked || ''); }
+}
+async function installFonts(files){
+  let last = null, msg = '';
+  for (const f of files.slice(0, 20)){
+    if (f.size > 16 << 20){ msg = f.name + ': over 16 MB, more than a font needs.'; continue; }
+    try {
+      const r = await fetch('/api/fonts/install?name=' + encodeURIComponent(f.name), {method:'POST', headers:{'X-Fleet':'1', 'Content-Type':'application/octet-stream'}, body:f});
+      const d = r.ok ? await r.json() : {ok:false, error:'HTTP ' + r.status};
+      if (d.ok) last = d.family; else msg = f.name + ': ' + (d.error || 'not installed');
+    } catch (e) { msg = f.name + ': ' + e.message; }
+  }
+  FONTS.msg = msg || (last ? 'Installed ' + last + '.' : '');
+  await loadFonts(true);
+  if (last && FONTS.list.some(x => x.family === last)) PREFS = Object.assign({}, PREFS, {termFontFamily:`"${last}", monospace`});
+  if (last){ savePrefs('the terminal font'); sendTermFont(); }
+  renderTermFont();
+}
+async function removeFont(fam){
+  if (!fam) return;
+  FONTS.msg = '';
+  try { await api('/api/fonts/remove', {family:fam}); } catch (e) { FONTS.msg = 'Couldn’t remove ' + fam + ': ' + e.message; }
+  FONTS.list.filter(f => f.family === fam).forEach(f => f.faces.forEach(x => delete FONTS.data[x.url]));
+  if (fontPicked() === fam){ PREFS = Object.assign({}, PREFS, {termFontFamily:''}); savePrefs('the terminal font'); sendTermFont(); }
+  FONTS.msg = FONTS.msg || 'Removed ' + fam + '.';
+  await loadFonts(true);
+  renderTermFont();
+}
+document.addEventListener('click', e => {
+  if (e.target.closest('#sheet [data-fontinstall]')){ const i = $('sheet').querySelector('[data-fontfile]'); if (i) i.click(); return; }
+  if (e.target.closest('#sheet [data-fontremove]')) removeFont(fontPicked());
+});
 // what the terminal says (TTYD_BRIDGE_JS): ready for its size, it has focus (#336), or one of Fleet's keys typed in it
 window.addEventListener('message', e => {
   const k = e.data && e.data.fleet; if (!k) return;
   const f = [...document.querySelectorAll('#tdrawer iframe')].find(x => x.contentWindow === e.source); if (!f) return;
   const s = TD.list.find(x => x.key === f.closest('[data-tdpane]').dataset.tdpane);
-  if (k === 'termReady') sendTermFont(f);
+  if (k === 'termReady') sendTermFont(f, true);
   else if (k === 'termFocus'){ if (s && TD.active !== s.key){ TD.active = s.key; keepActive(s); renderDrawer(); } if (PANEL !== 'term'){ PANEL = 'term'; markPanel(); } }
   else if (k === 'termKey' && e.data.act === 'split') splitInline(s);
   else if (k === 'termKey' && e.data.act === 'undo') undoTerm();
