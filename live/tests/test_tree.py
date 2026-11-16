@@ -380,7 +380,8 @@ class OnlyLiveReadingsAreRecorded(TreeTest):
         f.machines["win-vm"].status = "offline"
         spec = self.record(f, "nas")
         self.assertEqual(self.tree(spec), ("nas", "offline", [("win-vm", "offline", []), ("nas/vms/lab", "offline", []), ("lab-vm", "connecting", [])]))
-        self.assertNotIn("hostside", spec["vms"][0])
+        # what the host gave it is its last reading's, and nothing was read yet: a history that waits, all zero
+        self.assertEqual(spec["vms"][0].get("hostside"), {k: [0.0] * H for k in fleet_live.METRICS})
         self.assertEqual(snapshot(), {})
 
     def test_a_live_vm_under_a_host_that_is_not_live_still_records_its_own_readings(self):
@@ -391,6 +392,27 @@ class OnlyLiveReadingsAreRecorded(TreeTest):
         self.assertEqual(self.tree(spec), ("nas", "offline", [("win-vm", "ok", [])]))
         self.assertEqual(sorted(snapshot()), ["win-vm/__host", "win-vm/base"])
         self.assertEqual(spec["vms"][0]["base"]["h"]["cpu"][-1], 1.5)
+
+    def test_a_host_that_is_not_live_adds_up_its_last_reading_with_what_it_gave_each_vm(self):
+        # Under a host that isn't live its row is its last reading: Base and what it gave the VM (the VM's host-side
+        # history) both stop at that reading, while the VM's own figures go on. Without the host-side history the VM's
+        # row fell back to the guest's own 5 GB, and the host added up to 14 + 5 = 19 GB of a 30 GB reading.
+        f = make_fleet(HOST_CFG, VM_CFG)
+        host = give(f, "nas", host_view([dict(vm("win-vm", [3.5, 16.0, 0, 2.0, 1.0]), gu=[40.0])], gpus=[gpu("RTX A4000", 40.0)]))
+        guest = give(f, "win-vm", view(host=[1.5, 5.0, 0.0, 2.0, 1.0], os="Windows"))
+        self.record(f, "nas")
+        host.status = "offline"
+        guest.got(view(host=[1.0, 6.0, 0.0, 2.0, 1.0], os="Windows"))   # the guest goes on reading
+        spec = self.record(f, "nas")
+        v = spec["vms"][0]
+        tail = lambda h: {k: x[-2:] for k, x in (h or {}).items()}
+        self.assertEqual((spec["status"], v["status"]), ("offline", "ok"))
+        self.assertEqual(tail(spec["base"]["h"]), {"cpu": [0.0, 2.5], "mem": [0.0, 14.0], "gpu": [0.0, 0.0], "disk": [0.0, 38.0], "net": [0.0, 19.0]})
+        self.assertEqual(tail(v.get("hostside")), {"cpu": [0.0, 3.5], "mem": [0.0, 16.0], "gpu": [0.0, 0.0], "disk": [0.0, 2.0], "net": [0.0, 1.0]})
+        self.assertEqual(tail(v.get("hostside_gh")), {"gpu0": [0.0, 40.0]})
+        self.assertEqual(v["base"]["h"]["mem"][-3:], [0.0, 5.0, 6.0], "the VM's own figures go on")
+        self.assertEqual(sorted(snapshot()), ["nas/__host", "nas/base", "nas/base/__gpu/0", "nas/gpu0/util",
+                                              "win-vm/__host", "win-vm/base", "win-vm/hostside", "win-vm/hostside/__gpu/0"])
 
     def test_a_vm_seen_only_from_a_live_host_records_what_the_host_sees(self):
         f = make_fleet(HOST_CFG, VM_CFG)
@@ -452,7 +474,7 @@ class GoneNodesAreForgotten(TreeTest):
         self.assertEqual(self.saved_keys(), self.keys("nas", "veth1a2b3"))
 
     def test_a_vms_host_side_history_is_kept_while_its_host_is_not_live(self):
-        # #206's history of what the host gives a VM is shown only under a live host (#163); it waits like the host's own
+        # #206's history of what the host gives a VM grows only under a live host (#163); it waits like the host's own
         f = make_fleet(HOST_CFG, VM_CFG)
         host = give(f, "nas", host_view([vm("win-vm", [3.5, 16.0, 0, 2.0, 1.0])]))
         give(f, "win-vm", view(os="Windows"))

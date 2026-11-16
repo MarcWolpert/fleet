@@ -1679,12 +1679,10 @@ class Fleet:
             if mm:
                 listed.add(v["name"])
                 sub = self.machine_spec(mm, record, vm_hostside={"u": v["u"], "cap": vm_cap(view, v)} if live else None, vm_parent=m if live else None)
-                if live:   # what the host gives it (its QEMU process), as a history, and of each of the host's GPUs
-                    sub["hostside"] = self.leaf(sub["id"] + "/hostside", v["u"], own)
-                    sub["hostside_gh"] = self.gpu_leaf(sub["id"] + "/hostside", v.get("gu"), ng, own)
-                elif record:   # not shown while the host isn't live, and kept like the host's own history
-                    for key in [sub["id"] + "/hostside"] + ["%s/hostside/__gpu/%d" % (sub["id"], i) for i in range(ng)]:
-                        HIST.touch(key)
+                # What the host gives it (its QEMU process), as a history, and of each of the host's GPUs. Under a host
+                # that isn't live it waits with the host's own: the host's row is its last reading, Base and this alike.
+                sub["hostside"] = self.leaf(sub["id"] + "/hostside", v["u"], own)
+                sub["hostside_gh"] = self.gpu_leaf(sub["id"] + "/hostside", v.get("gu"), ng, own)
                 vm_ids[v["name"]] = sub["id"]
                 spec["vms"].append(sub)
             else:
