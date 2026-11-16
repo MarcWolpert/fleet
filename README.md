@@ -201,6 +201,10 @@ Any token in `live/web/themes.js` (`THEME_KEYS`) can be set; the rest are derive
 - Compose projects come from Docker's `com.docker.compose.*` labels;
   container usage comes from each container's cgroup; VMs are matched by their
   QEMU process or the WSL utility VM.
+- A VM Fleet also reads over SSH (`vm_on`) is counted twice over. As part of
+  its host it costs what the host gives it: its QEMU process's CPU, resident
+  memory, disk and network, which is what `htop` and the hypervisor's own UI
+  show. Its own page shows what the guest reports.
 - A scheduled job's usage is a breakdown of what runs it, never added on top.
 - Everything stays on your computer: the server listens on `127.0.0.1` only.
 

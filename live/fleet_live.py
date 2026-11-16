@@ -1251,7 +1251,7 @@ class Fleet:
             if mm:
                 listed.add(v["name"])
                 sub = self.machine_spec(mm, record, vm_hostside={"u": v["u"], "vcpus": 0, "mem": 0}, vm_parent=m)
-                sub["hostside"] = v["u"]
+                sub["hostside"] = self.leaf(sub["id"] + "/hostside", v["u"], record)  # what the host gives it (its QEMU process), as a history
                 vm_ids[v["name"]] = sub["id"]
                 spec["vms"].append(sub)
             else:
