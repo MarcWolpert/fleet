@@ -2337,34 +2337,34 @@ const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent)
 const MODK = IS_MAC ? '⌘' : 'Ctrl+', ALTK = IS_MAC ? '⌥' : 'Alt+', SHIFTK = IS_MAC ? '⇧' : 'Shift+', CTRLK = IS_MAC ? '⌃' : 'Ctrl+', TABK = IS_MAC ? '⇥' : 'Tab';
 const METRIC_KEYS = ['cpu', 'mem', 'gpu', 'disk', 'net'];
 const SHORTCUTS = [
-  ['Go to anything: machines, containers, jobs, commands', [MODK + 'K']],
-  ['Find in the panel you’re in: the tree, the page or Details', [MODK + 'F', '/']],
+  ['Go to anything: machines, containers, jobs, commands', [MODK + 'K'], null],
+  ['Find in the panel you’re in: the tree, the page or Details', [MODK + 'F', '/'], {see:['Find in the panel you’re in']}],
   // On Linux and Windows, Fleet runs in a Chrome window, which keeps Ctrl+N, Ctrl+T and Ctrl+Tab for itself: Alt+ keys there (#325)
-  ['Back, forward', IS_MAC ? [MODK + '[', MODK + ']'] : ['Alt+←', 'Alt+→']],
-  ['Details on and off', [MODK + 'D']],
-  ['Dock Details beside the overview', [MODK + SHIFTK + 'D']],
-  ['CPU, Memory, GPU, Disk I/O, Network', [ALTK + '1 … ' + ALTK + '5']],
-  ['Go to a space (1 is All machines)', [MODK + '1 … ' + MODK + '9']],
-  ['Previous or next space', [MODK + SHIFTK + '[', MODK + SHIFTK + ']']],
-  ['Cycle through the spaces, or the other way', IS_MAC ? [CTRLK + TABK, CTRLK + SHIFTK + TABK] : ['Alt+PgDn', 'Alt+PgUp']],
-  ['Move through the tree', ['↑', '↓']],
-  ['Collapse or expand; go to the parent', ['←', '→']],
-  ['New space: pick a grouping to pin', [IS_MAC ? MODK + 'N' : 'Alt+N']],
-  ['Pin or unpin the selection as a space', ['P']],
-  ['Open a terminal on the selection', [IS_MAC ? MODK + 'T' : 'Alt+T']],
-  ['In the terminals: open another (pick where; this one’s machine first)', [IS_MAC ? MODK + 'T' : 'Ctrl+Shift+T']],
-  ['In the terminals: the next or previous one', IS_MAC ? [CTRLK + TABK, CTRLK + SHIFTK + TABK] : ['Ctrl+Tab', 'Ctrl+Shift+Tab']],
-  ['Show or minimize the terminals below the page', [IS_MAC ? MODK + 'J' : 'Alt+J']],
-  ['In the terminals: split the one you’re on', [IS_MAC ? '⌘\\' : 'Ctrl+Shift+5']],
-  ['In the terminals: kill the one you’re on (on its tab)', [IS_MAC ? '⌘⌫' : 'Delete']],
-  ['In the terminals: undo dragging a tab onto another', [MODK + 'Z']],
-  ['Bigger, smaller, actual size', IS_MAC ? [MODK + '+', MODK + '−', MODK + '0'] : ['Ctrl+Plus', 'Ctrl+Minus', 'Ctrl+0']],
-  ['Settings', [MODK + ',']],
-  ['Refresh now', [MODK + 'R']],
-  ['On a Details column divider: narrower, wider (' + SHIFTK + ' by more); automatic width', ['←', '→', IS_MAC ? '⌫' : 'Delete']],
-  ['On a Details column header: move the column', [ALTK + '←', ALTK + '→']],
-  ['Close a menu, sheet or panel; clear the filter', ['Esc']],
-  ['These shortcuts', ['?', MODK + '/']]
+  ['Back, forward', IS_MAC ? [MODK + '[', MODK + ']'] : ['Alt+←', 'Alt+→'], ['Back', 'Forward']],
+  ['Details on and off', [MODK + 'D'], ['Details: the process list']],
+  ['Dock Details beside the overview', [MODK + SHIFTK + 'D'], ['Dock Details beside the overview']],
+  ['CPU, Memory, GPU, Disk I/O, Network', [ALTK + '1 … ' + ALTK + '5'], {get see(){ return METRIC_KEYS.map(k => 'Show ' + METRIC_NAMES[k]); }}],
+  ['Go to a space (1 is All machines)', [MODK + '1 … ' + MODK + '9'], {see:['Go to All machines']}],
+  ['Previous or next space', [MODK + SHIFTK + '[', MODK + SHIFTK + ']'], ['Previous space', 'Next space']],
+  ['Cycle through the spaces, or the other way', IS_MAC ? [CTRLK + TABK, CTRLK + SHIFTK + TABK] : ['Alt+PgDn', 'Alt+PgUp'], {see:['Next space', 'Previous space']}],
+  ['Move through the tree', ['↑', '↓'], null],
+  ['Collapse or expand; go to the parent', ['←', '→'], null],
+  ['New space: pick a grouping to pin', [IS_MAC ? MODK + 'N' : 'Alt+N'], ['Pin a grouping…']],
+  ['Pin or unpin the selection as a space', ['P'], ['Pin or unpin the selection as a space']],
+  ['Open a terminal on the selection', [IS_MAC ? MODK + 'T' : 'Alt+T'], ['Open a terminal on the selection']],
+  ['In the terminals: open another (pick where; this one’s machine first)', [IS_MAC ? MODK + 'T' : 'Ctrl+Shift+T'], {see:['New terminal…']}],
+  ['In the terminals: the next or previous one', IS_MAC ? [CTRLK + TABK, CTRLK + SHIFTK + TABK] : ['Ctrl+Tab', 'Ctrl+Shift+Tab'], null],
+  ['Show or minimize the terminals below the page', [IS_MAC ? MODK + 'J' : 'Alt+J'], ['Show or minimize the terminals']],
+  ['In the terminals: split the one you’re on', [IS_MAC ? '⌘\\' : 'Ctrl+Shift+5'], {see:['Split the terminal you’re on']}],
+  ['In the terminals: kill the one you’re on (on its tab)', [IS_MAC ? '⌘⌫' : 'Delete'], null],
+  ['In the terminals: undo dragging a tab onto another', [MODK + 'Z'], null],
+  ['Bigger, smaller, actual size', IS_MAC ? [MODK + '+', MODK + '−', MODK + '0'] : ['Ctrl+Plus', 'Ctrl+Minus', 'Ctrl+0'], ['Bigger', 'Smaller', 'Actual size']],
+  ['Settings', [MODK + ','], ['Settings']],
+  ['Refresh now', [MODK + 'R'], ['Refresh now']],
+  ['On a Details column divider: narrower, wider (' + SHIFTK + ' by more); automatic width', ['←', '→', IS_MAC ? '⌫' : 'Delete'], null],
+  ['On a Details column header: move the column', [ALTK + '←', ALTK + '→'], null],
+  ['Close a menu, sheet or panel; clear the filter', ['Esc'], null],
+  ['These shortcuts', ['?', MODK + '/'], {see:['Keyboard shortcuts']}]
 ];
 function spaceKeys(){ return ['fleet'].concat(PINS.filter(k => nodes[k])); }
 function typingIn(t){ return !!(t && t.closest && t.closest('input, textarea, select, [contenteditable="true"]')); }
@@ -2509,25 +2509,51 @@ document.addEventListener('keydown', e => {
 /* ---------- Go to (⌘K): any machine, VM, project, service, container or job, and every command ---------- */
 const GOTO = {q:'', i:0, items:[]};
 const METRIC_NAMES = {cpu:'CPU', mem:'Memory', gpu:'GPU', disk:'Disk I/O', net:'Network'};
+// Fleet.app zooms natively; a browser keeps its own zoom keys
+function zoomCommand(how){ try { window.webkit.messageHandlers.fleet.postMessage({zoom:how}); } catch (x) { toast(how === 'reset' ? 'Actual size: Ctrl+0' : how === 'in' ? 'Bigger: Ctrl+Plus' : 'Smaller: Ctrl+Minus'); } }
 function gotoCommands(){
   const tree = t => () => { S.tree = t; if (t === 'network') S.view = 'overview'; lastMainHTML = ''; save(); renderAll(); refreshNow(); };
   return [
     {label:'Settings', hint:MODK + ',', ic:'gear', run:() => fleetCommand('settings')},
+    {label:'Find in the panel you’re in', hint:MODK + 'F', ic:'search', run:() => fleetCommand('find')},
+    {label:'Refresh now', hint:MODK + 'R', ic:'chev', run:() => refreshNow()},
+    {label:'Tutorial', ic:'info', run:() => openTutorial(0)},
+    {label:'Add a machine…', ic:'plus', run:() => openAddMachine()},
+    {label:'Choose machines to connect…', ic:'server', run:() => openChooseMachines()},
+    {label:'Connect automatically…', ic:'server', run:() => { const b = document.querySelector('#autoconn button'); if (b) openAutoConn(b); }},
     {label:'Details: the process list', hint:MODK + 'D', ic:'chip', run:() => fleetCommand('details')},
     {label:'Find a process (Details filter)', ic:'search', run:() => fleetCommand('findproc')},
-    {label:'Back', hint:MODK + '[', ic:'chev', run:() => fleetCommand('back')},
-    {label:'Forward', hint:MODK + ']', ic:'chev', run:() => fleetCommand('fwd')},
+    {label:'Back', hint:IS_MAC ? MODK + '[' : 'Alt+←', ic:'chev', run:() => fleetCommand('back')},
+    {label:'Forward', hint:IS_MAC ? MODK + ']' : 'Alt+→', ic:'chev', run:() => fleetCommand('fwd')},
+    {label:'Previous space', hint:MODK + SHIFTK + '[', ic:'chev', run:() => fleetCommand('space-step', -1)},
+    {label:'Next space', hint:MODK + SHIFTK + ']', ic:'chev', run:() => fleetCommand('space-step', 1)},
     {label:'Dock Details beside the overview', hint:MODK + SHIFTK + 'D', ic:'panelright', run:() => fleetCommand('dock')}
   ].concat(METRIC_KEYS.map((k, i) => ({label:'Show ' + METRIC_NAMES[k], hint:ALTK + (i + 1), ic:'chip', run:() => fleetCommand('metric', k)})), [
     {label:'Machine tree', ic:'server', run:tree('machines')},
     {label:'Network tree', ic:'net', run:tree('network')},
     {label:S.pinsOnly ? 'Show all machines in the tree' : 'Show only pins in the tree', ic:'pin', run:() => { S.pinsOnly = !S.pinsOnly; save(); renderTree(); }},
     {label:'Pin or unpin the selection as a space', hint:'P', ic:'pin', run:() => fleetCommand('pin')},
-    {label:'Open a terminal on the selection', hint:MODK + 'T', ic:'terminal', run:() => fleetCommand('terminal')},
-    {label:'Pin a grouping…', ic:'plus', run:() => openPicker()},
+    {label:'Open a terminal on the selection', hint:IS_MAC ? MODK + 'T' : 'Alt+T', ic:'terminal', run:() => fleetCommand('terminal')},
+    {label:'Pin a grouping…', hint:IS_MAC ? MODK + 'N' : 'Alt+N', ic:'plus', run:() => openPicker()},
+    {label:'Show or minimize the terminals', hint:IS_MAC ? MODK + 'J' : 'Alt+J', ic:'terminal', run:() => fleetCommand('terminals')},
+    {label:'New terminal…', ic:'terminal', run:() => { const s = activeTerm(); openGoto({mode:'term', first:s && s.node}); }},
+    {label:'Split the terminal you’re on', ic:'terminal', run:() => { if (!activeTerm()) toast('No terminal to split yet'); else splitInline(); }},
+    {label:'Terminals: larger text', ic:'terminal', run:() => setTermFont(termFont() + 1)},
+    {label:'Terminals: smaller text', ic:'terminal', run:() => setTermFont(termFont() - 1)},
+    {label:'Bigger', hint:IS_MAC ? MODK + '+' : 'Ctrl+Plus', ic:'plus', run:() => zoomCommand('in')},
+    {label:'Smaller', hint:IS_MAC ? MODK + '−' : 'Ctrl+Minus', ic:'chev', run:() => zoomCommand('out')},
+    {label:'Actual size', hint:IS_MAC ? MODK + '0' : 'Ctrl+0', ic:'chev', run:() => zoomCommand('reset')},
+    {label:'Collapse the whole tree (~)', ic:'chev', run:() => { if (!foldStack().length) foldPress('~'); }},
+    {label:'Expand the tree back (~)', ic:'chev', run:() => { if (foldStack().length) foldPress('~'); }},
+    {label:'Force expand the whole tree (F~)', ic:'chev', run:() => { foldAll(true); save(); renderTree(); renderFold(); }},
+    {label:'Force collapse the whole tree (F~)', ic:'chev', run:() => { foldAll(false); save(); renderTree(); renderFold(); }},
+    {label:'Higher contrast: ' + (PREFS.contrast ? 'off' : 'on'), ic:'palette', run:() => setAccess({contrast:!PREFS.contrast}, 'higher contrast')},
     {label:'Import a theme…', ic:'upload', run:() => { (SET.open ? Promise.resolve() : openSettings()).then(() => { const f = $('themefile'); if (f) f.click(); }); }},   // an open Settings keeps its unsaved edits
     {label:'Keyboard shortcuts', hint:'?', ic:'info', run:() => openKeys()}
-  ], allThemes().map(t => ({label:'Theme: ' + t.name, ic:'palette', run:() => pickTheme(t.id)})),
+  ], [['', 'Typical'], ['protan', 'Protanopia (red-weak)'], ['deutan', 'Deuteranopia (green-weak)'], ['tritan', 'Tritanopia (blue-weak)'], ['mono', 'Monochromacy (no colour)']]
+    .map(([v, l]) => ({label:'Colour vision: ' + l, ic:'palette', run:() => setAccess({cvd:v}, 'colour vision')})),
+  spaceKeys().map((k, i) => ({label:k === 'fleet' ? 'Go to All machines' : 'Go to space: ' + ((nodes[k] || {}).name || k), hint:i < 9 ? MODK + (i + 1) : undefined, ic:'pin', run:() => goSpace(k)})),
+  allThemes().map(t => ({label:'Theme: ' + t.name, ic:'palette', run:() => pickTheme(t.id)})),
   termTemplates().map(t => ({label:'Launch terminals: ' + t.name, ic:'terminal', run:() => launchTemplate(t)})),
   [{label:'Terminal templates…', ic:'terminal', run:() => openTermTemplates()}, {label:'Reset the terminals…', ic:'terminal', run:() => askResetTerms()}]);
 }
