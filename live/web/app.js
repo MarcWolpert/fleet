@@ -1506,8 +1506,12 @@ function toast(msg){
   if (!t){ t = document.createElement('div'); t.id = 'toast'; t.className = 'toast'; t.setAttribute('role', 'status'); document.body.appendChild(t); }
   t.textContent = msg; t.classList.add('show'); clearTimeout(toast.h); toast.h = setTimeout(() => t.classList.remove('show'), 3200);
 }
+// the backdrop closes Settings only when the press and the release are both on it: a drag-select out of an input also clicks it
+let sheetPress = null;
+$('sheet').addEventListener('mousedown', e => { sheetPress = e.target; });
+$('sheet').addEventListener('mouseup', e => { if (e.target !== $('sheet')) sheetPress = null; });
 $('sheet').addEventListener('click', async e => {
-  if (e.target === $('sheet') || e.target.closest('[data-closesettings]')){ closeSettings(); return; }
+  if ((e.target === $('sheet') && sheetPress === $('sheet')) || e.target.closest('[data-closesettings]')){ closeSettings(); return; }
   if (e.target.closest('[data-savesettings]')){ saveSettings(); return; }
   const tc = e.target.closest('[data-togglecard]'); if (tc){ const i = +tc.dataset.togglecard; SET.expanded.has(i) ? SET.expanded.delete(i) : SET.expanded.add(i); renderSettings(); const h = $('sheet').querySelector(`[data-togglecard="${i}"]`); if (h) h.focus(); return; }
   if (e.target.closest('[data-addmachine]')){ SET.draft.machines.push({id:'', name:'', ssh:'', os:'linux', tile:'terminal'}); SET.expanded.add(SET.draft.machines.length - 1); renderSettings(); const c = $('sheet').querySelector(`[data-field="${SET.draft.machines.length - 1}:name"]`); if (c) c.focus(); return; }
