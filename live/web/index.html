@@ -743,7 +743,28 @@ tr.fmatch>td{background:color-mix(in srgb, var(--stale) 16%, transparent)!import
 .tg-h .count{margin-left:auto}
 
 .tg-ic{display:grid;place-items:center;color:var(--gc)}.tg-ic svg{width:13px;height:13px}
-.tg-pin{margin-left:auto;display:flex}.tg-h .count + .tg-pin{margin-left:6px}
+.tg-pin{margin-left:auto;display:flex}.tg-h .tdet:has(> .count) + .tg-pin{margin-left:6px}
+
+/* A tree row's details (#332): kind, host, count, GPU tag. On one line they sit beside the name as before and give
+   way to it first, the host before the rest; a row that can't show them all in full takes two lines (.two, set by
+   fitTree): the name with its icon, sparkline and value, then the details under the name, smaller and muted. */
+.tdet{display:contents}
+.row .nm{flex:1 1 auto}
+.tg-h .tg-n{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row .tdet > *,.tg-h .tdet > *{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex-shrink:1000}
+.row .tdet > .tgw{flex-shrink:1000000}
+.row.two,.tg-h.two{flex-wrap:wrap;row-gap:0}
+.row.two .nm{flex:1 1 0%;padding:4px 0}
+.tg-h.two .tg-n{flex:1 1 0%}
+.two > .tdet{display:flex;align-items:center;gap:6px;order:1;flex:1 0 100%;min-width:0;padding:0 0 5px 52px;margin-top:-3px;font-size:11px;line-height:1.45;color:var(--ink-3)}
+.row.two > .osico ~ .tdet{padding-left:60px}
+.tg-h.two > .tdet{padding:0 0 1px 37px;margin-top:-2px}
+.two > .tdet > *{margin-left:0;flex-shrink:1}
+.two > .tdet > .tgw{flex-shrink:1000}
+.two > .tdet > .count{padding:2px 5px}
+.two > .tdet > .gtag{padding:1px 5px;color:var(--ink-3)}
+.tg-h.two > .tdet + .tg-pin{margin-left:auto}
+.row.two .tdrag{top:14px}
 
 .gopin{flex:none;width:24px;height:24px;margin-left:4px;border-radius:6px;display:grid;place-items:center;color:var(--ink-3);opacity:.5}
 .gorow:hover .gopin,.gorow.on .gopin,.gopin.on{opacity:1}.gopin.on{color:var(--accent)}.gopin:hover{background:var(--hover);color:var(--ink)}

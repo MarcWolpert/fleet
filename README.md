@@ -46,8 +46,10 @@ those same types. The bar along the top holds your **spaces**: All machines, plu
 
 **The tree.** Machines, their base system, Docker Compose projects and services, containers, VMs (machines
 again, all the way down) and scheduled jobs (crontab, systemd timers, launchd, Windows Scheduled Tasks),
-each with a live sparkline. Every machine's tile shows its OS at a glance. A second tree shows the
-network: tailnet, machines, interfaces and bridges, VMs and containers, with traffic on each.
+each with a live sparkline. Every machine's tile shows its OS at a glance. A row with no room for its name
+beside its kind, host, count or GPU tag puts those on a second, smaller line, so the name stays whole. A
+second tree shows the network: tailnet, machines, interfaces and bridges, VMs and containers, with traffic
+on each.
 
 **Where the usage goes.** CPU, memory, GPU, disk I/O and network for any machine, group or all of them,
 split by Base system, Compose, containers and VMs, as a share of capacity or of what's in use.
